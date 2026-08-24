@@ -1,0 +1,20 @@
+# dsh-deeppilot bundle layer.
+# Phone clients cannot interact with a native picker rendered on the Host Mac.
+# Replace dsh-web-app's adaptive picker with the official browse pair while
+# this bundle is composed, so host.listDirectory is available remotely.
+# Removing this bundle restores the lower web-app auto row unchanged.
+- id: directory-picker
+  disabled: true
+
+# The name must be the FULL scoped specifier as installed in the profile's
+# node_modules, quoted so YAML does not treat it as a directive.
+- insert:
+    - id: phone-directory-picker-browse
+      name: "@deepseek-ai/dsh-host-directory-picker-browse"
+
+    - id: phone-directory-picker-browse-client
+      name: "@deepseek-ai/dsh-client-ui-directory-picker-browse"
+
+    - id: phone-bridge
+      name: "dsh-deeppilot"
+      config: {}

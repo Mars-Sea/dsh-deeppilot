@@ -1,0 +1,16 @@
+node_modules/
+lib/
+dist/
+coverage/
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+auth-token
+devices.json
+tailscale/
+*.log
