@@ -57,6 +57,6 @@ test('mountReportRemote disposes a contribution with no namespace service', asyn
     },
   }
 
-  await assert.rejects(() => mountReportRemote(remote, () => undefined), /remote\.phone-bridge 未注册/)
+  await assert.rejects(() => mountReportRemote(remote, () => undefined), /remote\.deeppilot 未注册/)
   assert.equal(disposed, true)
 })

@@ -41,7 +41,7 @@ func emit(value event) {
 
 func main() {
 	originFlag := flag.String("origin", "", "loopback HTTP origin")
-	hostnameFlag := flag.String("hostname", "dsh-pocket", "tailnet node hostname")
+	hostnameFlag := flag.String("hostname", "dsh-deeppilot", "tailnet node hostname")
 	stateDirFlag := flag.String("state-dir", "", "persistent tsnet state directory")
 	portFlag := flag.Int("port", 443, "Funnel port (443, 8443, or 10000)")
 	flag.Parse()
@@ -131,7 +131,7 @@ func main() {
 
 	proxy := httputil.NewSingleHostReverseProxy(origin)
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, proxyErr error) {
-		http.Error(w, "phone bridge unavailable", http.StatusBadGateway)
+		http.Error(w, "DeepPilot bridge unavailable", http.StatusBadGateway)
 		fmt.Fprintln(os.Stderr, "origin proxy error:", proxyErr)
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -219,8 +219,8 @@ func sanitizeHostname(value string) string {
 		}
 	}
 	result := strings.Trim(b.String(), "-")
-	if result == "" || result == "dsh-phone" {
-		return "dsh-pocket"
+	if result == "" || result == "dsh-phone" || result == "dsh-pocket" || result == "harnesspocket" {
+		return "dsh-deeppilot"
 	}
 	if len(result) > 63 {
 		return strings.TrimRight(result[:63], "-")

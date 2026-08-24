@@ -1,6 +1,6 @@
 # Third-party notices
 
-The optional embedded `dsh-pocket-tunnel` helper is built with
+The optional embedded `dsh-deeppilot-tunnel` helper is built with
 [`tailscale.com/tsnet`](https://github.com/tailscale/tailscale), distributed
 under the BSD 3-Clause License.
 

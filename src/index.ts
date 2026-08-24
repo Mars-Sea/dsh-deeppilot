@@ -13,7 +13,7 @@ import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-sett
 import { applyReportRemote } from './report-remote.ts'
 import { runRelayProbe } from './relay-test.ts'
 import type { PushTestResult } from './report-wire.ts'
-import { DeviceStore, bridgeDataDir, expandHome, loadOrCreateToken, tokenMatches, writeNewToken } from './token.ts'
+import { DeviceStore, bridgeDataDir, expandHome, loadOrCreateToken, migrateLegacyBridgeDataDir, tokenMatches, writeNewToken } from './token.ts'
 import type { ApnsEnvironment } from './token.ts'
 import { ApnsClient } from './apns.ts'
 import { RelayClient } from './relay-client.ts'
@@ -36,10 +36,11 @@ import { localLANIPv4Addresses } from './local-address.ts'
  * streams, mirrors session summaries, tracks pending approvals/questions,
  * and fans projected protocol-v1 pushes out to every connected device.
  *
- * Protocol: protocol/PROTOCOL.md (repo root), v1.
+ * Protocol: src/protocol.ts, v1. The private app repository carries the
+ * matching normative document and Swift models.
  */
 
-export const name = 'phone-bridge'
+export const name = 'deeppilot'
 
 export { HostBridge } from './host-bridge.ts'
 
@@ -156,8 +157,8 @@ type SubContext = {
   effect: (setup: () => unknown, name?: string) => unknown
 }
 
-const SERVER_VERSION = '0.1.0'
-const MAX_PHONE_CONNECTIONS = 16
+const SERVER_VERSION = '0.2.0'
+const MAX_CLIENT_CONNECTIONS = 16
 /**
  * Single-frame bound. Covers the protocol maximum (4 × 8 MB base64 images
  * plus prompt text) with headroom while keeping an unauthenticated client's
@@ -212,7 +213,7 @@ export function apply(ctx: Context, options: unknown): void {
   const cfg = normalizeOptions(options)
 
   const log = (message: string): void => {
-    console.log('[phone-bridge] ' + message)
+    console.log('[deeppilot] ' + message)
   }
 
   /**
@@ -228,12 +229,12 @@ export function apply(ctx: Context, options: unknown): void {
   }
   const enabledNow = (): boolean => currentConfig().enabled === true
 
-  // Web settings page: a "phone-bridge" section with the plugin knobs.
+  // Web settings page: a "deeppilot" section with the plugin knobs.
   // Values persist through the settings document and re-enter via setSource;
   // `enabled` decides whether the bridge starts at all (next restart). This is
   // registered unconditionally so the master switch stays reachable even while
   // the bridge is off — otherwise a disabled bridge could never be re-enabled.
-  installSettingsSection(ctx, settingsNamespace('phone-bridge'), Config, normalizeOptions(undefined), {
+  installSettingsSection(ctx, settingsNamespace('deeppilot'), Config, normalizeOptions(undefined), {
     setSource: (source) => {
       liveSource = source
       // Settings can attach after webServer. Defer one microtask so the
@@ -259,7 +260,7 @@ export function apply(ctx: Context, options: unknown): void {
   // ---------- zero-touch push enrollment (distributed builds) ----------
 
   /**
-   * Persistent relay-enrollment cell (pocket-bridge/push-relay.json). A
+   * Persistent relay-enrollment cell (deeppilot/push-relay.json). A
    * distributed app presents the distributor's shared enrollKey during
    * c2s.push.register; the bridge then auto-enables relay mode, enrolls with
    * the operator's relay and caches the issued token. Users never fill in
@@ -311,6 +312,12 @@ export function apply(ctx: Context, options: unknown): void {
   }
   const ready = (async () => {
     try {
+      try {
+        const migratedFrom = await migrateLegacyBridgeDataDir()
+        if (migratedFrom !== null) log(`migrated legacy plugin state from ${migratedFrom} to ${dataDir}`)
+      } catch (error) {
+        log('legacy plugin-state migration skipped: ' + String(error))
+      }
       auth.tokenPath = cfg.authTokenPath ?? join(dataDir, 'auth-token')
       auth.token = await loadOrCreateToken(auth.tokenPath)
       auth.devices = await DeviceStore.load(cfg.devicesPath ?? join(dataDir, 'devices.json'))
@@ -657,7 +664,7 @@ export function apply(ctx: Context, options: unknown): void {
     updatedAt: Date.now(),
   }
 
-  // Typert Remote for the web settings page (phone-bridge/report).
+  // Typert Remote for the web settings page (deeppilot/report).
   applyReportRemote(ctx, async () => {
     let tokenReady = false
     let devices: Array<{ deviceId: string; deviceName: string; appVersion: string; firstSeenTs: number; lastSeenTs: number; apns?: { environment: 'development' | 'production'; updatedAt: number } }> = []
@@ -736,7 +743,7 @@ export function apply(ctx: Context, options: unknown): void {
           rejectUpgrade(socket, 503, 'bridge disabled')
           return
         }
-        if (connections.size >= MAX_PHONE_CONNECTIONS) {
+        if (connections.size >= MAX_CLIENT_CONNECTIONS) {
           rejectUpgrade(socket, 429, 'too many connections')
           return
         }
@@ -832,7 +839,7 @@ export function apply(ctx: Context, options: unknown): void {
       state.bridge = bridge
       bridge.start()
       log('data plane active (mux + host streams)')
-      apiCtx.effect(() => () => bridge.dispose(), 'phone-bridge: host streams')
+      apiCtx.effect(() => () => bridge.dispose(), 'deeppilot: host streams')
     },
   )
 
@@ -856,7 +863,7 @@ export function apply(ctx: Context, options: unknown): void {
             path: '/phone',
             handler: handleUpgrade,
           }),
-        'phone-bridge: /phone WebSocket',
+        'deeppilot: /phone WebSocket',
       )
 
       webCtx.effect(
@@ -866,7 +873,7 @@ export function apply(ctx: Context, options: unknown): void {
             path: '/phone/health',
             handler: handleHealth,
           }),
-        'phone-bridge: /phone/health',
+        'deeppilot: /phone/health',
       )
 
       const sweep = setInterval(() => {
@@ -879,7 +886,7 @@ export function apply(ctx: Context, options: unknown): void {
           }
         }
       }, 30_000)
-      webCtx.effect(() => () => clearInterval(sweep), 'phone-bridge: stale sweep')
+      webCtx.effect(() => () => clearInterval(sweep), 'deeppilot: stale sweep')
 
       // The settings source is not guaranteed to attach before webServer.
       // Keep a loopback origin ready and reconcile the helper whenever that
@@ -967,7 +974,7 @@ export function apply(ctx: Context, options: unknown): void {
           remoteSupervisor = undefined
           if (supervisor !== undefined) await supervisor.dispose()
         })
-      }, 'phone-bridge: embedded Funnel')
+      }, 'deeppilot: embedded Funnel')
       if (enabledNow()) {
         log('/phone WebSocket registered')
       } else {

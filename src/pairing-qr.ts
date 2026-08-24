@@ -1,3 +1,7 @@
+/**
+ * Protocol-v1 compatibility identifier used by the TestFlight build currently
+ * under review. This is wire data, not the plugin or product display name.
+ */
 export const PAIRING_QR_TYPE = 'dsh-pocket-pairing'
 export const PAIRING_QR_VERSION = 1
 

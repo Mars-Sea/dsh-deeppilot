@@ -288,7 +288,7 @@ export class HostBridge {
   }
 
   diagnostic(message: string): void {
-    console.log('[phone-bridge] ' + message);
+    console.log('[deeppilot] ' + message);
   }
 
   currentCursor(): number {

@@ -1,5 +1,5 @@
 /**
- * Wire contract for the DeepPilot Bridge report Remote (`phone-bridge/report`).
+ * Wire contract for the DeepPilot report Remote (`deeppilot/report`).
  *
  * The web settings page needs the bridge's live facts (paired devices,
  * connections, token state) — those live Host-side. This module is the single
@@ -30,7 +30,7 @@ export interface RelayTestStep {
   latencyMs?: number
 }
 
-/** Result of phone-bridge/testRelay. */
+/** Result of deeppilot/testRelay. */
 export interface RelayTestResult {
   url: string
   overall: 'ok' | 'failed'
@@ -38,7 +38,7 @@ export interface RelayTestResult {
   steps: RelayTestStep[]
 }
 
-/** Per-device delivery result of phone-bridge/testPush. */
+/** Per-device delivery result of deeppilot/testPush. */
 export interface PushTestDeviceResult {
   name: string
   environment: string
@@ -59,7 +59,7 @@ export interface PushTestResult {
 }
 
 /** Everything the settings page renders for the bridge. */
-export interface PhoneBridgeReport {
+export interface DeepPilotReport {
   protocolVersion: number
   serverVersion: string
   /** Whether the master bridge switch is on. */
@@ -89,20 +89,20 @@ export interface PhoneBridgeReport {
 export const REPORT_REMOTE_PACKAGE = 'dsh-deeppilot'
 
 /** Canonical `<namespace>/<method>` endpoint of the report Remote. */
-export const REPORT_ENDPOINT = 'phone-bridge/report'
+export const REPORT_ENDPOINT = 'deeppilot/report'
 
 /** Explicit, user-triggered endpoint for revealing the pairing secret. */
-export const REVEAL_TOKEN_ENDPOINT = 'phone-bridge/revealToken'
+export const REVEAL_TOKEN_ENDPOINT = 'deeppilot/revealToken'
 
 /**
  * Explicit, user-triggered endpoint that replaces the pairing secret. The old
  * token stops working immediately; the fresh one is returned so the page can
  * show/QR it right away.
  */
-export const ROTATE_TOKEN_ENDPOINT = 'phone-bridge/rotateToken'
+export const ROTATE_TOKEN_ENDPOINT = 'deeppilot/rotateToken'
 
 function reject(field: string): never {
-  throw new TypeError(`phone-bridge/report result: invalid ${field}`)
+  throw new TypeError(`deeppilot/report result: invalid ${field}`)
 }
 
 function str(source: Record<string, unknown>, key: string, field: string): string {
@@ -144,7 +144,7 @@ function parseDevice(value: unknown): ReportDevice {
   }
 }
 
-function parseRemote(value: unknown): PhoneBridgeReport['remote'] {
+function parseRemote(value: unknown): DeepPilotReport['remote'] {
   const s = rec(value, 'remote')
   const provider = str(s, 'provider', 'remote.provider')
   const phase = str(s, 'phase', 'remote.phase')
@@ -159,7 +159,7 @@ function parseRemote(value: unknown): PhoneBridgeReport['remote'] {
   if (message !== undefined && typeof message !== 'string') reject('remote.message')
   return {
     provider,
-    phase: phase as PhoneBridgeReport['remote']['phase'],
+    phase: phase as DeepPilotReport['remote']['phase'],
     ...(typeof publicURL === 'string' ? { publicURL } : {}),
     ...(typeof authURL === 'string' ? { authURL } : {}),
     ...(typeof message === 'string' ? { message } : {}),
@@ -227,7 +227,7 @@ function parsePushTestResult(value: unknown): PushTestResult {
   }
 }
 
-function parseReport(value: unknown): PhoneBridgeReport {
+function parseReport(value: unknown): DeepPilotReport {
   const s = rec(value, 'report')
   const devices = s.devices
   const lanAddresses = s.lanAddresses
@@ -248,7 +248,7 @@ function parseReport(value: unknown): PhoneBridgeReport {
   }
 }
 
-export const reportSchema: TypertSchema<PhoneBridgeReport> = { parse: parseReport }
+export const reportSchema: TypertSchema<DeepPilotReport> = { parse: parseReport }
 
 export const relayTestSchema: TypertSchema<RelayTestResult> = { parse: parseRelayTestResult }
 
@@ -257,7 +257,7 @@ export const pushTestSchema: TypertSchema<PushTestResult> = { parse: parsePushTe
 export const pairingTokenSchema: TypertSchema<string> = {
   parse(value: unknown): string {
     if (typeof value !== 'string' || value.length < 32) {
-      throw new TypeError('phone-bridge/revealToken result: invalid token')
+      throw new TypeError('deeppilot/revealToken result: invalid token')
     }
     return value
   },
@@ -268,33 +268,33 @@ export const pairingTokenSchema: TypertSchema<string> = {
  * enroll key is on file) a real enrollment round-trip. Doubles as repair —
  * a token it issues is cached by the bridge.
  */
-export const TEST_RELAY_ENDPOINT = 'phone-bridge/testRelay'
+export const TEST_RELAY_ENDPOINT = 'deeppilot/testRelay'
 
 /**
  * Real-delivery push test: forces one synthetic notification down the active
  * push pathway to every registered device, ignoring connected/muted filters —
  * an explicit user action must always be able to prove the pipeline works.
  */
-export const TEST_PUSH_ENDPOINT = 'phone-bridge/testPush'
+export const TEST_PUSH_ENDPOINT = 'deeppilot/testPush'
 
 export const REPORT_DESCRIPTOR: InvocationDescriptor = {
   id: `${REPORT_REMOTE_PACKAGE}#${REPORT_ENDPOINT}`,
-  service: 'phoneBridgeReport',
-  namespace: 'phone-bridge',
+  service: 'deeppilotReport',
+  namespace: 'deeppilot',
   method: 'report',
   invocation: { kind: 'direct' },
   parameters: [],
   result: {
     mode: 'strict',
-    typeSymbol: `${REPORT_REMOTE_PACKAGE}#PhoneBridgeReport`,
+    typeSymbol: `${REPORT_REMOTE_PACKAGE}#DeepPilotReport`,
     schema: reportSchema,
   },
 }
 
 export const REVEAL_TOKEN_DESCRIPTOR: InvocationDescriptor = {
   id: `${REPORT_REMOTE_PACKAGE}#${REVEAL_TOKEN_ENDPOINT}`,
-  service: 'phoneBridgeReport',
-  namespace: 'phone-bridge',
+  service: 'deeppilotReport',
+  namespace: 'deeppilot',
   method: 'revealToken',
   invocation: { kind: 'direct' },
   parameters: [],
@@ -307,8 +307,8 @@ export const REVEAL_TOKEN_DESCRIPTOR: InvocationDescriptor = {
 
 export const ROTATE_TOKEN_DESCRIPTOR: InvocationDescriptor = {
   id: `${REPORT_REMOTE_PACKAGE}#${ROTATE_TOKEN_ENDPOINT}`,
-  service: 'phoneBridgeReport',
-  namespace: 'phone-bridge',
+  service: 'deeppilotReport',
+  namespace: 'deeppilot',
   method: 'rotateToken',
   invocation: { kind: 'direct' },
   parameters: [],
@@ -321,8 +321,8 @@ export const ROTATE_TOKEN_DESCRIPTOR: InvocationDescriptor = {
 
 export const TEST_RELAY_DESCRIPTOR: InvocationDescriptor = {
   id: `${REPORT_REMOTE_PACKAGE}#${TEST_RELAY_ENDPOINT}`,
-  service: 'phoneBridgeReport',
-  namespace: 'phone-bridge',
+  service: 'deeppilotReport',
+  namespace: 'deeppilot',
   method: 'testRelay',
   invocation: { kind: 'direct' },
   parameters: [],
@@ -335,8 +335,8 @@ export const TEST_RELAY_DESCRIPTOR: InvocationDescriptor = {
 
 export const TEST_PUSH_DESCRIPTOR: InvocationDescriptor = {
   id: `${REPORT_REMOTE_PACKAGE}#${TEST_PUSH_ENDPOINT}`,
-  service: 'phoneBridgeReport',
-  namespace: 'phone-bridge',
+  service: 'deeppilotReport',
+  namespace: 'deeppilot',
   method: 'testPush',
   invocation: { kind: 'direct' },
   parameters: [],

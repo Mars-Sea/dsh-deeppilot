@@ -1,9 +1,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
-import type { PhoneBridgeReport, PushTestResult, RelayTestResult } from './report-wire.ts'
+import type { DeepPilotReport, PushTestResult, RelayTestResult } from './report-wire.ts'
 
 /** Async snapshot source wired by the plugin entry. */
-export type ReportSnapshot = () => Promise<PhoneBridgeReport>
+export type ReportSnapshot = () => Promise<DeepPilotReport>
 
 /** Reads the pairing secret only for an explicit reveal action. */
 export type PairingTokenSnapshot = () => Promise<string>
@@ -25,7 +25,7 @@ export type PushTester = () => Promise<PushTestResult>
  * Snapshot data stays non-secret; the token crosses the boundary only through
  * the explicit, user-triggered revealToken/rotateToken invocations.
  */
-export class PhoneBridgeReportService extends TypertRemoteService {
+export class DeepPilotReportService extends TypertRemoteService {
   private readonly snapshot: ReportSnapshot
   private readonly pairingToken: PairingTokenSnapshot
   private readonly rotatePairingToken: PairingTokenRotator
@@ -34,7 +34,7 @@ export class PhoneBridgeReportService extends TypertRemoteService {
   private readonly pushTester: PushTester
 
   constructor(ctx: Context, snapshot: ReportSnapshot, pairingToken: PairingTokenSnapshot, rotatePairingToken: PairingTokenRotator, relayTester: RelayTester, pushTester: PushTester) {
-    super(ctx, 'phoneBridgeReport', { namespace: 'phone-bridge' })
+    super(ctx, 'deeppilotReport', { namespace: 'deeppilot' })
     this.snapshot = snapshot
     this.pairingToken = pairingToken
     this.rotatePairingToken = rotatePairingToken
@@ -42,7 +42,7 @@ export class PhoneBridgeReportService extends TypertRemoteService {
     this.pushTester = pushTester
   }
 
-  async report(): Promise<PhoneBridgeReport> {
+  async report(): Promise<DeepPilotReport> {
     return this.snapshot()
   }
 

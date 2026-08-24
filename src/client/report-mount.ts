@@ -1,4 +1,4 @@
-import type { PhoneBridgeReport, PushTestResult, RelayTestResult } from '../report-wire.ts'
+import type { DeepPilotReport, PushTestResult, RelayTestResult } from '../report-wire.ts'
 import { REPORT_REMOTE_CONTRIBUTION } from '../report-wire.ts'
 
 export type RemoteResult<T> =
@@ -6,7 +6,7 @@ export type RemoteResult<T> =
   | { ok: false; error: { message?: string } }
 
 export interface ReportRemote {
-  report(): Promise<RemoteResult<PhoneBridgeReport>>
+  report(): Promise<RemoteResult<DeepPilotReport>>
   revealToken(): Promise<RemoteResult<string>>
   /** Replaces the pairing secret; resolves with the fresh token. */
   rotateToken(): Promise<RemoteResult<string>>
@@ -34,7 +34,7 @@ export async function mountReportRemote(
   const namespace = resolveNamespace()
   if (namespace === undefined) {
     await dispose()
-    throw new Error('remote.phone-bridge 未注册')
+    throw new Error('remote.deeppilot 未注册')
   }
   return { namespace, dispose }
 }

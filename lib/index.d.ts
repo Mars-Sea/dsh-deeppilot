@@ -447,9 +447,10 @@ declare class HostBridge {
  * streams, mirrors session summaries, tracks pending approvals/questions,
  * and fans projected protocol-v1 pushes out to every connected device.
  *
- * Protocol: protocol/PROTOCOL.md (repo root), v1.
+ * Protocol: src/protocol.ts, v1. The private app repository carries the
+ * matching normative document and Swift models.
  */
-declare const name = "phone-bridge";
+declare const name = "deeppilot";
 /** No eager service requirement: profiles without a web stack simply skip. */
 declare const inject: string[];
 interface Config {

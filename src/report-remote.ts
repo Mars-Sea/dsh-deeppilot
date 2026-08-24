@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { PhoneBridgeReportService } from './report-service.ts'
+import { DeepPilotReportService } from './report-service.ts'
 import type { PairingTokenRotator, PairingTokenSnapshot, PushTester, RelayTester, ReportSnapshot } from './report-service.ts'
 import { REPORT_HOST_CONTRIBUTION } from './report-wire.ts'
 
@@ -20,7 +20,7 @@ export function applyReportRemote(
   pushTester: PushTester,
 ): void {
   ctx.inject(['typert'], (remoteCtx) => {
-    new PhoneBridgeReportService(remoteCtx, snapshot, pairingToken, rotatePairingToken, relayTester, pushTester)
+    new DeepPilotReportService(remoteCtx, snapshot, pairingToken, rotatePairingToken, relayTester, pushTester)
     const registry = remoteCtx.typert as unknown as TypertContributionRegistry
     const unregister = registry.register(REPORT_HOST_CONTRIBUTION)
     remoteCtx.effect(() => () => void unregister(), 'dsh-deeppilot: report remote')

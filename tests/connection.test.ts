@@ -156,7 +156,7 @@ test('oversized or control-bearing device fields are clamped and stripped', asyn
     payload: {
       token: TOKEN,
       deviceId: 'd'.repeat(500) + '\nevil-log-line',
-      deviceName: '[phone-bridge] pwned\n' + 'n'.repeat(300),
+      deviceName: '[deeppilot] pwned\n' + 'n'.repeat(300),
       appVersion: 'v'.repeat(200),
     },
   })

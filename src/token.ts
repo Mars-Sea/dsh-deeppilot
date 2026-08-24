@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 
@@ -10,11 +10,38 @@ export function expandHome(p: string): string {
   return p
 }
 
-/** Bridge data directory: under $DSH_HOME when set, else ~/.dsh. */
-export function bridgeDataDir(): string {
+function dshDataRoot(): string {
   const dshHome = process.env.DSH_HOME
-  if (dshHome && dshHome.trim().length > 0) return resolve(dshHome.trim(), 'pocket-bridge')
-  return resolve(homedir(), '.dsh', 'pocket-bridge')
+  if (dshHome && dshHome.trim().length > 0) return resolve(dshHome.trim())
+  return resolve(homedir(), '.dsh')
+}
+
+/** DeepPilot data directory: under $DSH_HOME when set, else ~/.dsh. */
+export function bridgeDataDir(): string {
+  return resolve(dshDataRoot(), 'deeppilot')
+}
+
+/**
+ * Move the pre-DeepPilot data directory as one atomic directory rename.
+ * Existing canonical data always wins; secrets are never merged or replaced.
+ */
+export async function migrateLegacyBridgeDataDir(): Promise<string | null> {
+  const target = bridgeDataDir()
+  try {
+    await access(target)
+    return null
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+
+  const legacy = resolve(dshDataRoot(), 'pocket-bridge')
+  try {
+    await rename(legacy, target)
+    return legacy
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
 }
 
 /**
@@ -122,7 +149,7 @@ export class DeviceStore {
         // A truncated/corrupt registry silently wiping pairings and push
         // registrations would be indistinguishable from "never registered".
         // Make data loss loud so the cause (crash mid-write, disk, …) shows.
-        console.log('[phone-bridge] device registry unreadable, starting empty: ' + String(error))
+        console.log('[deeppilot] device registry unreadable, starting empty: ' + String(error))
       }
     }
     return store

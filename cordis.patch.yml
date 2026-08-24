@@ -9,12 +9,12 @@
 # The name must be the FULL scoped specifier as installed in the profile's
 # node_modules, quoted so YAML does not treat it as a directive.
 - insert:
-    - id: phone-directory-picker-browse
+    - id: deeppilot-directory-picker-browse
       name: "@deepseek-ai/dsh-host-directory-picker-browse"
 
-    - id: phone-directory-picker-browse-client
+    - id: deeppilot-directory-picker-browse-client
       name: "@deepseek-ai/dsh-client-ui-directory-picker-browse"
 
-    - id: phone-bridge
+    - id: deeppilot
       name: "dsh-deeppilot"
       config: {}

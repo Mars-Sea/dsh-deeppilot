@@ -4,9 +4,9 @@
  * Registers a "DeepPilot" settings page following the exact structure of the
  * working settings pages in the harness: a controller + snapshot store
  * (createSnapshotStore) surfaced to the slot component as a `use` hook, with
- * the report fetched Host-side through the phone-bridge/report Typert Remote.
+ * the report fetched Host-side through the deeppilot/report Typert Remote.
  * The master switch (enabled) is read/written through the shared settings
- * namespace (`ctx.settingsScope.bind({ namespace: 'phone-bridge' })`), the
+ * namespace (`ctx.settingsScope.bind({ namespace: 'deeppilot' })`), the
  * same seam the Host registers via installSettingsSection.
  *
  * The slot `inject` MUST be a thunk returning the inject face — the renderer
@@ -19,7 +19,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createElement as h, useEffect, useState } from 'react'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import * as QRCode from 'qrcode/lib/browser.js'
-import type { PhoneBridgeReport } from '../report-wire.ts'
+import type { DeepPilotReport } from '../report-wire.ts'
 import { encodePairingQRPayload, selectPairingTarget } from '../pairing-qr.ts'
 import { mountReportRemote } from './report-mount.ts'
 import type { ClientRemoteLike, ReportRemote } from './report-mount.ts'
@@ -143,7 +143,7 @@ async function writeClipboard(value: string): Promise<void> {
 /** Controller state surfaced to the page through the snapshot store. */
 export interface PageState {
   status: 'loading' | 'ready' | 'error'
-  report: PhoneBridgeReport | null
+  report: DeepPilotReport | null
   /** Visible diagnostic message for the error state. */
   message: string
 }
@@ -164,7 +164,7 @@ class ReportController {
   private listeners = new Set<() => void>()
   private snap: PageState = { status: 'loading', report: null, message: '' }
 
-  constructor(private readonly fetchReport: () => Promise<PhoneBridgeReport | null>) {}
+  constructor(private readonly fetchReport: () => Promise<DeepPilotReport | null>) {}
 
   state(): PageState {
     return this.snap
@@ -204,7 +204,7 @@ export function apply(ctx: Context): void {
   if (typeof document !== 'undefined') injectCss()
   const anyCtx = ctx as AnyCtx
 
-  anyCtx.locale?.register('settings.phonebridge', {
+  anyCtx.locale?.register('settings.deeppilot', {
     zh: { nav: 'DeepPilot' },
     en: { nav: 'DeepPilot' },
   })
@@ -212,7 +212,7 @@ export function apply(ctx: Context): void {
   let namespace: ReportRemote | undefined
   let mountError: string | undefined
 
-  const fetchReport = async (): Promise<PhoneBridgeReport | null> => {
+  const fetchReport = async (): Promise<DeepPilotReport | null> => {
     if (namespace === undefined) {
       throw new Error(mountError !== undefined ? 'remote mount 失败: ' + mountError : 'report remote 未挂载')
     }
@@ -236,7 +236,7 @@ export function apply(ctx: Context): void {
     }
     void mountReportRemote(
       anyCtx.remote,
-      () => ctx.get('remote.phone-bridge') as ReportRemote | undefined,
+      () => ctx.get('remote.deeppilot') as ReportRemote | undefined,
     )
       .then((mounted) => {
         if (cancelled) { void mounted.dispose(); return }
@@ -299,10 +299,10 @@ export function apply(ctx: Context): void {
     return result.value
   }
 
-  // Master switch: mirror the durable `enabled` field of the phone-bridge
+  // Master switch: mirror the durable `enabled` field of the deeppilot
   // settings namespace (Host side registered via installSettingsSection).
   const enabledStore = createSnapshotStore<EnabledState>({ status: 'loading', enabled: true })
-  const scope = anyCtx.settingsScope?.bind({ namespace: 'phone-bridge' })
+  const scope = anyCtx.settingsScope?.bind({ namespace: 'deeppilot' })
   const adoptEnabled = (): void => {
     if (scope === undefined) return
     const snap = scope.getSnapshot()
@@ -317,7 +317,7 @@ export function apply(ctx: Context): void {
     adoptEnabled()
   }
 
-  const setPhoneBridgeEnabled = (value: boolean): void => {
+  const setDeepPilotEnabled = (value: boolean): void => {
     enabledStore.set({ status: 'ready', enabled: value })
     if (scope !== undefined) void scope.set('enabled', value)
   }
@@ -337,7 +337,7 @@ export function apply(ctx: Context): void {
     adoptRemoteEnabled()
   }
 
-  const setPhoneBridgeRemoteEnabled = (value: boolean): void => {
+  const setDeepPilotRemoteEnabled = (value: boolean): void => {
     remoteEnabledStore.set({ status: 'ready', enabled: value })
     if (scope === undefined) return
     const currentRemote = scope.getSnapshot().value?.remote ?? {}
@@ -347,33 +347,33 @@ export function apply(ctx: Context): void {
   anyCtx.slots?.inject('settings.section', () =>
     (anyCtx.slots as NonNullable<AnyCtx['slots']>).register({
       name: 'settings.section',
-      id: 'phonebridge',
+      id: 'deeppilot',
       order: 13,
       label: () => {
-        const bind = anyCtx.locale?.bind('settings.phonebridge')
+        const bind = anyCtx.locale?.bind('settings.deeppilot')
         return bind ? bind('nav') : 'DeepPilot'
       },
-      locale: 'settings.phonebridge',
+      locale: 'settings.deeppilot',
       inject: () => ({
         hooks: {
-          phoneBridgeReport: store,
-          phoneBridgeEnabled: enabledStore,
-          phoneBridgeRemoteEnabled: remoteEnabledStore,
+          deepPilotReport: store,
+          deepPilotEnabled: enabledStore,
+          deepPilotRemoteEnabled: remoteEnabledStore,
         },
         refresh: () => { void controller.refresh() },
         revealPairingToken,
         rotatePairingToken,
         testRelay: testRelayConnection,
         testPush: sendTestPush,
-        setPhoneBridgeEnabled,
-        setPhoneBridgeRemoteEnabled,
+        setDeepPilotEnabled,
+        setDeepPilotRemoteEnabled,
       }),
-    }, PhoneBridgeSettingsPage),
+    }, DeepPilotSettingsPage),
   )
 }
 
 /** Visual state of the embedded Funnel: a colored dot plus its spoken label. */
-const REMOTE_PHASE_META: Record<PhoneBridgeReport['remote']['phase'], { dot: string; label: string }> = {
+const REMOTE_PHASE_META: Record<DeepPilotReport['remote']['phase'], { dot: string; label: string }> = {
   disabled: { dot: '', label: '未启用' },
   starting: { dot: ' pbb-dotWarn', label: '正在启动' },
   login_required: { dot: ' pbb-dotWarn', label: '等待 Tailscale 授权' },
@@ -384,7 +384,7 @@ const REMOTE_PHASE_META: Record<PhoneBridgeReport['remote']['phase'], { dot: str
 }
 
 /** Slot component: hooks come from the slot renderer, named use<Key>. */
-export function PhoneBridgeSettingsPage(props: Record<string, any>): any {
+export function DeepPilotSettingsPage(props: Record<string, any>): any {
   const [revealedToken, setRevealedToken] = useState<string | null>(null)
   const [tokenBusy, setTokenBusy] = useState(false)
   const [tokenMessage, setTokenMessage] = useState('')
@@ -485,7 +485,7 @@ export function PhoneBridgeSettingsPage(props: Record<string, any>): any {
   }, [qrMessage])
 
   const diag: string[] = []
-  let report: PhoneBridgeReport | null = null
+  let report: DeepPilotReport | null = null
   let enabled: boolean = true
   let switchReady = false
   let remoteEnabled = false
@@ -493,39 +493,39 @@ export function PhoneBridgeSettingsPage(props: Record<string, any>): any {
   let failed = false
 
   try {
-    if (typeof props.usePhoneBridgeReport !== 'function') {
-      diag.push('usePhoneBridgeReport hook 缺失')
+    if (typeof props.useDeepPilotReport !== 'function') {
+      diag.push('useDeepPilotReport hook 缺失')
       failed = true
     } else {
-      const state = props.usePhoneBridgeReport((s: PageState) => s)
+      const state = props.useDeepPilotReport((s: PageState) => s)
       report = state.report
       if (state.status === 'error' && state.message) {
         diag.push(state.message)
         failed = true
       }
     }
-    if (typeof props.usePhoneBridgeEnabled === 'function') {
-      const state = props.usePhoneBridgeEnabled((s: EnabledState) => s)
+    if (typeof props.useDeepPilotEnabled === 'function') {
+      const state = props.useDeepPilotEnabled((s: EnabledState) => s)
       enabled = state.enabled
       switchReady = state.status === 'ready'
       if (state.status === 'unavailable') diag.push('设置命名空间不可用（settingsScope 未提供）')
     } else {
-      diag.push('usePhoneBridgeEnabled hook 缺失')
+      diag.push('useDeepPilotEnabled hook 缺失')
     }
     if (typeof props.refresh !== 'function') diag.push('refresh 回调缺失')
     if (typeof props.revealPairingToken !== 'function') diag.push('revealPairingToken 回调缺失')
     if (typeof props.rotatePairingToken !== 'function') diag.push('rotatePairingToken 回调缺失')
     if (typeof props.testRelay !== 'function') diag.push('testRelay 回调缺失')
     if (typeof props.testPush !== 'function') diag.push('testPush 回调缺失')
-    if (typeof props.setPhoneBridgeEnabled !== 'function') diag.push('setPhoneBridgeEnabled 回调缺失')
-    if (typeof props.usePhoneBridgeRemoteEnabled === 'function') {
-      const state = props.usePhoneBridgeRemoteEnabled((s: RemoteEnabledState) => s)
+    if (typeof props.setDeepPilotEnabled !== 'function') diag.push('setDeepPilotEnabled 回调缺失')
+    if (typeof props.useDeepPilotRemoteEnabled === 'function') {
+      const state = props.useDeepPilotRemoteEnabled((s: RemoteEnabledState) => s)
       remoteEnabled = state.enabled
       remoteSwitchReady = state.status === 'ready'
     } else {
-      diag.push('usePhoneBridgeRemoteEnabled hook 缺失')
+      diag.push('useDeepPilotRemoteEnabled hook 缺失')
     }
-    if (typeof props.setPhoneBridgeRemoteEnabled !== 'function') diag.push('setPhoneBridgeRemoteEnabled 回调缺失')
+    if (typeof props.setDeepPilotRemoteEnabled !== 'function') diag.push('setDeepPilotRemoteEnabled 回调缺失')
   } catch (error) {
     diag.push('渲染异常: ' + (error instanceof Error ? error.message : String(error)))
     failed = true
@@ -721,8 +721,8 @@ export function PhoneBridgeSettingsPage(props: Record<string, any>): any {
           disabled: !switchReady,
           className: 'pbb-switch' + (enabled ? ' pbb-switchOn' : ''),
           onClick: () => {
-            if (typeof props.setPhoneBridgeEnabled === 'function') {
-              props.setPhoneBridgeEnabled(!enabled)
+            if (typeof props.setDeepPilotEnabled === 'function') {
+              props.setDeepPilotEnabled(!enabled)
             }
           },
         }),
@@ -758,8 +758,8 @@ export function PhoneBridgeSettingsPage(props: Record<string, any>): any {
           disabled: !remoteSwitchReady,
           className: 'pbb-switch' + (remoteEnabled ? ' pbb-switchOn' : ''),
           onClick: () => {
-            if (typeof props.setPhoneBridgeRemoteEnabled === 'function') {
-              props.setPhoneBridgeRemoteEnabled(!remoteEnabled)
+            if (typeof props.setDeepPilotRemoteEnabled === 'function') {
+              props.setDeepPilotRemoteEnabled(!remoteEnabled)
             }
           },
         }),

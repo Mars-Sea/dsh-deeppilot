@@ -173,8 +173,8 @@ test('workspace and directory operations use the host apiProxy contracts', async
     list: async () => ({ result: { ok: true, value: {
       items: [{
         workspaceId: 'workspace-1',
-        title: 'dsh-phone',
-        path: '/Users/sea/dsh-phone',
+        title: 'deeppilot-demo',
+        path: '/Users/sea/deeppilot-demo',
         sessionIds: ['session-a'],
       }],
       archivedSessionIds: [],
@@ -199,7 +199,7 @@ test('workspace and directory operations use the host apiProxy contracts', async
         path: listedPath ?? '/Users/sea',
         home: '/Users/sea',
         crumbs: [{ name: 'sea', path: '/Users/sea', hidden: false }],
-        entries: [{ name: 'dsh-phone', path: '/Users/sea/dsh-phone', hidden: false }],
+        entries: [{ name: 'deeppilot-demo', path: '/Users/sea/deeppilot-demo', hidden: false }],
         truncated: false,
       } } }
     },

@@ -6,7 +6,7 @@ application server.
 
 ## Data stored on the Mac
 
-By default, runtime state is stored under `$DSH_HOME/pocket-bridge/`:
+By default, runtime state is stored under `$DSH_HOME/deeppilot/`:
 
 - `auth-token`: the pairing bearer token, mode `0600`;
 - `devices.json`: paired-device identifiers, names, app versions, last-seen

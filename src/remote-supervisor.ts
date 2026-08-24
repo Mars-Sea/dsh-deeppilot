@@ -41,12 +41,12 @@ interface HelperEvent {
 
 const RESTART_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
 
-export const DEFAULT_REMOTE_HOSTNAME = 'dsh-pocket'
+export const DEFAULT_REMOTE_HOSTNAME = 'dsh-deeppilot'
 
-/** Preserve custom node names while migrating the pre-rename default. */
+/** Preserve custom node names while migrating every pre-DeepPilot default. */
 export function normalizeRemoteHostname(value: string | undefined): string {
   const hostname = value?.trim() ?? ''
-  if (hostname === '' || hostname.toLowerCase() === 'dsh-phone') {
+  if (hostname === '' || ['dsh-phone', 'dsh-pocket', 'harnesspocket'].includes(hostname.toLowerCase())) {
     return DEFAULT_REMOTE_HOSTNAME
   }
   return hostname
@@ -71,7 +71,7 @@ export function parseHelperEvent(line: string): HelperEvent | null {
 
 function bundledHelperPath(): string {
   const here = dirname(fileURLToPath(import.meta.url))
-  return resolve(here, '..', 'bin', `${process.platform}-${process.arch}`, 'dsh-pocket-tunnel')
+  return resolve(here, '..', 'bin', `${process.platform}-${process.arch}`, 'dsh-deeppilot-tunnel')
 }
 
 /** Owns exactly one embedded tunnel helper and restarts it after failures. */
