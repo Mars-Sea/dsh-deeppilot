@@ -14,8 +14,10 @@ npm run build
 cd helper && go test ./...
 ```
 
-Do not commit `lib/`, local tokens, device registries, Tailscale state, Apple
-credentials, logs, or captured conversations.
+Commit regenerated `lib/` together with source changes; GitHub installs use
+the checked-in artifacts without running lifecycle scripts. Do not commit
+local tokens, device registries, Tailscale state, Apple credentials, logs, or
+captured conversations.
 
 The bridge protocol is shared with the private iOS implementation. Protocol
 changes require an explicit versioning and compatibility review; do not change

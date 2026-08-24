@@ -116,8 +116,9 @@ npm run build:helper
 cd helper && go test ./...
 ```
 
-`lib/` is generated and is not committed. The prebuilt helper checksum is in
-`bin/SHA256SUMS`.
+`lib/` is generated and committed so GitHub installs do not need to execute a
+package lifecycle script. CI rebuilds it and rejects stale generated output.
+The prebuilt helper checksum is in `bin/SHA256SUMS`.
 
 ## Status and support
 

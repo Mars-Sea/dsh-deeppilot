@@ -60,8 +60,8 @@
   "scripts": {
     "build": "tsdown && node scripts/check-client-bundle.mjs",
     "build:helper": "sh scripts/build-helper.sh",
-    "prepare": "npm run build",
-    "prepublishOnly": "npm test && npm run typecheck && npm run build",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm test && npm run typecheck",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts"
   },

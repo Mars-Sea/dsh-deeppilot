@@ -21,6 +21,8 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+      - name: Verify committed build output
+        run: git diff --exit-code -- lib
       - name: Verify embedded helper checksum
         working-directory: bin
         run: sha256sum -c SHA256SUMS
