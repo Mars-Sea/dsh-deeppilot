@@ -68,6 +68,12 @@ dsh plugin --profile web remove dsh-deeppilot
 已验证的基线与当前限制见 [COMPATIBILITY.md](./COMPATIBILITY.md)。DSH 仍在快速
 迭代；提交问题时请附上准确的 DSH 与插件版本。
 
+## 协议
+
+[PROTOCOL.md](./PROTOCOL.md) 是 DeepPilot 桥接协议的规范性文档。任何 wire
+变更都必须同步更新该文档与 `src/protocol.ts`，保持协议 v1 向后兼容，并与
+私有 iOS 客户端协调。
+
 ## 开发
 
 ```sh

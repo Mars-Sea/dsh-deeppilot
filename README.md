@@ -73,6 +73,12 @@ See [COMPATIBILITY.md](./COMPATIBILITY.md) for the tested baseline and current
 limitations. DSH is still evolving; include exact DSH and plugin versions when
 reporting an issue.
 
+## Protocol
+
+[PROTOCOL.md](./PROTOCOL.md) is the normative DeepPilot bridge protocol. Any
+wire change must update that document and `src/protocol.ts` together, preserve
+protocol-v1 compatibility, and be coordinated with the private iOS client.
+
 ## Development
 
 ```sh

@@ -19,9 +19,10 @@ the checked-in artifacts without running lifecycle scripts. Do not commit
 local tokens, device registries, Tailscale state, Apple credentials, logs, or
 captured conversations.
 
-The bridge protocol is shared with the private iOS implementation. Protocol
-changes require an explicit versioning and compatibility review; do not change
-wire fields as an incidental refactor.
+The normative bridge contract is [PROTOCOL.md](./PROTOCOL.md) and its TypeScript
+model is `src/protocol.ts`. The private iOS client mirrors that contract.
+Protocol changes require an explicit versioning and compatibility review; do
+not change wire fields as an incidental refactor.
 
 Logs and fixtures must not contain pairing tokens, APNs tokens, private host
 names, filesystem paths from real users, or message bodies from real sessions.
