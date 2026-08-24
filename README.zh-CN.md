@@ -59,9 +59,9 @@ dsh plugin --profile web remove dsh-deeppilot
 
 ## App 截图
 
-当前 TestFlight 审核完成后再补充截图。
-
-<!-- 后续将 App 截图放到 assets/screenshots/，并替换本段说明。 -->
+| 首页 | 侧边栏 | 聊天 | 设置 |
+| --- | --- | --- | --- |
+| <img src="./assets/screenshots/home.png" alt="DeepPilot 首页" width="220"> | <img src="./assets/screenshots/sidebar.png" alt="DeepPilot 侧边栏" width="220"> | <img src="./assets/screenshots/chat.png" alt="DeepPilot 聊天界面" width="220"> | <img src="./assets/screenshots/settings.png" alt="DeepPilot 设置界面" width="220"> |
 
 ## 兼容性
 

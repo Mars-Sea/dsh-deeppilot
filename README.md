@@ -63,9 +63,9 @@ do not pass through the relay. Read [PRIVACY.md](./PRIVACY.md) and
 
 ## Screenshots
 
-Screenshots will be added after the current TestFlight review.
-
-<!-- Add future app screenshots under assets/screenshots/ and replace this note. -->
+| Home | Sidebar | Chat | Settings |
+| --- | --- | --- | --- |
+| <img src="./assets/screenshots/home.png" alt="DeepPilot home screen" width="220"> | <img src="./assets/screenshots/sidebar.png" alt="DeepPilot sidebar" width="220"> | <img src="./assets/screenshots/chat.png" alt="DeepPilot chat screen" width="220"> | <img src="./assets/screenshots/settings.png" alt="DeepPilot settings screen" width="220"> |
 
 ## Compatibility
 
