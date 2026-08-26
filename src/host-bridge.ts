@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { Envelope, MessageProjection, NotifyCategory, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus } from './protocol.ts'
+import type { Envelope, MessageProjection, NotifyCategory, PendingSnapshotPayload, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus } from './protocol.ts'
 
 /* Minimal structural faces over the host apiProxy service. The real types
  * live in @deepseek-ai/dsh-host-apiproxy; keeping them structural lets this
@@ -197,6 +197,15 @@ export interface ApiProxyLike {
   }
 }
 
+/**
+ * Outcome of answering a pending approval/question. The host distinguishes
+ * "never/no longer pending" from "payload rejected", and collapsing both into
+ * a boolean made every rejection read as `question not pending` on the phone.
+ */
+export type PendingResponseOutcome =
+  | { ok: true }
+  | { ok: false; reason: 'not-pending' | 'bad-response' | 'transport' }
+
 /** Downward sink every connected phone registers (one per WebSocket). */
 export interface BridgeSink {
   push(type: string, payload: unknown, seq?: number): void
@@ -277,6 +286,7 @@ export class HostBridge {
       replay: true,
       approvals: true,
       questions: true,
+      pendingSnapshot: true,
       models: typeof this.apiProxy.sessions.models === 'function' &&
         typeof this.apiProxy.sessions.selectModel === 'function',
       sessionManagement: typeof this.apiProxy.sessions.rename === 'function' &&
@@ -308,7 +318,9 @@ export class HostBridge {
   /** Whether the ring still holds everything after the cursor. */
   canResumeFrom(cursor: number): boolean {
     const oldest = this.ring.length > 0 ? this.ring[0]!.seq : this.cursor + 1;
-    return cursor + 1 >= oldest;
+    // A cursor ahead of this process belongs to an older bridge lifetime.
+    // Treat it as a gap instead of incorrectly claiming a successful resume.
+    return cursor <= this.cursor && cursor + 1 >= oldest;
   }
 
   private sinkSessions = new Map<BridgeSink, Set<string>>();
@@ -694,6 +706,30 @@ export class HostBridge {
     return [...this.summaries.values()].sort((a, b) => b.lastActivityTs - a.lastActivityTs);
   }
 
+  /**
+   * Complete transient interaction state. Unlike the replay ring, this remains
+   * authoritative after a long disconnect and is rehydrated by apiProxy's mux
+   * stream when the bridge itself restarts.
+   */
+  pendingSnapshot(): PendingSnapshotPayload {
+    return {
+      approvals: [...this.approvals.entries()].map(([requestId, pending]) => ({
+        requestId,
+        sessionId: pending.sessionId,
+        toolName: pending.toolName,
+        summary: pending.reason,
+        riskLevel: riskOf(pending.toolName),
+      })),
+      questions: [...this.questions.entries()].map(([requestId, pending]) => ({
+        requestId,
+        sessionId: pending.sessionId,
+        questions: Array.isArray(pending.questions)
+          ? pending.questions as PendingSnapshotPayload['questions'][number]['questions']
+          : [],
+      })),
+    };
+  }
+
   // ---------- data operations ----------
 
   /** Tail history for an opened session; pushes s2c.session.tail to the sink. */
@@ -972,7 +1008,7 @@ export class HostBridge {
     sessionId: string,
     text: string,
     images: Array<{ mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string; name?: string }> = [],
-  ): Promise<number | null> {
+  ): Promise<SessionManagementResult<number>> {
     try {
       const content: PromptArgs['content'] = [];
       if (text.trim().length > 0) content.push({ type: 'text', text });
@@ -986,61 +1022,152 @@ export class HostBridge {
           clientTimeZone: localTimeZone(),
         },
       });
-      if (!response.result || !response.result.ok) return null;
+      if (!response.result) return { ok: false, kind: 'internal', message: 'prompt returned no result' };
+      // Preserve the host's error kind so the phone can tell "retry later"
+      // (E_BUSY) from "session is gone" (E_NOT_FOUND) instead of mapping
+      // every failure onto E_BUSY.
+      if (!response.result.ok) return hostSessionManagementError(response.result.error);
       const row = this.summaries.get(sessionId);
       if (row) {
         row.lastActivityTs = Date.now();
         this.pushSummary(row);
       }
-      return Date.now();
-    } catch {
-      return null;
+      return { ok: true, value: Date.now() };
+    } catch (error) {
+      return { ok: false, kind: 'internal', message: String(error) };
     }
   }
 
 
-  async respondApproval(requestId: string, decision: 'allow' | 'deny'): Promise<boolean> {
+  async respondApproval(
+    requestId: string,
+    decision: 'allow' | 'deny',
+    reason?: string,
+  ): Promise<PendingResponseOutcome> {
     const pending = this.approvals.get(requestId);
-    if (!pending) return false;
+    if (!pending) return { ok: false, reason: 'not-pending' };
     // Claim the pending entry before responding: a second phone (or a double
     // tap) must not fire another client-response for the same rpcId while the
     // resolved frame is still in flight.
     this.approvals.delete(requestId);
     const outcome = decision === 'allow' ? 'allowed-once' : 'rejected';
+    const denialReason = typeof reason === 'string' ? reason.trim().slice(0, 500) : '';
     try {
       const receipt = await this.apiProxy.respond({
         type: 'client-response',
         rpcId: pending.rpcId,
-        result: { ok: true, value: { sessionId: pending.sessionId, approvalId: requestId, outcome } },
+        result: {
+          ok: true,
+          value: {
+            sessionId: pending.sessionId,
+            approvalId: requestId,
+            outcome,
+            // PROTOCOL v1: a deny may carry the user's explanation so the
+            // model can adjust course instead of blindly retrying.
+            ...(denialReason.length > 0 ? { reason: denialReason } : {}),
+          },
+        },
       });
       const accepted = Boolean(receipt?.accepted);
-      if (!accepted && !this.approvals.has(requestId)) this.approvals.set(requestId, pending);
-      return accepted;
+      if (!accepted) {
+        const failure = receiptFailureReason(receipt);
+        // Restore only what the user can retry: `not-pending` means the host
+        // already settled the request, and restoring would strand a ghost
+        // entry that no future resolved frame will ever clear.
+        if (failure !== 'not-pending' && !this.approvals.has(requestId)) {
+          this.approvals.set(requestId, pending);
+        }
+        return { ok: false, reason: failure };
+      }
+      // The claim above removed the entry, so the upcoming approval/resolved
+      // frame finds nothing left to bump — refresh the summary flags here or
+      // the session badge stays "pending" until an unrelated refresh.
+      this.bumpPendingFlags(pending.sessionId);
+      return { ok: true };
     } catch {
       // Transport-level failure: give the request back so the user can retry.
       if (!this.approvals.has(requestId)) this.approvals.set(requestId, pending);
-      return false;
+      return { ok: false, reason: 'transport' };
     }
   }
 
-  async respondQuestion(requestId: string, answers: unknown): Promise<boolean> {
+  async respondQuestion(requestId: string, answers: unknown): Promise<PendingResponseOutcome> {
     const pending = this.questions.get(requestId);
-    if (!pending) return false;
+    if (!pending) return { ok: false, reason: 'not-pending' };
     this.questions.delete(requestId);
     try {
       const receipt = await this.apiProxy.respond({
         type: 'client-response',
         rpcId: pending.rpcId,
-        result: { ok: true, value: { sessionId: pending.sessionId, answer: { answers } } },
+        result: { ok: true, value: { sessionId: pending.sessionId, answer: { answers: normalizeAnswerItems(answers, pending.questions) } } },
       });
       const accepted = Boolean(receipt?.accepted);
-      if (!accepted && !this.questions.has(requestId)) this.questions.set(requestId, pending);
-      return accepted;
+      if (!accepted) {
+        const failure = receiptFailureReason(receipt);
+        // Same ghost-entry rule as approvals: `not-pending` is final, never
+        // restore — the host has no record left to resolve against.
+        if (failure !== 'not-pending' && !this.questions.has(requestId)) {
+          this.questions.set(requestId, pending);
+        }
+        return { ok: false, reason: failure };
+      }
+      // Mirror the approval path: the claimed entry cannot bump flags when the
+      // resolved frame arrives, so recompute them right after acceptance.
+      this.bumpPendingFlags(pending.sessionId);
+      return { ok: true };
     } catch {
       if (!this.questions.has(requestId)) this.questions.set(requestId, pending);
-      return false;
+      return { ok: false, reason: 'transport' };
     }
   }
+}
+
+/**
+ * The host validates question answers strictly (core dsh-user-questions via
+ * apiProxy): a present-but-empty `custom` fails `matchesQuestions`, and a
+ * single-select question rejects `custom` combined with a selection. Clients
+ * may send lenient shapes (the phone historically always attached
+ * `"custom": ""`, which made EVERY option-only answer fail), so normalize to
+ * exactly what the host accepts before forwarding.
+ */
+export function normalizeAnswerItems(
+  raw: unknown,
+  questions?: unknown,
+): Array<{ id: string; selected: string[]; custom?: string }> {
+  if (!Array.isArray(raw)) return [];
+  const askedById = new Map<string, { multiSelect?: unknown }>();
+  if (Array.isArray(questions)) {
+    for (const q of questions) {
+      if (typeof q === 'object' && q !== null && typeof (q as { id?: unknown }).id === 'string') {
+        askedById.set((q as { id: string }).id, q as { multiSelect?: unknown });
+      }
+    }
+  }
+  const items: Array<{ id: string; selected: string[]; custom?: string }> = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const r = entry as { id?: unknown; selected?: unknown; custom?: unknown };
+    if (typeof r.id !== 'string') continue;
+    // De-duplicate while preserving order; duplicate labels are rejected by the host.
+    const selected = [...new Set(
+      Array.isArray(r.selected) ? r.selected.filter((s): s is string => typeof s === 'string') : [],
+    )];
+    const customText = typeof r.custom === 'string' ? r.custom : '';
+    let custom: string | undefined;
+    if (customText.trim().length > 0) custom = customText;
+    // A single-select answer must be either options or free text, never both.
+    if (custom !== undefined && selected.length > 0 && askedById.get(r.id)?.multiSelect !== true) {
+      custom = undefined;
+    }
+    items.push({ id: r.id, selected, ...(custom !== undefined ? { custom } : {}) });
+  }
+  return items;
+}
+
+/** Map an apiProxy respond receipt onto the failure vocabulary. */
+function receiptFailureReason(receipt: { accepted: boolean; reason?: string } | undefined):
+  'not-pending' | 'bad-response' {
+  return receipt?.reason === 'not-pending' ? 'not-pending' : 'bad-response';
 }
 
 // ---------- projection helpers ----------
@@ -1138,7 +1265,7 @@ function projectWorkspace(workspace: WorkspaceViewLike): {
 }
 
 /** Project one raw session event into a protocol push, when it maps to one. */
-function projectEvent(sessionId: string, event: SessionEventLike): { kind: SessionEventKind; data: Record<string, unknown> } | null {
+export function projectEvent(sessionId: string, event: SessionEventLike): { kind: SessionEventKind; data: Record<string, unknown> } | null {
   switch (event.type) {
     case 'turn/start':
       return { kind: 'turn.start', data: {} };
@@ -1151,9 +1278,10 @@ function projectEvent(sessionId: string, event: SessionEventLike): { kind: Sessi
         kind: 'message.final',
         data: {
           seq: event.seq,
-          role: 'user',
+          role: userRoleOf(event.data),
           text: messageText(event.data),
           ...attachmentProjection(event.data),
+          ...(contextProjectionOf(event.data)),
           ts: tsOf(event),
         },
       };
@@ -1175,19 +1303,39 @@ function projectEvent(sessionId: string, event: SessionEventLike): { kind: Sessi
       };
     }
     case 'tool/call': {
-      const data = event.data as { name?: string; arguments?: string } | undefined;
+      const data = event.data as { name?: string; arguments?: string; callId?: string } | undefined;
       return {
         kind: 'tool.start',
         data: {
           seq: event.seq,
           role: 'tool',
-          tool: { name: String(data?.name ?? 'tool'), state: 'running', summary: summarizeArgs(data?.arguments) },
+          tool: {
+            name: String(data?.name ?? 'tool'),
+            state: 'running',
+            summary: summarizeArgs(data?.arguments),
+            // Echo the invocation id so clients can pair the later result with
+            // this exact row instead of guessing.
+            ...(data?.callId ? { callId: String(data.callId) } : {}),
+          },
           ts: tsOf(event)
         }
       };
     }
-    case 'tool/result':
-      return { kind: 'tool.end', data: { seq: event.seq, role: 'tool', ok: !event.data || (event.data as { error?: unknown }).error === undefined, ts: tsOf(event) } };
+    case 'tool/result': {
+      const data = event.data as { callId?: string; error?: unknown } | undefined;
+      return {
+        kind: 'tool.end',
+        data: {
+          seq: event.seq,
+          role: 'tool',
+          ok: !event.data || data?.error === undefined,
+          // The seq above identifies this result event; callId is what ties it
+          // back to the originating tool/call row on the client.
+          ...(data?.callId ? { callId: String(data.callId) } : {}),
+          ts: tsOf(event)
+        }
+      };
+    }
     default:
       return null;
   }
@@ -1195,6 +1343,93 @@ function projectEvent(sessionId: string, event: SessionEventLike): { kind: Sessi
 
 function tsOf(event: SessionEventLike): number {
   return typeof event.time === 'number' ? event.time : Date.now();
+}
+
+// ---------- user-role source classification ----------
+//
+// The DSH host logs every model-visible user-role message as `user/message`,
+// but only some of them are human prompts: synthetic `agent.inject()` context
+// (runtime-context snapshots, background-job notices, workspace instructions,
+// skill content, …) rides the same event type. The durable message carries a
+// `source` whose `kind` tells them apart, and the host's own trajectory view
+// renders only `source.kind === 'user'` as a human prompt — everything else is
+// injected context. The bridge mirrors that classification so the phone can
+// keep the two apart instead of guessing from text shapes.
+
+/** Read the durable message source off one user/message payload. Handles both
+ * bare-message payloads and older `{message: {...}}` wrappers; undefined when
+ * the shape carries no readable source (legacy hosts). */
+function userMessageSource(data: unknown): Record<string, unknown> | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const obj = data as { source?: unknown; message?: { source?: unknown } };
+  if (obj.source && typeof obj.source === 'object') {
+    return obj.source as Record<string, unknown>;
+  }
+  if (obj.message && typeof obj.message === 'object' &&
+      obj.message.source && typeof obj.message.source === 'object') {
+    return obj.message.source as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+/** Wire role for one user/message payload. A payload without any readable
+ * source degrades to 'user' so history written by older hosts stays visible;
+ * a present source follows the host's own trajectory rule — anything whose
+ * `kind` is not 'user' is injected context and projects as 'system'. */
+function userRoleOf(data: unknown): 'user' | 'system' {
+  const source = userMessageSource(data);
+  if (!source) return 'user';
+  return source.kind === 'user' ? 'user' : 'system';
+}
+
+/** Producer name of one injected-context source, mirroring how the DSH client
+ * runtime derives its trajectory label: plugin name, skill name, instruction
+ * paths, session-reference labels, or the raw kind as fallback. */
+function contextLabelOf(source: Record<string, unknown>): string | undefined {
+  const kind = typeof source.kind === 'string' ? source.kind : '';
+  const joined = (member: string): string | undefined => {
+    const list = source[member];
+    if (!Array.isArray(list)) return undefined;
+    const names = list.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const record = entry as Record<string, unknown>;
+      return [typeof record.label === 'string' ? record.label :
+        (typeof record.path === 'string' ? record.path : '')];
+    }).filter((name) => name.length > 0);
+    return names.length > 0 ? names.join(', ') : undefined;
+  };
+  switch (kind) {
+    case 'session-reference':
+      return joined('references') ?? (kind || undefined);
+    case 'agent-instructions':
+      return joined('changes') ?? (kind || undefined);
+    case 'plugin':
+      return typeof source.plugin === 'string' && source.plugin.length > 0 ? source.plugin : kind || undefined;
+    case 'skill-invocation':
+      return typeof source.name === 'string' && source.name.length > 0 ? source.name : kind || undefined;
+    default:
+      return kind || undefined;
+  }
+}
+
+/** Semantic ContextForm declared by the producer ('snapshot', 'notice', …);
+ * anything unrecognized stays undefined so clients render it opaque. */
+function contextFormOf(source: Record<string, unknown>): string | undefined {
+  if (typeof source.form !== 'string' || source.form.length === 0) return undefined;
+  // Same known-vocabulary guard as the host's trajectory UI.
+  const known = ['instructions', 'catalog', 'snapshot', 'notice', 'relay', 'recall'];
+  return known.includes(source.form) ? source.form : undefined;
+}
+
+/** Optional `context` metadata for one system row; {} on user rows. */
+function contextProjectionOf(data: unknown): { context?: { label?: string; form?: string } } {
+  if (userRoleOf(data) !== 'system') return {};
+  const source = userMessageSource(data);
+  if (!source) return {};
+  const label = contextLabelOf(source);
+  const form = contextFormOf(source);
+  if (!label && !form) return {};
+  return { context: { ...(label ? { label } : {}), ...(form ? { form } : {}) } };
 }
 
 /** Extract plain text from user/assistant message payloads across shapes. */
@@ -1429,9 +1664,10 @@ export function projectHistory(events: Array<{ event: SessionEventLike; view?: u
       case 'user/message':
         messages.push({
           ...base,
-          role: 'user',
+          role: userRoleOf(event.data),
           text: messageText(event.data),
           ...attachmentProjection(event.data),
+          ...(contextProjectionOf(event.data)),
         });
         break;
       case 'assistant/message': {

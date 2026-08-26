@@ -44,7 +44,17 @@ export interface WorkspaceCreatePayload { path: string }
 export interface PromptImagePayload { mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string; name?: string }
 export interface SendPromptPayload { sessionId: string; text: string; images?: PromptImagePayload[] }
 export interface ApprovalRespondPayload { requestId: string; decision: "allow" | "deny"; reason?: string }
-export interface QuestionAnswer { id: string; selected: string[]; custom: string }
+export interface QuestionAnswer {
+  id: string
+  /** Selected option labels (labels, not separate ids). */
+  selected: string[]
+  /**
+   * Free-text answer. MUST be omitted unless the user actually typed a
+   * non-blank custom answer: the host rejects present-but-empty values, and
+   * single-select questions reject `custom` combined with a selection.
+   */
+  custom?: string
+}
 export interface QuestionRespondPayload { requestId: string; answers: QuestionAnswer[] }
 export interface ResumePayload { cursor: number }
 
@@ -75,6 +85,8 @@ export interface WelcomeCapabilities {
   replay: boolean
   approvals: boolean
   questions: boolean
+  /** Client can request the complete currently-pending approval/question set. */
+  pendingSnapshot?: boolean
   models: boolean
   sessionManagement: boolean
   projectSelection: boolean
@@ -144,6 +156,17 @@ export interface SessionsDeltaPayload { upserted: SessionSummary[]; removedIds: 
 export type MessageRole = 'user' | 'assistant' | 'tool' | 'system' | 'error'
 export type ToolState = 'running' | 'ok' | 'error'
 
+/** Provenance of host-injected context; present only on `role: "system"` rows.
+ * Mirrors the durable DSH message source (`dsh-llm` MessageSource): `label`
+ * names the producer (plugin name, skill name, instruction paths…), `form` is
+ * the semantic ContextForm vocabulary ('instructions' | 'catalog' | 'snapshot'
+ * | 'notice' | 'relay' | 'recall'). Both degrade gracefully — clients must
+ * tolerate absent fields and unknown values. */
+export interface MessageContextInfo {
+  label?: string
+  form?: string
+}
+
 /** One image carried by a user message. `attachmentId` keys the read-back RPC
  * (c2s.session.attachment); width/height let clients reserve layout space. */
 export interface MessageAttachment {
@@ -164,6 +187,12 @@ export interface MessageProjection {
   streaming?: boolean
   tool?: { name: string; state: ToolState; summary: string }
   attachments?: MessageAttachment[]
+  /** Present only on system rows: provenance of the injected context.
+   * The DSH host logs synthetic agent.inject() content (runtime-context
+   * snapshots, background-job notices, workspace instructions…) as user-role
+   * messages whose `source.kind` is not 'user'; those project here as
+   * `role: "system"` so clients never show them as human prompts. */
+  context?: MessageContextInfo
   ts: number
   truncated?: boolean
 }
@@ -246,6 +275,8 @@ export type SessionEventKind =
 export interface SessionEventData {
   text?: string
   ok?: boolean
+  /** tool.end only: host invocation id pairing the result with its call row. */
+  callId?: string
   key?: string
   value?: unknown
   [k: string]: unknown
@@ -294,13 +325,17 @@ export interface PendingQuestionOption { label: string; description?: string }
 export interface PendingQuestionItem {
   id: string
   question: string
-  multiSelect: boolean
-  options: PendingQuestionOption[]
+  multiSelect?: boolean
+  options?: PendingQuestionOption[]
 }
 export interface PendingQuestionPayload {
   requestId: string
   sessionId: string
   questions: PendingQuestionItem[]
+}
+export interface PendingSnapshotPayload {
+  approvals: PendingApprovalPayload[]
+  questions: PendingQuestionPayload[]
 }
 export interface PendingClearedPayload { requestId: string }
 export interface ResyncPayload { reason: "gap" }

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert'
-import { HostBridge, projectHistory } from '../src/host-bridge.ts'
+import { HostBridge, projectHistory, projectEvent } from '../src/host-bridge.ts'
 import type { ApiProxyLike, BridgeSink, MuxFrameLike } from '../src/host-bridge.ts'
 
 function makeFakeProxy() {
@@ -96,7 +96,7 @@ test('approval requested -> pending push -> respond allow', async () => {
   assert.equal(push.payload.riskLevel, 'write')
 
   const ok = await bridge.respondApproval('apr-1', 'allow')
-  assert.equal(ok, true)
+  assert.equal(ok.ok, true)
   assert.equal(respondCalls.length, 1)
   assert.equal(respondCalls[0].rpcId, 'rpc-1')
   assert.deepEqual(respondCalls[0].result.value, {
@@ -124,10 +124,174 @@ test('question requested -> pending push -> respond answers', async () => {
   assert.ok(push, 'pending.question push missing')
 
   const ok = await bridge.respondQuestion('q-rq-9', [{ id: 'q1', selected: ['A'], custom: '' }])
-  assert.equal(ok, true)
+  assert.equal(ok.ok, true, 'an option-only answer with empty custom must be accepted')
   assert.equal(respondCalls.length, 1)
   assert.equal(respondCalls[0].rpcId, 'rq-9')
-  assert.deepEqual(respondCalls[0].result.value.answer.answers, [{ id: 'q1', selected: ['A'], custom: '' }])
+  // Empty `custom` is dropped before the host sees it: the host rejects
+  // present-but-empty values, which used to fail every option-only answer.
+  assert.deepEqual(respondCalls[0].result.value.answer.answers, [{ id: 'q1', selected: ['A'] }])
+  bridge.dispose()
+})
+
+test('question answers are normalized to exactly what the host accepts', async () => {
+  const { proxy, respondCalls, getPush } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  getPush()({
+    type: 'question/requested',
+    rpcId: 'rq-norm',
+    sessionId: 'session-c',
+    questions: [
+      { id: 'single', question: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] },
+      { id: 'multi', question: 'Pick many', multiSelect: true, options: [{ label: 'X' }, { label: 'Y' }] },
+      { id: 'free', question: 'Describe' },
+    ],
+  })
+  await new Promise((r) => setTimeout(r, 20))
+
+  const outcome = await bridge.respondQuestion('q-rq-norm', [
+    { id: 'single', selected: ['A'], custom: '' }, // lenient phone shape
+    { id: 'multi', selected: ['Y', 'X', 'X'] }, // duplicate label
+    { id: 'free', selected: [], custom: '  spaced but real  ' },
+  ])
+  assert.equal(outcome.ok, true)
+  assert.deepEqual(respondCalls[respondCalls.length - 1].result.value.answer.answers, [
+    { id: 'single', selected: ['A'] },
+    { id: 'multi', selected: ['Y', 'X'] },
+    { id: 'free', selected: [], custom: '  spaced but real  ' },
+  ])
+  bridge.dispose()
+})
+
+test('single-select answers mixing selection and custom keep only the selection', async () => {
+  const { proxy, respondCalls, getPush } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  getPush()({
+    type: 'question/requested', rpcId: 'rq-mix', sessionId: 'session-c',
+    questions: [{ id: 'q1', question: 'A or B?', options: [{ label: 'A' }, { label: 'B' }] }],
+  })
+  await new Promise((r) => setTimeout(r, 20))
+
+  const outcome = await bridge.respondQuestion('q-rq-mix', [
+    { id: 'q1', selected: ['A'], custom: 'actually B' },
+  ])
+  assert.equal(outcome.ok, true)
+  assert.deepEqual(respondCalls[respondCalls.length - 1].result.value.answer.answers, [
+    { id: 'q1', selected: ['A'] },
+  ])
+  bridge.dispose()
+})
+
+test('host answer rejection reports bad-response and restores the pending entry for retry', async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  proxy.respond = async () => ({ accepted: false, reason: 'bad-response' })
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  getPush()({
+    type: 'question/requested', rpcId: 'rq-br', sessionId: 'session-c',
+    questions: [{ id: 'q1', question: 'A or B?', options: [{ label: 'A' }, { label: 'B' }] }],
+  })
+  await new Promise((r) => setTimeout(r, 20))
+
+  // Label "Z" was never offered — the host rejects the whole batch.
+  const rejected = await bridge.respondQuestion('q-rq-br', [{ id: 'q1', selected: ['Z'] }])
+  assert.deepEqual(rejected, { ok: false, reason: 'bad-response' })
+
+  proxy.respond = async () => ({ accepted: true })
+  const retried = await bridge.respondQuestion('q-rq-br', [{ id: 'q1', selected: ['A'] }])
+  assert.equal(retried.ok, true, 'pending was restored for retry after rejection')
+  bridge.dispose()
+})
+
+test('answering the last pending approval clears the summary badge immediately', async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
+    { sessionId: 'session-badge', updatedAt: 100, running: false, blank: false },
+  ] } } })
+  const bridge = new HostBridge(proxy, 100)
+  const collected: Array<{ type: string; payload: any }> = []
+  bridge.start()
+  bridge.addSink(makeSink(collected))
+  await bridge.refreshSummaries()
+
+  getPush()({
+    type: 'approval/requested', rpcId: 'rpc-badge', sessionId: 'session-badge',
+    approvalId: 'apr-badge', toolName: 'bash', reason: 'escalate sandbox',
+  })
+  await new Promise((r) => setTimeout(r, 20))
+  const flagged = collected.filter((f) => f.type === 's2c.sessions.delta').at(-1)
+  assert.equal(flagged?.payload.upserted?.[0]?.pendingApproval, true)
+
+  const answered = await bridge.respondApproval('apr-badge', 'allow')
+  assert.equal(answered.ok, true)
+  const cleared = collected.filter((f) => f.type === 's2c.sessions.delta').at(-1)
+  assert.equal(
+    cleared?.payload.upserted?.[0]?.pendingApproval,
+    false,
+    'the badge must clear as soon as the answer is accepted, not on the next unrelated refresh',
+  )
+
+  // The later resolved frame finds nothing left to bump — it must not throw.
+  getPush()({ type: 'approval/resolved', approvalId: 'apr-badge' })
+  await new Promise((r) => setTimeout(r, 20))
+  bridge.dispose()
+})
+
+test('a not-pending receipt leaves no ghost entry behind', async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  // The host reports the request as already settled (e.g. resolved while the
+  // answer was in flight): restoring would strand an unanswerable entry.
+  proxy.respond = async () => ({ accepted: false, reason: 'not-pending' })
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  getPush()({
+    type: 'approval/requested', rpcId: 'rpc-ghost', sessionId: 'session-g',
+    approvalId: 'apr-ghost', toolName: 'bash', reason: 'y',
+  })
+  getPush()({
+    type: 'question/requested', rpcId: 'rq-ghost', sessionId: 'session-g',
+    questions: [{ id: 'q1', question: '?', options: [] }],
+  })
+  await new Promise((r) => setTimeout(r, 20))
+
+  assert.deepEqual(await bridge.respondApproval('apr-ghost', 'deny'), { ok: false, reason: 'not-pending' })
+  assert.deepEqual(await bridge.respondQuestion('q-rq-ghost', [{ id: 'q1', selected: [] }]), { ok: false, reason: 'not-pending' })
+
+  assert.equal(bridge.pendingSnapshot().approvals.length, 0, 'no ghost approval may stay answerable')
+  assert.equal(bridge.pendingSnapshot().questions.length, 0, 'no ghost question may stay answerable')
+
+  const retried = await bridge.respondApproval('apr-ghost', 'allow')
+  assert.deepEqual(retried, { ok: false, reason: 'not-pending' }, 'retry reads as gone instead of looping on a stranded entry')
+  bridge.dispose()
+})
+
+test('deny carries the optional user reason through to the host', async () => {
+  const { proxy, respondCalls, getPush } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  getPush()({
+    type: 'approval/requested', rpcId: 'rpc-deny', sessionId: 'session-d',
+    approvalId: 'apr-deny', toolName: 'bash', reason: 'x',
+  })
+  await new Promise((r) => setTimeout(r, 20))
+  const outcome = await bridge.respondApproval('apr-deny', 'deny', '这个命令会删数据，先不要跑')
+  assert.equal(outcome.ok, true)
+  assert.deepEqual(respondCalls[respondCalls.length - 1].result.value, {
+    sessionId: 'session-d',
+    approvalId: 'apr-deny',
+    outcome: 'rejected',
+    reason: '这个命令会删数据，先不要跑',
+  })
+
+  // Blank reasons are dropped rather than sent as empty strings.
+  getPush()({
+    type: 'approval/requested', rpcId: 'rpc-deny2', sessionId: 'session-d',
+    approvalId: 'apr-deny2', toolName: 'bash', reason: 'y',
+  })
+  await new Promise((r) => setTimeout(r, 20))
+  await bridge.respondApproval('apr-deny2', 'deny', '   ')
+  assert.equal('reason' in respondCalls[respondCalls.length - 1].result.value, false)
   bridge.dispose()
 })
 
@@ -345,12 +509,12 @@ test('sendPrompt forwards image content and projects attachment metadata', async
   }
   const bridge = new HostBridge(proxy, 100)
   bridge.start()
-  const seq = await bridge.sendPrompt('session-image', '看这张图', [{
+  const sent = await bridge.sendPrompt('session-image', '看这张图', [{
     mediaType: 'image/jpeg',
     data: 'aGVsbG8=',
     name: 'phone.jpg',
   }])
-  assert.equal(typeof seq, 'number')
+  assert.equal(sent.ok, true, 'an accepted prompt resolves ok')
   assert.deepEqual(promptRequest.payload.content, [
     { type: 'text', text: '看这张图' },
     { type: 'image', mediaType: 'image/jpeg', data: 'aGVsbG8=', name: 'phone.jpg' },
@@ -453,6 +617,134 @@ test('reasoning chunks project to thinking.delta; finals carry thinking; empty s
   assert.equal(assistantRows[0].thinking, '嗯')
 })
 
+// ---------- live tool event callId passthrough ----------
+
+test('tool.start/tool.end pushes echo the host call id', () => {
+  const start = projectEvent('s1', {
+    type: 'tool/call', seq: 7, time: 1,
+    data: { name: 'bash', arguments: '{"command":"ls"}', callId: 'call-7' },
+  } as any)
+  assert.ok(start, 'tool/call must project')
+  assert.equal(start!.kind, 'tool.start')
+  assert.equal((start!.data.tool as { callId?: string }).callId, 'call-7')
+
+  const end = projectEvent('s1', {
+    type: 'tool/result', seq: 8, time: 2,
+    data: { callId: 'call-7', message: { content: 'ok' } },
+  } as any)
+  assert.ok(end, 'tool/result must project')
+  assert.equal(end!.kind, 'tool.end')
+  // The result carries its own seq plus the call id that pairs it with row 7.
+  assert.equal(end!.data.seq, 8)
+  assert.equal(end!.data.callId, 'call-7')
+  assert.equal(end!.data.ok, true)
+
+  const failed = projectEvent('s1', {
+    type: 'tool/result', seq: 9, time: 3,
+    data: { error: { message: 'boom' } },
+  } as any)
+  assert.ok(failed, 'failed tool/result must project')
+  assert.equal(failed!.data.ok, false)
+  assert.equal(failed!.data.callId, undefined, 'no callId must stay absent')
+})
+
+// ---------- injected user-role context projects as system rows ----------
+
+test('history: host-injected context rows become role=system; human prompts stay user', () => {
+  const rows = projectHistory([
+    // Runtime-context style snapshot injection (plugin source).
+    { event: { type: 'user/message', seq: 1, time: 1, data: {
+      id: 'm1', role: 'user',
+      content: [{ type: 'text', text: 'Current runtime context. This snapshot supersedes earlier snapshots.' }],
+      source: { kind: 'plugin', plugin: 'runtime-context', form: 'snapshot', sections: [] },
+    } } },
+    // Background-job notice injection.
+    { event: { type: 'user/message', seq: 2, time: 2, data: {
+      id: 'm2', role: 'user',
+      content: [{ type: 'text', text: 'background job bash-9 finished. Read its output with job_output.' }],
+      source: { kind: 'plugin', plugin: 'jobs', form: 'notice', summary: 'bash-9 finished' },
+    } } },
+    // Genuine human prompt.
+    { event: { type: 'user/message', seq: 3, time: 3, data: {
+      id: 'm3', role: 'user',
+      content: [{ type: 'text', text: '修一下聊天界面' }],
+      source: { kind: 'user' },
+    } } },
+    // Workspace instructions injection with path provenance.
+    { event: { type: 'user/message', seq: 4, time: 4, data: {
+      id: 'm4', role: 'user',
+      content: [{ type: 'text', text: '# AGENTS.md — guide' }],
+      source: { kind: 'agent-instructions', form: 'instructions', changes: [{ path: '/repo/AGENTS.md' }] },
+    } } },
+    // Legacy bare-string payload without any source must stay a user row.
+    { event: { type: 'user/message', seq: 5, time: 5, data: 'hi' } },
+  ] as any)
+
+  assert.equal(rows[0].role, 'system')
+  assert.equal(rows[0].context?.label, 'runtime-context')
+  assert.equal(rows[0].context?.form, 'snapshot')
+  assert.match(rows[0].text ?? '', /Current runtime context/)
+
+  assert.equal(rows[1].role, 'system')
+  assert.equal(rows[1].context?.label, 'jobs')
+  assert.equal(rows[1].context?.form, 'notice')
+
+  assert.equal(rows[2].role, 'user')
+  assert.equal(rows[2].context, undefined)
+
+  assert.equal(rows[3].role, 'system')
+  assert.equal(rows[3].context?.label, '/repo/AGENTS.md')
+  assert.equal(rows[3].context?.form, 'instructions')
+
+  assert.equal(rows[4].role, 'user')
+  assert.equal(rows[4].text, 'hi')
+})
+
+test('live push: injected user-role events emit message.final with role=system', () => {
+  const live = projectEvent('s1', {
+    type: 'user/message', seq: 10, time: 1,
+    data: {
+      id: 'm10', role: 'user',
+      content: [{ type: 'text', text: 'skill loaded' }],
+      source: { kind: 'skill-invocation', name: 'orca-cli', form: 'instructions' },
+    },
+  } as any)
+  assert.ok(live, 'user/message must project live')
+  assert.equal(live!.kind, 'message.final')
+  assert.equal(live!.data.role, 'system')
+  assert.equal(live!.data.context.label, 'orca-cli')
+  assert.equal(live!.data.context.form, 'instructions')
+
+  // The optimistic-echo path stays intact: a human prompt final keeps role=user
+  // so the phone reconciles its pending bubble.
+  const echo = projectEvent('s1', {
+    type: 'user/message', seq: 11, time: 2,
+    data: {
+      id: 'm11', role: 'user',
+      content: [{ type: 'text', text: '在吗' }],
+      source: { kind: 'user' },
+    },
+  } as any)
+  assert.equal(echo!.kind, 'message.final')
+  assert.equal(echo!.data.role, 'user')
+})
+
+test('wrapped legacy payloads classify through the inner message source', () => {
+  const rows = projectHistory([
+    { event: { type: 'user/message', seq: 20, time: 1, data: {
+      message: { role: 'user', content: [{ type: 'text', text: '注入的上下文' }],
+        source: { kind: 'plugin', plugin: 'time-context', form: 'snapshot', sections: [] } },
+    } } },
+    { event: { type: 'user/message', seq: 21, time: 2, data: {
+      message: { role: 'user', content: [{ type: 'text', text: '真人在说话' }],
+        source: { kind: 'user' } },
+    } } },
+  ] as any)
+  assert.equal(rows[0].role, 'system')
+  assert.equal(rows[0].context?.label, 'time-context')
+  assert.equal(rows[1].role, 'user')
+})
+
 // ---------- replay targeting ----------
 
 function makeRecordingSink() {
@@ -504,6 +796,32 @@ test('canResumeFrom detects unrecoverable gaps against the oldest buffered seq',
 
   assert.equal(bridge.canResumeFrom(bridge.currentCursor()), true, 'current cursor always resumable')
   assert.equal(bridge.canResumeFrom(1), false, 'a cursor older than the ring is a gap')
+  assert.equal(bridge.canResumeFrom(bridge.currentCursor() + 1), false, 'a cursor from another bridge lifetime is a gap')
+  bridge.dispose()
+})
+
+test('pending snapshot preserves full answerable state independently of replay', async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 1)
+  bridge.start()
+  getPush()({
+    type: 'approval/requested', rpcId: 'rpc-a', sessionId: 'session-x',
+    approvalId: 'apr-snapshot', toolName: 'bash', reason: 'write files',
+  })
+  getPush()({
+    type: 'question/requested', rpcId: 'rpc-q', sessionId: 'session-x',
+    questions: [{ id: 'choice', question: 'Choose?', options: [{ label: 'A' }] }],
+  })
+  await new Promise((r) => setTimeout(r, 20))
+
+  // Overflow the one-entry replay ring. The authoritative snapshot must still
+  // retain both transient interactions and their response ids.
+  ;(bridge as any).record('s2c.tick', {})
+  const snapshot = bridge.pendingSnapshot()
+  assert.equal(snapshot.approvals[0].requestId, 'apr-snapshot')
+  assert.equal(snapshot.approvals[0].summary, 'write files')
+  assert.equal(snapshot.questions[0].requestId, 'q-rpc-q')
+  assert.equal(snapshot.questions[0].questions[0].question, 'Choose?')
   bridge.dispose()
 })
 
@@ -528,14 +846,14 @@ test('approval response claims the pending entry so a second submit cannot re-fi
   })
   await new Promise((r) => setTimeout(r, 20))
 
-  assert.equal(await bridge.respondApproval('apr-dup', 'allow'), true)
-  assert.equal(await bridge.respondApproval('apr-dup', 'deny'), false, 'second submit finds nothing pending')
+  assert.equal((await bridge.respondApproval('apr-dup', 'allow')).ok, true)
+  assert.equal((await bridge.respondApproval('apr-dup', 'deny')).ok, false, 'second submit finds nothing pending')
   assert.equal(respondCalls, 1, 'the host receives exactly one client-response')
 
   // The resolved frame arriving later stays harmless.
   getPush()({ type: 'approval/resolved', approvalId: 'apr-dup' })
   await new Promise((r) => setTimeout(r, 20))
-  assert.equal(await bridge.respondApproval('apr-dup', 'deny'), false)
+  assert.equal((await bridge.respondApproval('apr-dup', 'deny')).ok, false)
   assert.equal(respondCalls, 1)
   bridge.dispose()
 })
@@ -559,9 +877,9 @@ test('approval response survives a transport error by restoring the pending entr
   })
   await new Promise((r) => setTimeout(r, 20))
 
-  assert.equal(await bridge.respondApproval('apr-retry', 'allow'), false)
+  assert.equal((await bridge.respondApproval('apr-retry', 'allow')).ok, false)
   failNext = false
-  assert.equal(await bridge.respondApproval('apr-retry', 'allow'), true, 'pending was restored for retry')
+  assert.equal((await bridge.respondApproval('apr-retry', 'allow')).ok, true, 'pending was restored for retry')
   bridge.dispose()
 })
 
@@ -582,12 +900,12 @@ test('host rejection restores approval and question entries for retry', async ()
   await new Promise((r) => setTimeout(r, 20))
 
   const answers = [{ id: 'q1', selected: ['A'], custom: '' }]
-  assert.equal(await bridge.respondApproval('apr-rejected', 'allow'), false)
-  assert.equal(await bridge.respondQuestion('q-rq-rejected', answers), false)
+  assert.equal((await bridge.respondApproval('apr-rejected', 'allow')).ok, false)
+  assert.equal((await bridge.respondQuestion('q-rq-rejected', answers)).ok, false)
 
   accept = true
-  assert.equal(await bridge.respondApproval('apr-rejected', 'allow'), true)
-  assert.equal(await bridge.respondQuestion('q-rq-rejected', answers), true)
+  assert.equal((await bridge.respondApproval('apr-rejected', 'allow')).ok, true)
+  assert.equal((await bridge.respondQuestion('q-rq-rejected', answers)).ok, true)
   bridge.dispose()
 })
 
@@ -609,8 +927,8 @@ test('question response follows the same single-shot claim semantics', async () 
   await new Promise((r) => setTimeout(r, 20))
 
   const answers = [{ id: 'q1', selected: ['A'], custom: '' }]
-  assert.equal(await bridge.respondQuestion('q-rq-single', answers), true)
-  assert.equal(await bridge.respondQuestion('q-rq-single', answers), false)
+  assert.equal((await bridge.respondQuestion('q-rq-single', answers)).ok, true)
+  assert.equal((await bridge.respondQuestion('q-rq-single', answers)).ok, false)
   assert.equal(respondCalls, 1)
   bridge.dispose()
 })

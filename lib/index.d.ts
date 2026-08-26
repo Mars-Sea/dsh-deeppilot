@@ -39,6 +39,32 @@ interface PushNotification {
   title: string;
   body: string;
 }
+interface PendingApprovalPayload {
+  requestId: string;
+  sessionId: string;
+  toolName: string;
+  summary: string;
+  riskLevel: 'read' | 'write' | 'destructive';
+}
+interface PendingQuestionOption {
+  label: string;
+  description?: string;
+}
+interface PendingQuestionItem {
+  id: string;
+  question: string;
+  multiSelect?: boolean;
+  options?: PendingQuestionOption[];
+}
+interface PendingQuestionPayload {
+  requestId: string;
+  sessionId: string;
+  questions: PendingQuestionItem[];
+}
+interface PendingSnapshotPayload {
+  approvals: PendingApprovalPayload[];
+  questions: PendingQuestionPayload[];
+}
 //#endregion
 //#region src/host-bridge.d.ts
 interface RpcOk<T> {
@@ -291,6 +317,17 @@ interface ApiProxyLike {
     host(req: RpcRequestLike<Record<string, never>>, signal: AbortSignal): AsyncIterable<MuxFrameLike | ApiStreamItemLike>;
   };
 }
+/**
+ * Outcome of answering a pending approval/question. The host distinguishes
+ * "never/no longer pending" from "payload rejected", and collapsing both into
+ * a boolean made every rejection read as `question not pending` on the phone.
+ */
+type PendingResponseOutcome = {
+  ok: true;
+} | {
+  ok: false;
+  reason: 'not-pending' | 'bad-response' | 'transport';
+};
 /** Downward sink every connected phone registers (one per WebSocket). */
 interface BridgeSink {
   push(type: string, payload: unknown, seq?: number): void;
@@ -343,6 +380,7 @@ declare class HostBridge {
     replay: boolean;
     approvals: boolean;
     questions: boolean;
+    pendingSnapshot: boolean;
     models: boolean;
     sessionManagement: boolean;
     projectSelection: boolean;
@@ -392,6 +430,12 @@ declare class HostBridge {
   private bumpPendingFlags;
   private pushSummary;
   listSessions(): SessionSummary[];
+  /**
+   * Complete transient interaction state. Unlike the replay ring, this remains
+   * authoritative after a long disconnect and is rehydrated by apiProxy's mux
+   * stream when the bridge itself restarts.
+   */
+  pendingSnapshot(): PendingSnapshotPayload;
   /** Tail history for an opened session; pushes s2c.session.tail to the sink. */
   openSession(sink: BridgeSink, sessionId: string, tailCount: number): Promise<boolean>;
   historyPage(sink: BridgeSink, sessionId: string, beforeSeq: number, limit: number): Promise<boolean>;
@@ -431,9 +475,9 @@ declare class HostBridge {
     mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
     data: string;
     name?: string;
-  }>): Promise<number | null>;
-  respondApproval(requestId: string, decision: 'allow' | 'deny'): Promise<boolean>;
-  respondQuestion(requestId: string, answers: unknown): Promise<boolean>;
+  }>): Promise<SessionManagementResult<number>>;
+  respondApproval(requestId: string, decision: 'allow' | 'deny', reason?: string): Promise<PendingResponseOutcome>;
+  respondQuestion(requestId: string, answers: unknown): Promise<PendingResponseOutcome>;
 }
 //#endregion
 //#region src/index.d.ts

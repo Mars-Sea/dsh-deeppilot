@@ -76,8 +76,9 @@ interface Harness {
 
 async function makeConnection(opts: {
   transportAuthenticated?: boolean
+  proxyOverrides?: Partial<ApiProxyLike>
 } = {}): Promise<Harness> {
-  const bridge = new HostBridge(makeProxy(), 100)
+  const bridge = new HostBridge(makeProxy(opts.proxyOverrides), 100)
   // Each harness gets its own registry file so tests never share state.
   const dir = await mkdtemp(join(tmpdir(), 'pbb-conn-'))
   const store = await DeviceStore.load(join(dir, 'devices.json'))
@@ -140,6 +141,7 @@ test('hello registers a sanitized device and sends welcome with capabilities', a
   assert.equal(lastFrame(ws).payload.protocolVersion, 1)
   assert.equal(typeof lastFrame(ws).payload.cursor, 'number')
   assert.ok(lastFrame(ws).payload.capabilities.replay === true)
+  assert.ok(lastFrame(ws).payload.capabilities.pendingSnapshot === true)
 
   const rows = store.list()
   assert.equal(rows.length, 1)
@@ -197,6 +199,90 @@ test('a successful hello cancels the auth deadline', async (t) => {
 })
 
 // ---------- authenticated frames ----------
+
+test('pending.list returns the complete answerable approval and question snapshot', async () => {
+  const { ws, bridge } = await makeConnection({ transportAuthenticated: true })
+  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  ;(bridge as any).onMuxFrame({
+    type: 'approval/requested', rpcId: 'rpc-a', sessionId: 's1',
+    approvalId: 'apr-1', toolName: 'bash', reason: 'install dependency',
+  })
+  ;(bridge as any).onMuxFrame({
+    type: 'question/requested', rpcId: 'rpc-q', sessionId: 's1',
+    questions: [{ id: 'mode', question: 'A or B?', options: [{ label: 'A' }] }],
+  })
+  ws.sent.length = 0
+
+  ws.receive({ v: 1, type: 'c2s.pending.list', id: 'pending-1', payload: {} })
+
+  const frame = lastFrame(ws)
+  assert.equal(frame.type, 's2c.pending.snapshot')
+  assert.equal(frame.id, 'pending-1')
+  assert.equal(frame.payload.approvals[0].requestId, 'apr-1')
+  assert.equal(frame.payload.questions[0].requestId, 'q-rpc-q')
+  assert.equal(frame.payload.questions[0].questions[0].question, 'A or B?')
+})
+
+test('answering an unknown question still reads "question not pending"', async () => {
+  const { ws } = await makeConnection({ transportAuthenticated: true })
+  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  ws.sent.length = 0
+
+  ws.receive({
+    v: 1,
+    type: 'c2s.question.respond',
+    id: 'q-none',
+    payload: { requestId: 'q-ghost', answers: [{ id: 'x', selected: [] }] },
+  })
+  await new Promise((r) => setTimeout(r, 10))
+
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).id, 'q-none')
+  assert.equal(lastFrame(ws).payload.code, 'E_NOT_FOUND')
+  assert.equal(lastFrame(ws).payload.message, 'question not pending')
+})
+
+test('host-rejected question answers surface E_PROTOCOL, and the entry stays retryable', async () => {
+  // The host refuses the batch (e.g. a label it never offered); the phone must
+  // NOT see the misleading "question not pending" for this case.
+  let accept = false
+  const { ws, bridge } = await makeConnection({
+    transportAuthenticated: true,
+    proxyOverrides: {
+      respond: async () => ({ accepted: accept, ...(accept ? {} : { reason: 'bad-response' }) }),
+    },
+  })
+  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  ;(bridge as any).onMuxFrame({
+    type: 'question/requested', rpcId: 'rpc-rej', sessionId: 's1',
+    questions: [{ id: 'mode', question: 'A or B?', options: [{ label: 'A' }, { label: 'B' }] }],
+  })
+  await new Promise((r) => setTimeout(r, 20))
+  ws.sent.length = 0
+
+  ws.receive({
+    v: 1,
+    type: 'c2s.question.respond',
+    id: 'q-rej',
+    payload: { requestId: 'q-rpc-rej', answers: [{ id: 'mode', selected: ['Z'] }] },
+  })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL')
+  assert.match(String(lastFrame(ws).payload.message), /rejected by host/)
+
+  // The rejected answer restores the pending question, so a corrected retry succeeds.
+  accept = true
+  ws.receive({
+    v: 1,
+    type: 'c2s.question.respond',
+    id: 'q-ok',
+    payload: { requestId: 'q-rpc-rej', answers: [{ id: 'mode', selected: ['A'] }] },
+  })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(lastFrame(ws).type, 's2c.ack')
+  assert.equal(lastFrame(ws).id, 'q-ok')
+})
 
 test('prompt text beyond the cap is rejected before reaching the host', async () => {
   const { ws } = await makeConnection({ transportAuthenticated: true })
@@ -260,4 +346,58 @@ test('protocol version mismatch closes with 4500 after an error frame', async ()
   assert.equal(lastFrame(ws).type, 's2c.error')
   assert.equal(lastFrame(ws).payload.code, 'E_UNSUPPORTED')
   assert.deepEqual(ws.closes.map((c) => c.code), [4500])
+})
+
+test('prompt failures surface the host error kind, not a blanket E_BUSY', async () => {
+  const { ws } = await makeConnection({
+    transportAuthenticated: true,
+    proxyOverrides: {
+      sessions: {
+        list: async () => ({ result: { ok: true, value: { items: [] } } }),
+        history: async () => ({ result: { ok: true, value: { events: [], hasMore: false } } }),
+        prompt: async () => ({ result: { ok: false, error: { code: 'session-not-found', message: 'no such session' } } }),
+        create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
+      },
+    },
+  })
+  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  ws.sent.length = 0
+
+  ws.receive({
+    v: 1,
+    type: 'c2s.session.sendPrompt',
+    id: 'm1',
+    payload: { sessionId: 'missing', text: '在吗' },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).payload.code, 'E_NOT_FOUND', 'a missing session must not read as busy')
+})
+
+test('a failed session.open rolls back its viewer registration', async () => {
+  const { ws, bridge } = await makeConnection({
+    transportAuthenticated: true,
+    proxyOverrides: {
+      sessions: {
+        list: async () => ({ result: { ok: true, value: { items: [] } } }),
+        history: async () => ({ result: { ok: false, error: { code: 'session-not-found' } } }),
+        prompt: async () => ({ result: { ok: true, value: { accepted: true } } }),
+        create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
+      },
+    },
+  })
+  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  ws.sent.length = 0
+
+  ws.receive({ v: 1, type: 'c2s.session.open', id: 'o1', payload: { sessionId: 'missing-session' } })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(lastFrame(ws).payload.code, 'E_NOT_FOUND')
+
+  // No viewer interest may survive a failed open — otherwise turn.completed
+  // notifications stay suppressed for a session this device never received.
+  const viewers = (bridge as unknown as { sinkSessions: Map<unknown, Set<string>> }).sinkSessions
+  assert.ok(
+    [...viewers.values()].every((set) => !set.has('missing-session')),
+    'failed open must not keep viewer interest registered',
+  )
 })

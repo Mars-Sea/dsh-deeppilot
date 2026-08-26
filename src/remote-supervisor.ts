@@ -102,12 +102,20 @@ export class RemoteSupervisor {
       await access(helper, fsConstants.X_OK)
       await mkdir(statePath, { recursive: true, mode: 0o700 })
     } catch (error) {
+      // A dispose() that raced these checks must not be overwritten by a
+      // late failure report.
+      if (this.stopping) return
       this.setStatus({
         phase: 'unavailable',
         message: `embedded tunnel helper unavailable: ${String(error)}`,
       })
       return
     }
+
+    // dispose() may have run while the filesystem checks above were in
+    // flight; spawning afterwards would orphan a helper process that nothing
+    // will ever reap (dispose already returned seeing no child).
+    if (this.stopping) return
 
     this.setStatus({ phase: 'starting', message: undefined })
     const child = spawn(helper, [

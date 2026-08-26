@@ -198,6 +198,10 @@ export class BridgeConnection implements BridgeSink {
         this.send('s2c.sessions.snapshot', { full: true, sessions: this.deps.bridge.listSessions() }, env.id)
         return
       }
+      case 'c2s.pending.list': {
+        this.send('s2c.pending.snapshot', this.deps.bridge.pendingSnapshot(), env.id)
+        return
+      }
       case 'c2s.workspaces.list': {
         if (!this.deps.bridge.capabilities.projectSelection) {
           return this.fail(env.id, 'E_UNSUPPORTED', 'project selection unavailable on this host version')
@@ -237,11 +241,19 @@ export class BridgeConnection implements BridgeSink {
       }
       case 'c2s.session.open': {
         const p = env.payload as { sessionId?: string; tailCount?: number }
-        if (!p?.sessionId) return this.fail(env.id, 'E_PROTOCOL', 'sessionId required')
-        this.openSessions.add(p.sessionId)
-        this.deps.bridge.markSinkOpen(this, p.sessionId)
-        const ok = await this.deps.bridge.openSession(this, p.sessionId, p.tailCount ?? 100)
-        if (!ok) this.fail(env.id, 'E_NOT_FOUND', 'session history unavailable')
+        if (!p?.sessionId || typeof p.sessionId !== 'string') return this.fail(env.id, 'E_PROTOCOL', 'sessionId required')
+        const sessionId = p.sessionId
+        this.openSessions.add(sessionId)
+        this.deps.bridge.markSinkOpen(this, sessionId)
+        const ok = await this.deps.bridge.openSession(this, sessionId, p.tailCount ?? 100)
+        if (!ok) {
+          // Roll the viewer registration back: a failed open must not keep
+          // suppressing turn notifications for a session this device never
+          // actually received.
+          this.openSessions.delete(sessionId)
+          this.deps.bridge.markSinkClosed(this, sessionId)
+          return this.fail(env.id, 'E_NOT_FOUND', 'session history unavailable')
+        }
         return
       }
       case 'c2s.session.close': {
@@ -422,8 +434,8 @@ export class BridgeConnection implements BridgeSink {
           })
         }
         const userSeq = await this.deps.bridge.sendPrompt(p.sessionId, text, images)
-        if (userSeq === null) return this.fail(env.id, 'E_BUSY', 'session busy or unavailable')
-        this.send('s2c.ack', { userSeq }, env.id)
+        if (!userSeq.ok) return this.fail(env.id, managementErrorCode(userSeq.kind), userSeq.message)
+        this.send('s2c.ack', { userSeq: userSeq.value }, env.id)
         return
       }
       case 'c2s.approval.respond': {
@@ -431,8 +443,14 @@ export class BridgeConnection implements BridgeSink {
         if (!p?.requestId || (p.decision !== 'allow' && p.decision !== 'deny')) {
           return this.fail(env.id, 'E_PROTOCOL', 'requestId and decision required')
         }
-        const ok = await this.deps.bridge.respondApproval(p.requestId, p.decision)
-        if (!ok) return this.fail(env.id, 'E_NOT_FOUND', 'approval not pending')
+        // PROTOCOL v1: the optional deny reason must reach the host so the
+        // model learns why its tool call was refused.
+        const outcome = await this.deps.bridge.respondApproval(
+          p.requestId,
+          p.decision,
+          typeof p.reason === 'string' ? p.reason : undefined,
+        )
+        if (!outcome.ok) return this.fail(env.id, pendingResponseErrorCode(outcome.reason), pendingResponseMessage('approval', outcome.reason))
         this.send('s2c.ack', {}, env.id)
         return
       }
@@ -441,8 +459,8 @@ export class BridgeConnection implements BridgeSink {
         if (!p?.requestId || !Array.isArray(p.answers)) {
           return this.fail(env.id, 'E_PROTOCOL', 'requestId and answers required')
         }
-        const ok = await this.deps.bridge.respondQuestion(p.requestId, p.answers)
-        if (!ok) return this.fail(env.id, 'E_NOT_FOUND', 'question not pending')
+        const outcome = await this.deps.bridge.respondQuestion(p.requestId, p.answers)
+        if (!outcome.ok) return this.fail(env.id, pendingResponseErrorCode(outcome.reason), pendingResponseMessage('question', outcome.reason))
         this.send('s2c.ack', {}, env.id)
         return
       }
@@ -547,6 +565,30 @@ const ERROR_CODES = {
   E_UNSUPPORTED: 'protocol version or capability unsupported',
   E_INTERNAL: 'internal error',
 } as const
+
+/** Error code for a failed approval/question response outcome. */
+function pendingResponseErrorCode(reason: 'not-pending' | 'bad-response' | 'transport'): keyof typeof ERROR_CODES {
+  switch (reason) {
+    case 'not-pending': return 'E_NOT_FOUND'
+    // The host refused the answer batch (shape/labels mismatch) — a client
+    // payload problem, not a missing pending request.
+    case 'bad-response': return 'E_PROTOCOL'
+    case 'transport': return 'E_INTERNAL'
+  }
+}
+
+/** Human-readable failure detail; `question not pending` must only ever mean
+ * "nothing pending", never "the host rejected the answer". */
+function pendingResponseMessage(
+  kind: 'approval' | 'question',
+  reason: 'not-pending' | 'bad-response' | 'transport',
+): string {
+  switch (reason) {
+    case 'not-pending': return kind + ' not pending'
+    case 'bad-response': return kind + ' answer rejected by host: answer does not match the asked questions'
+    case 'transport': return 'host connection failed while answering ' + kind
+  }
+}
 
 function managementErrorCode(
   kind: 'unsupported' | 'not-found' | 'busy' | 'invalid' | 'internal',

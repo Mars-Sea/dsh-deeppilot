@@ -476,6 +476,13 @@ export function apply(ctx: Context, options: unknown): void {
   let enrollAttemptFor: string | undefined
   let enrollLastAttemptAt = 0
   const ensureRelayEnrolled = async (url: string): Promise<string | undefined> => {
+    // The enrollment body carries the distributor's shared key; a mis-typed
+    // http:// relayUrl must never leak it in cleartext. (Send-path requests
+    // are already gated by resolvePushConfig — enrollment call sites are not.)
+    if (!/^https:\/\//i.test(url.trim())) {
+      log('push relay enrollment refused: relayUrl must be an https URL')
+      return undefined
+    }
     if (enrollmentCell.token) return enrollmentCell.token
     const fingerprint = url + ':' + String(enrollmentCell.enrollKey ?? '')
     if (fingerprint !== enrollAttemptFor) {
@@ -519,7 +526,14 @@ export function apply(ctx: Context, options: unknown): void {
     dispose?: () => Promise<void>
   }
   let cachedSender: CachedSender | undefined
-  let senderFailedFor: string | undefined
+  /**
+   * Last failed APNs-sender build. The config fingerprint cannot see the
+   * filesystem, so remembering a failure forever meant "copy the .p8 into
+   * place later" never recovered without an edit or restart; throttle the
+   * retry by time instead — same pattern as relay enrollment below.
+   */
+  let senderFailedFor: { fingerprint: string; at: number } | undefined
+  const SENDER_FAILURE_RETRY_MS = 60_000
 
   /**
    * Lazily build the push sender for the current config. A broken config
@@ -529,7 +543,15 @@ export function apply(ctx: Context, options: unknown): void {
   const senderFor = async (resolved: PushConfigSnapshot): Promise<PushSender | undefined> => {
     const fingerprint = JSON.stringify(resolved)
     if (cachedSender?.fingerprint === fingerprint) return cachedSender.send
-    if (senderFailedFor === fingerprint) return undefined
+    // A recent failure only blocks retries for a short window: a permanently
+    // broken config must not log-storm on every event, but the same config
+    // with the key file since added MUST get another chance.
+    if (
+      senderFailedFor?.fingerprint === fingerprint &&
+      Date.now() - senderFailedFor.at < SENDER_FAILURE_RETRY_MS
+    ) {
+      return undefined
+    }
     if (cachedSender) {
       await cachedSender.dispose?.().catch(() => {})
       cachedSender = undefined
@@ -547,7 +569,7 @@ export function apply(ctx: Context, options: unknown): void {
       try {
         await readFile(expandHome(resolved.keyPath), 'utf8')
       } catch (error) {
-        senderFailedFor = fingerprint
+        senderFailedFor = { fingerprint, at: Date.now() }
         log('apns push unavailable (key unreadable at ' + resolved.keyPath + '): ' + String(error))
         return undefined
       }
@@ -714,6 +736,14 @@ export function apply(ctx: Context, options: unknown): void {
         }
       }
       const url = (push.relayUrl ?? '').trim() || DEFAULT_RELAY_URL
+      if (!/^https:\/\//i.test(url)) {
+        return {
+          url,
+          overall: 'failed' as const,
+          tokenIssued: false,
+          steps: [{ id: 'health' as const, ok: false, message: 'relayUrl 必须是 https 地址：注册请求携带共享密钥，明文 HTTP 会把它暴露给链路上的任何节点' }],
+        }
+      }
       // The enroll step needs an identity; mint one now so a successful test
       // doubles as a completed enrollment.
       if (!enrollmentCell.clientId && enrollmentCell.enrollKey) {

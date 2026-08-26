@@ -42,7 +42,7 @@
 { "type": "s2c.welcome", "payload": {
   "protocolVersion": 1,
   "serverVersion": "0.1.0",
-  "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true },
+  "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "pendingSnapshot": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true },
   "cursor": 1042,
   "resumed": true
 } }
@@ -119,12 +119,20 @@ Message 投影：
     { "kind": "image", "name": "photo.jpg", "mediaType": "image/jpeg",
       "attachmentId": "att-…", "width": 2048, "height": 1536 }
   ],
+  "context": { "label": "runtime-context", "form": "snapshot" },
   "ts": 1756000000000,
   "truncated": false
 }
 ```
 
 - `role`：user | assistant | tool | system | error；`tool` 仅 tool 行存在，state 为 running | ok | error。
+- `role: system` 表示宿主注入的模型侧上下文（运行时快照、后台任务通知、工作区指令、技能内容等），
+  不是真人发言。DSH Host 会把这类 `agent.inject()` 内容与真人 prompt 同样记为 user-role 消息，
+  但其消息 `source.kind` 不是 `'user'`；Bridge 参照 Host 轨迹视图的分类规则，把这类行投影为
+  `system`，客户端必须与用户气泡区分展示。旧 Bridge 不做该分类，此类行仍是 `user`——客户端须容忍。
+- `context`：仅 system 行可选携带的来源信息。`label` 为生产者名（插件名 / 技能名 / 指令路径等），
+  `form` 为语义类别（instructions | catalog | snapshot | notice | relay | recall）。两者皆可缺省，
+  出现未知取值时客户端按不透明文本处理，不得丢弃该行。
 - `thinking`：assistant 行可选，携带模型的推理（reasoning）文本；正文与推理均为空的 assistant 行不下发。
 - `streaming: true` 只出现在推送中间态，final/tail/history 中恒为 false。
 - `truncated: true` 表示投影超 256KB 被截断。
@@ -188,6 +196,7 @@ Message 投影：
 
 - message.delta/message.final 共用同一会话内 seq；data.text 为增量/全文。
 - thinking.delta 的 data.text 为推理增量，seq 与同会话其他事件一致；客户端应把连续增量折叠进同一条"思考"行（role=assistant、thinking 累积、streaming=true），final 到达后由带 `thinking` 字段的正式行替换。
+- tool.start 的 `data.tool` 为 `{name, state:"running", summary}`；Host 事件携带调用 id 时额外附带 `tool.callId`。tool.end 的 data 附带 ok 布尔与该结果事件自身的 seq，并在 Host 事件携带调用 id 时附带 `callId`——`seq` 标识的是 result 事件本身，客户端必须用 `callId`（缺失时按"最旧的未完成工具行"兜底）把结果合并回对应的 tool.start 行，不得按 seq 匹配。
 - turn.end 的 data 附带 ok 布尔；projection 的 data 为 key/value（如 todos）。
 
 ## 4b. 项目选择与新建会话
@@ -320,10 +329,30 @@ RPC 响应 result 为 `{ "mediaType": "image/jpeg", "data": "<base64>" }`；宿�
   ]
 } }
 { "type": "c2s.question.respond", "payload": { "requestId": "q-1",
-  "answers": [ { "id": "mode", "selected": ["方案 A"], "custom": "" } ] } }
+  "answers": [ { "id": "mode", "selected": ["方案 A"] } ] } }
 ```
 
 - 无 options 的题为自由文本：selected 留空数组、填 custom。multiSelect 为 true 时 selected 可多项。
+- `custom` 仅在用户确实输入了非空白自由文本时携带；禁止发送 `"custom": ""`。
+  主机侧严格校验答案批次（逐题 id、选项 label 集合），出现空 `custom`、重复 label，
+  或单选题同时携带 selected 与 custom，都会被整体拒绝（`E_PROTOCOL`，answer rejected）。
+- Bridge 在转发前会按上述规则归一化 answers（剔除空白 custom 等），旧版客户端仍可正常作答。
+
+### 待处理快照
+
+APNs 只承载通知投影，不承载回答所需的 requestId 和完整问题选项。客户端在握手、
+通知点击或 `s2c.resync` 后应主动请求当前待处理快照；这条路径不依赖有限长度的重放环。
+
+```json
+{ "type": "c2s.pending.list", "id": "pending-1", "payload": {} }
+{ "type": "s2c.pending.snapshot", "id": "pending-1", "payload": {
+  "approvals": [ { "requestId": "apr-1", "sessionId": "…", "toolName": "bash", "summary": "pnpm install", "riskLevel": "write" } ],
+  "questions": [ { "requestId": "q-1", "sessionId": "…", "questions": [ { "id": "mode", "question": "选择方案", "multiSelect": false, "options": [] } ] } ]
+} }
+```
+
+- `welcome.capabilities.pendingSnapshot=true` 表示服务端支持此请求；旧服务端缺失该字段时客户端继续依赖重放并降级展示。
+- 快照是全量替换语义；空数组表示当前没有对应的待处理请求。
 
 ## 6. 通知
 
