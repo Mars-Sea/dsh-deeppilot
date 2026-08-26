@@ -89,6 +89,7 @@ cd helper && go test ./...
 - [GitHub Issues](https://github.com/Mars-Sea/dsh-deeppilot/issues)
 - [GitHub Releases](https://github.com/Mars-Sea/dsh-deeppilot/releases)
 - [npm 包](https://www.npmjs.com/package/dsh-deeppilot)
+- [Linux.do 社区](https://linux.do/)
 
 DeepPilot 是独立社区项目，与 DeepSeek 官方无隶属或背书关系。
 
