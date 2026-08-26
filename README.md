@@ -94,7 +94,7 @@ cd helper && go test ./...
 - [GitHub Issues](https://github.com/Mars-Sea/dsh-deeppilot/issues)
 - [GitHub Releases](https://github.com/Mars-Sea/dsh-deeppilot/releases)
 - [npm package](https://www.npmjs.com/package/dsh-deeppilot)
-- <img src="https://cdn.simpleicons.org/discourse/111827" width="16" alt="Linux.do" /> [Linux.do 社区](https://linux.do/)
+- [Linux.do 社区](https://linux.do/)
 
 DeepPilot is an independent community project and is not affiliated with or
 endorsed by DeepSeek.
