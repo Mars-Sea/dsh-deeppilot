@@ -1,0 +1,96 @@
+name: Build tunnel helpers
+
+# Rebuild the embedded Go helper for every supported platform/arch and
+# refresh bin/SHA256SUMS. Each runner builds the targets it can build
+# natively; artifacts are then merged so a single commit contains the
+# full matrix. The resulting tree must be committed back to the PR via
+# the peter-evans/create-pull-request action, or pushed directly when
+# triggered from a trusted workflow_dispatch.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'helper/**'
+      - 'scripts/build-helper.sh'
+      - 'scripts/build-all-helpers.sh'
+      - '.github/workflows/build-helpers.yml'
+  pull_request:
+    paths:
+      - 'helper/**'
+      - 'scripts/build-helper.sh'
+      - 'scripts/build-all-helpers.sh'
+      - '.github/workflows/build-helpers.yml'
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Optional space-separated subset of targets (e.g. "linux-amd64 windows-amd64"). Empty builds the full matrix.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            targets: 'linux-amd64 linux-arm64 windows-amd64 windows-arm64'
+          - os: macos-latest
+            targets: 'darwin-arm64 darwin-amd64'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: helper/go.mod
+          cache-dependency-path: helper/go.sum
+      - name: Build helper subset
+        env:
+          HELPER_TARGETS: ${{ matrix.targets }}
+        run: sh scripts/build-all-helpers.sh
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: helper-binaries-${{ matrix.os }}
+          path: |
+            bin/
+            !bin/SHA256SUMS
+          if-no-files-found: error
+
+  merge:
+    name: Merge matrices & update SHA256SUMS
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: bin
+          merge-multiple: true
+      - name: Recompute SHA256SUMS from the merged tree
+        working-directory: bin
+        run: |
+          set -eu
+          : > SHA256SUMS
+          find . -type f \( -name 'dsh-deeppilot-tunnel' -o -name 'dsh-deeppilot-tunnel.exe' \) -print0 \
+            | sort -z \
+            | xargs -0 sha256sum >> SHA256SUMS
+          cat SHA256SUMS
+      - name: Open PR with refreshed helper binaries (pushes to main if dispatch + trusted)
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: 'chore(helpers): refresh bin/ matrix and SHA256SUMS'
+          title: 'chore(helpers): refresh bin/ matrix and SHA256SUMS'
+          body: |
+            Automatic refresh of the embedded Go tunnel helper for every
+            supported platform/arch. Triggered by changes under `helper/`
+            or the build scripts. No protocol or plugin API changes.
+          branch: chore/helper-matrix-refresh
+          add-paths: |
+            bin/

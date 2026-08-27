@@ -1,3 +1,6 @@
+// Package main implements the dsh-deeppilot embedded tunnel helper. It owns
+// one tsnet node per invocation and exposes a tiny JSON-line protocol on
+// stdout for the host process to consume.
 package main
 
 import (

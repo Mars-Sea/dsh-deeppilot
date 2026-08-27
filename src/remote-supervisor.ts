@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { access, mkdir } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expandHome } from './token.ts'
@@ -69,9 +70,46 @@ export function parseHelperEvent(line: string): HelperEvent | null {
   }
 }
 
-function bundledHelperPath(): string {
+/** Build the list of candidate locations for the embedded tunnel helper, in
+ *  priority order. The first existing executable wins at start() time. The
+ *  order matters: explicit config (handled by the caller) > npm install
+ *  layout > DSH-bundled layout > user data dir. */
+export function bundledHelperCandidates(): string[] {
   const here = dirname(fileURLToPath(import.meta.url))
-  return resolve(here, '..', 'bin', `${process.platform}-${process.arch}`, 'dsh-deeppilot-tunnel')
+  const pkgRoot = resolve(here, '..')
+  const fileName = process.platform === 'win32' ? 'dsh-deeppilot-tunnel.exe' : 'dsh-deeppilot-tunnel'
+  const platformDir = `${process.platform}-${process.arch}`
+
+  const candidates: string[] = []
+  // 1. Standard npm layout: <pkgRoot>/bin/<os>-<arch>/<file>
+  candidates.push(resolve(pkgRoot, 'bin', platformDir, fileName))
+  // 2. DSH sometimes relocates lib/ into apps/web or a build cache while
+  //    leaving bin/ beside the original package root. Try a few hops up.
+  candidates.push(resolve(pkgRoot, '..', '..', '..', 'node_modules', 'dsh-deeppilot', 'bin', platformDir, fileName))
+  candidates.push(resolve(pkgRoot, '..', '..', 'dsh-deeppilot', 'bin', platformDir, fileName))
+  candidates.push(resolve(pkgRoot, '..', '..', '..', '..', 'node_modules', 'dsh-deeppilot', 'bin', platformDir, fileName))
+
+  // 3. As a last resort, ask the loader to resolve the binary via Node's
+  //    package resolution. Works when bin/ is shipped but import.meta.url
+  //    points somewhere unexpected.
+  try {
+    const require = createRequire(import.meta.url)
+    const resolved = require.resolve(`dsh-deeppilot/bin/${platformDir}/${fileName}`)
+    if (!candidates.includes(resolved)) candidates.push(resolved)
+  } catch {
+    /* package.json exports field may not list bin/ — ignore */
+  }
+
+  // 4. User data dir fallback so power users can drop a custom build in.
+  const home = process.env.DSH_HOME?.trim()
+    || process.env.HOME
+    || process.env.USERPROFILE
+  if (home && home.length > 0) {
+    const dataDir = resolve(home, '.dsh')
+    candidates.push(join(dataDir, 'deeppilot', 'bin', platformDir, fileName))
+  }
+
+  return candidates
 }
 
 /** Owns exactly one embedded tunnel helper and restarts it after failures. */
@@ -96,19 +134,41 @@ export class RemoteSupervisor {
 
   async start(originURL: string): Promise<void> {
     if (!this.options.enabled || this.child !== undefined || this.stopping) return
-    const helper = expandHome(this.options.helperPath ?? bundledHelperPath())
     const statePath = expandHome(this.options.statePath)
-    try {
-      await access(helper, fsConstants.X_OK)
-      await mkdir(statePath, { recursive: true, mode: 0o700 })
-    } catch (error) {
+    // Resolve a usable helper path. An explicit remote.helperPath wins; if it
+    // is missing, fall back to a small set of candidate locations so that
+    // DSH-bundled layouts and manually-dropped builds still work.
+    const configured = this.options.helperPath?.trim() ?? ''
+    const candidates = configured
+      ? [expandHome(configured)]
+      : bundledHelperCandidates()
+    let helper: string | undefined
+    let lastError: unknown
+    for (const candidate of candidates) {
+      try {
+        await access(candidate, fsConstants.X_OK)
+        helper = candidate
+        break
+      } catch (error) {
+        lastError = error
+      }
+    }
+    if (helper === undefined) {
       // A dispose() that raced these checks must not be overwritten by a
       // late failure report.
       if (this.stopping) return
-      this.setStatus({
-        phase: 'unavailable',
-        message: `embedded tunnel helper unavailable: ${String(error)}`,
-      })
+      const platform = `${process.platform}-${process.arch}`
+      const message = configured
+        ? `embedded tunnel helper unavailable: ${configured}: ${String(lastError ?? 'not found')}`
+        : `embedded tunnel helper not found for ${platform} (tried: ${candidates.join(', ')}); set remote.helperPath to override`
+      this.setStatus({ phase: 'unavailable', message })
+      return
+    }
+    try {
+      await mkdir(statePath, { recursive: true, mode: 0o700 })
+    } catch (error) {
+      if (this.stopping) return
+      this.setStatus({ phase: 'unavailable', message: `cannot create remote state dir: ${String(error)}` })
       return
     }
 

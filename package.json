@@ -29,6 +29,7 @@
     "./client": {
       "default": "./lib/client.js"
     },
+    "./bin/*": "./bin/*",
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -61,6 +62,7 @@
   "scripts": {
     "build": "tsdown && node scripts/check-client-bundle.mjs",
     "build:helper": "sh scripts/build-helper.sh",
+    "build:helpers": "sh scripts/build-all-helpers.sh",
     "prepack": "npm run build",
     "prepublishOnly": "npm test && npm run typecheck",
     "typecheck": "tsc --noEmit",

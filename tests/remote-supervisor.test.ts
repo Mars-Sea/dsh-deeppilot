@@ -5,6 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  bundledHelperCandidates,
   normalizeRemoteHostname,
   parseHelperEvent,
   RemoteSupervisor,
@@ -45,6 +46,43 @@ test('remote supervisor degrades when the embedded helper is absent', async () =
   await supervisor.start('http://127.0.0.1:39999')
   assert.equal(supervisor.status().phase, 'unavailable')
   await supervisor.dispose()
+})
+
+test('remote supervisor reports tried paths when no helper is bundled', async () => {
+  // Point helperPath at a guaranteed-missing location; the unavailable
+  // message must surface the user-provided path so the operator can see
+  // what was attempted without re-reading the source.
+  const supervisor = new RemoteSupervisor({
+    enabled: true,
+    hostname: 'diag-phone',
+    statePath: '/tmp/deeppilot-remote-test-state',
+    helperPath: '/tmp/deeppilot-helper-does-not-exist-' + Date.now(),
+    log: () => {},
+  })
+  await supervisor.start('http://127.0.0.1:39998')
+  const status = supervisor.status()
+  assert.equal(status.phase, 'unavailable')
+  assert.ok(status.message?.includes('tunnel helper unavailable'),
+    `expected unavailable message, got: ${status.message}`)
+  assert.ok(status.message?.includes('does-not-exist'),
+    `expected message to mention the user-provided path, got: ${status.message}`)
+  await supervisor.dispose()
+})
+
+test('bundled helper candidates list the current platform first', () => {
+  const candidates = bundledHelperCandidates()
+  assert.ok(candidates.length >= 4, 'expected at least four candidate locations')
+  const platformDir = `${process.platform}-${process.arch}`
+  const fileName = process.platform === 'win32' ? 'dsh-deeppilot-tunnel.exe' : 'dsh-deeppilot-tunnel'
+  // The first candidate is always the canonical npm layout, which is the
+  // only one that matters in a normal install. Other candidates cover
+  // DSH-bundled layouts and the user data dir.
+  assert.ok(candidates[0]?.endsWith(join(platformDir, fileName)),
+    `first candidate ${candidates[0]} should end with ${join(platformDir, fileName)}`)
+  for (const candidate of candidates) {
+    assert.ok(candidate.endsWith(fileName),
+      `candidate ${candidate} should end with ${fileName}`)
+  }
 })
 
 test('dispose during an in-flight start never spawns the helper', async () => {
