@@ -1,1 +1,6 @@
-98b24ff04b40d2c4f9d6b003e263880e9d85bd235549a3193c014f8fdb4cb493  darwin-arm64/dsh-deeppilot-tunnel
+6f7caac1655a0d2bce606bcfde2e53a4dde6aea89dff8d99fe2fb3d055d4461f  ./darwin-amd64/dsh-deeppilot-tunnel
+1eaa95742dbe592ab6e5c8bc00715fa63028b975a11876841e221390657535df  ./darwin-arm64/dsh-deeppilot-tunnel
+766c4dfdd70e1b7607b276d4e0cc66cfb6398904c9b841f973641622d9da26ab  ./linux-amd64/dsh-deeppilot-tunnel
+a61bc73b2eca7b6b8358d0c6ff3e6475de8200448d1ac423647d95c37b4d9a2f  ./linux-arm64/dsh-deeppilot-tunnel
+205f598f9c79138f4d8cef372f7a4aa9883f6a70d313bd5277ebac442e46063c  ./windows-amd64/dsh-deeppilot-tunnel.exe
+0282ee0a0a20bb1d220f9a6d4158a5f17d4c4afbbdb2451a22a246f219bbcde5  ./windows-arm64/dsh-deeppilot-tunnel.exe
