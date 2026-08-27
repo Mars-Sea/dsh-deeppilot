@@ -11,5 +11,5 @@ coverage/
 *.mobileprovision
 auth-token
 devices.json
-tailscale/
+/tailscale/
 *.log
