@@ -109,6 +109,10 @@ const CSS = [
   '.pbb-helpText{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.6}',
   '.pbb-helpCode{display:block;margin:2px 0 0;padding:10px;overflow:auto;white-space:pre-wrap;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}',
   '.pbb-helpLink{color:var(--dsw-alias-label-secondary);text-decoration:underline;text-underline-offset:2px}',
+  // version footer line
+  '.pbb-versionFooter{display:flex;justify-content:center;align-items:center;gap:8px;font-size:11px;color:var(--dsw-alias-label-tertiary);padding:8px 0 4px;line-height:1.4}',
+  '.pbb-versionFooter a{color:var(--dsw-alias-state-success-primary,#22a06b);text-decoration:none}',
+  '.pbb-versionFooter a:hover{text-decoration:underline;text-underline-offset:2px}',
 ].join('\n')
 
 function injectCss(): void {
@@ -702,6 +706,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   return h('div', { className: 'pbb-section' },
     h('div', { className: 'pbb-row' },
       h('h2', { className: 'pbb-title' }, 'DeepPilot'),
+      h('div', { style: { flex: '1' } }),
       h('button', {
         className: 'pbb-refresh',
         onClick: () => { if (typeof props.refresh === 'function') props.refresh() },
@@ -925,6 +930,18 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
         ),
         deviceTable,
       ),
+    ),
+    report === null ? null : h('div', { className: 'pbb-versionFooter' },
+      h('span', null, 'v' + report.pluginVersion),
+      report.updateAvailable === true
+        ? h('a', {
+          href: typeof report.releaseUrl === 'string' && /^https:\/\//.test(report.releaseUrl)
+            ? report.releaseUrl
+            : 'https://github.com/Mars-Sea/dsh-deeppilot/releases',
+          target: '_blank',
+          rel: 'noreferrer',
+        }, '有新版本')
+        : null,
     ),
     diag.length > 0 ? h('p', { className: 'pbb-diag' + (failed ? ' pbb-diagBad' : '') },
       'diag: ' + diag.join(' | ')) : null,

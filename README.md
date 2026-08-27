@@ -23,6 +23,10 @@ Host on your own Mac and does not replace or modify the DSH Web UI.
 - Pair through a QR code with the secret stored on the Mac and in iOS Keychain.
 - Connect over a trusted LAN or the optional embedded Tailscale Funnel.
 - Receive live notifications and optional APNs notifications while offline.
+- Self-update hint: the settings page footer shows the installed plugin
+  version, with an inline "new version" link to the matching GitHub
+  release when one exists (background check, stable releases only, no
+  third-party dependency).
 
 ## Install from npm
 

@@ -33,7 +33,14 @@ export class DeepPilotReportService extends TypertRemoteService {
   private readonly relayTester: RelayTester
   private readonly pushTester: PushTester
 
-  constructor(ctx: Context, snapshot: ReportSnapshot, pairingToken: PairingTokenSnapshot, rotatePairingToken: PairingTokenRotator, relayTester: RelayTester, pushTester: PushTester) {
+  constructor(
+    ctx: Context,
+    snapshot: ReportSnapshot,
+    pairingToken: PairingTokenSnapshot,
+    rotatePairingToken: PairingTokenRotator,
+    relayTester: RelayTester,
+    pushTester: PushTester,
+  ) {
     super(ctx, 'deeppilotReport', { namespace: 'deeppilot' })
     this.snapshot = snapshot
     this.pairingToken = pairingToken

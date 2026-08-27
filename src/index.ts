@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import type { Duplex } from 'node:stream'
 import type { Context } from '@deepseek-ai/cordis'
@@ -25,6 +26,7 @@ import {
   type RemoteStatus,
 } from './remote-supervisor.ts'
 import { localLANIPv4Addresses } from './local-address.ts'
+import { UpdateChecker, type UpdateInfo } from './update-check.ts'
 
 /**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
@@ -157,7 +159,7 @@ type SubContext = {
   effect: (setup: () => unknown, name?: string) => unknown
 }
 
-const SERVER_VERSION = '0.2.0'
+const SERVER_VERSION = readOwnPackageVersion()
 const MAX_CLIENT_CONNECTIONS = 16
 /**
  * Single-frame bound. Covers the protocol maximum (4 × 8 MB base64 images
@@ -165,6 +167,29 @@ const MAX_CLIENT_CONNECTIONS = 16
  * pre-hello buffering far below ws's 100 MiB default.
  */
 const MAX_FRAME_BYTES = 64 * 1024 * 1024
+
+/**
+ * Resolve the host plugin's own version from the installed package.json.
+ * Sourced at boot so the wire / UI always agrees with what npm published.
+ * `createRequire(import.meta.url)` is the tsdown-bundled ESM equivalent of
+ * CommonJS's `require`; the package.json sits next to lib/index.js after
+ * the build, so `../package.json` resolves to the published manifest.
+ */
+function readOwnPackageVersion(): string {
+  try {
+    const require_ = createRequire(import.meta.url)
+    const pkg = require_('../package.json') as { version?: unknown }
+    if (typeof pkg.version === 'string' && pkg.version.length > 0) return pkg.version
+  } catch {
+    // fall through to env / hardcoded default below
+  }
+  // `npm` injects this for `npm run` / `npm exec` / `npm start` invocations.
+  // `process.env.npm_package_version` is unset when DSH loads the plugin
+  // directly, so we keep it as a secondary source rather than the truth.
+  const envVersion = process.env.npm_package_version
+  if (typeof envVersion === 'string' && envVersion.length > 0) return envVersion
+  return '0.0.0+unknown'
+}
 
 function rejectUpgrade(socket: Duplex, status: number, reason: string): void {
   const body = JSON.stringify({ error: reason })
@@ -686,6 +711,14 @@ export function apply(ctx: Context, options: unknown): void {
     updatedAt: Date.now(),
   }
 
+  // Self-update check: one process-wide instance. The initial schedule fires
+  // a single background GitHub fetch shortly after boot. The result is
+  // surfaced through the report snapshot; the UI shows nothing extra on
+  // a quiet host, and one inline "new version" link when an update exists.
+  const updateChecker = new UpdateChecker({ log, currentVersion: SERVER_VERSION })
+  updateChecker.scheduleInitial()
+  const updateInfo = (): UpdateInfo => updateChecker.get()
+
   // Typert Remote for the web settings page (deeppilot/report).
   applyReportRemote(ctx, async () => {
     let tokenReady = false
@@ -706,9 +739,13 @@ export function apply(ctx: Context, options: unknown): void {
     } catch {
       // degraded: report the minimum without token facts
     }
+    const update = updateInfo()
     return {
       protocolVersion: 1,
       serverVersion: SERVER_VERSION,
+      pluginVersion: update.currentVersion,
+      ...(update.available ? { updateAvailable: true } : {}),
+      ...(update.releaseUrl !== null ? { releaseUrl: update.releaseUrl } : {}),
       enabled: currentConfig().enabled === true,
       tokenPath: expandHome(currentConfig().authTokenPath ?? join(bridgeDataDir(), 'auth-token')),
       tokenReady,

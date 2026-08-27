@@ -62,6 +62,16 @@ export interface PushTestResult {
 export interface DeepPilotReport {
   protocolVersion: number
   serverVersion: string
+  /** Host plugin version (from package.json). Same value as serverVersion,
+   *  surfaced under a stable name so the wire contract does not change if
+   *  the legacy field is ever repurposed. */
+  pluginVersion: string
+  /** True once the host's background GitHub check has confirmed a newer
+   *  stable release exists. Undefined / false ⇒ the UI shows only the
+   *  version line, never the "new version" hint. */
+  updateAvailable?: boolean
+  /** GitHub release page URL, when an update is available. */
+  releaseUrl?: string
   /** Whether the master bridge switch is on. */
   enabled: boolean
   /** Absolute token file path (never the token itself). */
@@ -233,9 +243,16 @@ function parseReport(value: unknown): DeepPilotReport {
   const lanAddresses = s.lanAddresses
   if (!Array.isArray(devices)) reject('devices')
   if (!Array.isArray(lanAddresses) || lanAddresses.some((value) => typeof value !== 'string')) reject('lanAddresses')
+  // Update fields are optional: an older Host (without the background
+  // GitHub check) won't include them, and the UI must keep rendering.
+  const releaseUrl = s.releaseUrl
   return {
     protocolVersion: num(s, 'protocolVersion', 'protocolVersion'),
     serverVersion: str(s, 'serverVersion', 'serverVersion'),
+    pluginVersion: str(s, 'pluginVersion', 'pluginVersion'),
+    ...(s.updateAvailable === true ? { updateAvailable: true } : {}),
+    ...(typeof releaseUrl === 'string' && releaseUrl.length > 0
+      ? { releaseUrl } : {}),
     enabled: bool(s, 'enabled', 'enabled'),
     tokenPath: str(s, 'tokenPath', 'tokenPath'),
     tokenReady: bool(s, 'tokenReady', 'tokenReady'),
