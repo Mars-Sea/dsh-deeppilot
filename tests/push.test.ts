@@ -4,7 +4,8 @@ import { createHash, generateKeyPairSync, verify as cryptoVerify } from 'node:cr
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ApnsClient, apnsPayload, collapseIdFor, es256Jwt, p8ToDer } from '../src/apns.ts'
+import { ApnsClient, apnsPayload, classifyApnsReason, collapseIdFor, es256Jwt, p8ToDer } from '../src/apns.ts'
+import { shouldPrunePushToken } from '../src/index.ts'
 import type { PushNotification } from '../src/protocol.ts'
 import { BridgeConnection } from '../src/connection.ts'
 import { HostBridge } from '../src/host-bridge.ts'
@@ -76,7 +77,7 @@ function makeFeedableProxy() {
         await new Promise((resolve) => setTimeout(resolve, 5))
         continue
       }
-      yield queue.shift()
+      yield queue.shift()!
     }
   }
   return { proxy, getFeed: () => feed! }
@@ -220,6 +221,11 @@ test('apnsPayload truncates oversized text and collapse ids stay ASCII-bounded',
   const id = collapseIdFor(long)
   assert.ok(Buffer.byteLength(id, 'utf8') <= 64)
   assert.equal(/^[-a-zA-Z0-9.:]*$/.test(id), true, 'collapse id carries only APNs-safe characters')
+  assert.notEqual(
+    collapseIdFor({ ...long, sessionId: '会话甲' }),
+    collapseIdFor({ ...long, sessionId: '会话乙' }),
+    'non-ASCII session ids must not collapse onto the same empty suffix',
+  )
 })
 
 // ---------- device registry ----------
@@ -443,16 +449,25 @@ test('first register bootstraps relay mode: awaited enrollment yields ack(enable
 
 // ---------- outcome handling ----------
 
-test('an invalid-token outcome prunes the registration through the dispatcher contract', async () => {
+test('APNs token classification preserves environment-mismatch evidence', () => {
+  assert.equal(classifyApnsReason('Unregistered'), 'invalid-token')
+  assert.equal(classifyApnsReason('ExpiredToken'), 'invalid-token')
+  assert.equal(classifyApnsReason('BadDeviceToken'), 'failed')
+  assert.equal(shouldPrunePushToken('invalid-token', 'Unregistered'), true)
+  assert.equal(shouldPrunePushToken('invalid-token', 'BadDeviceToken'), false)
+})
+
+test('an unreadable APNs key degrades to a diagnostic failure', async () => {
   // The dispatcher in index.ts prunes on ApnsOutcome === 'invalid-token'.
   // This pins the client-side classification that drives that pruning.
   const client = new ApnsClient({
     teamId: 'T', keyId: 'K', keyPath: '/nonexistent/AuthKey.p8',
-    bundleId: 'dev.hailab.deeppilot', environment: 'development',
+    bundleId: 'dev.hailab.deeppilot',
     log: () => {},
   })
   const result = await client.send({
     deviceToken: DEVICE_TOKEN_HEX,
+    environment: 'development',
     notificationId: 'n-1',
     category: 'turn.completed',
     sessionId: 's',

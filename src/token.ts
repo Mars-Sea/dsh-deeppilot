@@ -53,8 +53,12 @@ export async function loadOrCreateToken(tokenPath: string): Promise<string> {
   try {
     const existing = (await readFile(full, 'utf8')).trim()
     if (existing.length >= 32) return existing
-  } catch {
-    // fall through to generation
+    // Existing-but-truncated auth material is evidence of storage corruption,
+    // not a first launch. Replacing it here silently invalidates every paired
+    // phone and destroys the only clue explaining the disconnect.
+    throw new Error(`pairing token is malformed at ${full}`)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
   const token = randomBytes(32).toString('base64url')
   await mkdir(dirname(full), { recursive: true })
@@ -80,13 +84,15 @@ export async function writeNewToken(tokenPath: string): Promise<string> {
 /** Constant-time token comparison; both sides are high-entropy secrets. */
 export function tokenMatches(presented: string | null | undefined, expected: string): boolean {
   if (!presented) return false
-  const a = Buffer.from(presented)
   const b = Buffer.from(expected)
-  if (a.length !== b.length) {
+  // Reject wrong byte lengths before allocating a Buffer sized by an
+  // unauthenticated peer; still burn the fixed-size comparison below.
+  if (Buffer.byteLength(presented, 'utf8') !== b.length) {
     // Burn a same-length comparison so wrong-length probes keep flat timing.
     timingSafeEqual(b, b)
     return false
   }
+  const a = Buffer.from(presented)
   return timingSafeEqual(a, b)
 }
 

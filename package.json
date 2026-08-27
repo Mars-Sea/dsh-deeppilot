@@ -65,7 +65,7 @@
     "build:helpers": "sh scripts/build-all-helpers.sh",
     "prepack": "npm run build",
     "prepublishOnly": "npm test && npm run typecheck",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.tests.json --noEmit",
     "test": "tsx --test tests/*.test.ts"
   },
   "engines": {

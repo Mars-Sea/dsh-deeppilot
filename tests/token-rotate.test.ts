@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -30,6 +30,18 @@ test('writeNewToken replaces the stored secret and invalidates the old one', asy
     // Rotation twice in a row keeps working (temp files never collide).
     const again = await writeNewToken(tokenPath)
     assert.notEqual(again, rotated)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('loadOrCreateToken refuses to overwrite a malformed existing token', async () => {
+  const dir = await makeTempDir()
+  try {
+    const tokenPath = join(dir, 'auth-token')
+    await writeFile(tokenPath, 'truncated-token\n', 'utf8')
+    await assert.rejects(loadOrCreateToken(tokenPath), /pairing token is malformed/)
+    assert.equal(await readFile(tokenPath, 'utf8'), 'truncated-token\n')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

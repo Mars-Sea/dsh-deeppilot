@@ -21,7 +21,8 @@
 ## 2. 连接与鉴权
 
 1. 客户端连接 `wss://host/phone`。鉴权优先使用 HTTP `Authorization: Bearer TOKEN`；也可在未预鉴权的 WebSocket 建立后 5 秒内发送 `c2s.hello.auth` 并携带 `payload.token`。`?token=TOKEN` 仅为旧客户端兼容，不应写入新客户端 URL 或日志。
-2. 鉴权失败：服务端以关闭码 **4401** 关闭。超时未鉴权：**4402**。
+2. 鉴权失败：服务端以关闭码 **4401** 关闭。超时未鉴权：**4402**。`deviceId`
+   缺失或非法时以 **4403** 关闭；客户端应把它视为本机身份资料错误，而不是 token 失效。
 3. 鉴权成功后服务端必须首先下发 `s2c.welcome`。welcome 之前客户端只允许发 hello 与 ping。
 
 ### c2s.hello.auth
@@ -78,7 +79,8 @@ SessionSummary：
 }
 ```
 
-`status` 取值：running | idle | error | unknown；`todos` 无则为 null。
+`status` 取值：running | idle | error | unknown；当前 v1 Bridge 的会话镜像稳定产生
+running/idle，error/unknown 为旧实现与后续 Host 状态扩展保留；`todos` 无则为 null。
 `todoItems` 为完整清单条目（`content` 非空字符串；`status` 取值 pending | in_progress |
 completed），供会话详情页渲染任务进度；无任务时为 null 或缺省。旧 Bridge 不下发该字段，
 客户端必须容忍缺失（可选字段，向后兼容）。
@@ -96,6 +98,11 @@ completed），供会话详情页渲染任务进度；无任务时为 null 或�
 ### c2s.session.open（payload: sessionId, tailCount? 默认 100）
 
 服务端先回一次性 `s2c.session.tail`，随后该会话实时事件以 `s2c.session.event` 推送。多设备各自 open 各自收，互不影响。
+
+### c2s.session.close（payload: sessionId）
+
+客户端离开会话详情时发送；服务端取消该连接对该会话的实时订阅与“正在查看”标记，
+不关闭 WebSocket，也不终止会话 turn。该帧为幂等通知，不产生响应。
 
 ### s2c.session.tail 与 c2s.session.history
 
@@ -135,7 +142,8 @@ Message 投影：
   出现未知取值时客户端按不透明文本处理，不得丢弃该行。
 - `thinking`：assistant 行可选，携带模型的推理（reasoning）文本；正文与推理均为空的 assistant 行不下发。
 - `streaming: true` 只出现在推送中间态，final/tail/history 中恒为 false。
-- `truncated: true` 表示投影超 256KB 被截断。
+- `truncated: true` 表示该条 Message 的 UTF-8 JSON 序列化投影原本超过 256KB，
+  Bridge 已缩短正文/推理/摘要或附件元数据，使最终单条投影不超过 256KB。
 - `attachments`：仅 user 行携带的图片清单。`kind` 恒为 image；`attachmentId` 是宿主附件服务的持久引用，
   供 c2s.session.attachment 读回原图；`width`/`height` 为像素尺寸（可选，供客户端预留布局）。
   旧 Bridge 不下发 attachmentId/宽高，客户端必须容忍缺失。
@@ -184,6 +192,8 @@ Message 投影：
 ### s2c.session.event（实时推送）
 
 `kind` 取值：message.start / message.delta / thinking.delta / message.final / tool.start / tool.end / turn.start / turn.end / projection / error。
+当前 v1 Bridge 主动发射 message.delta / thinking.delta / message.final / tool.start /
+tool.end / turn.start / turn.end；其余 kind 为兼容 Host 后续事件投影而保留，客户端必须忽略未知或暂未使用的 kind。
 
 ```json
 { "type": "s2c.session.event", "payload": {
@@ -194,7 +204,7 @@ Message 投影：
 } }
 ```
 
-- message.delta/message.final 共用同一会话内 seq；data.text 为增量/全文。
+- message.delta/message.final 共用同一会话内 seq；data.text 为增量/全文。极端超大增量同样会被限制在 256KB 内，并在 data 附 `truncated:true`。
 - thinking.delta 的 data.text 为推理增量，seq 与同会话其他事件一致；客户端应把连续增量折叠进同一条"思考"行（role=assistant、thinking 累积、streaming=true），final 到达后由带 `thinking` 字段的正式行替换。
 - tool.start 的 `data.tool` 为 `{name, state:"running", summary}`；Host 事件携带调用 id 时额外附带 `tool.callId`。tool.end 的 data 附带 ok 布尔与该结果事件自身的 seq，并在 Host 事件携带调用 id 时附带 `callId`——`seq` 标识的是 result 事件本身，客户端必须用 `callId`（缺失时按"最旧的未完成工具行"兜底）把结果合并回对应的 tool.start 行，不得按 seq 匹配。
 - turn.end 的 data 附带 ok 布尔；projection 的 data 为 key/value（如 todos）。
@@ -267,7 +277,7 @@ DeepPilot 的标准 bundle 固定组合 Host 官方 `directory-picker-browse` �
 
 ### c2s.session.sendPrompt（payload: sessionId, text, images?）
 
-服务端受理后回 `s2c.ack`（payload 附 userSeq），随后该输入以正常消息事件流入会话流。会话正忙回 `E_BUSY`。`text` 与 `images` 至少一项非空。
+服务端受理后回 `s2c.ack`（payload 附 `userSeq`），随后该输入以正常消息事件流入会话流。`userSeq` 是 Bridge 生成的受理回执标记，不属于会话事件 seq，客户端不得拿它与 `session.event.seq` 对账。会话正忙回 `E_BUSY`。`text` 与 `images` 至少一项非空。
 
 `images` 最多 4 项，每项为 `{mediaType,data,name?}`。`mediaType` 仅允许 `image/png`、`image/jpeg`、`image/webp`、`image/gif`，`data` 为无 data-URL 前缀的标准 base64。Bridge 做数量、类型和单项体积初筛，DSH Host 再按当前模型与附件服务限制完成最终校验和持久化。
 
@@ -368,6 +378,9 @@ APNs 只承载通知投影，不承载回答所需的 requestId 和完整问题�
 ```
 
 - category：turn.completed | approval.required | question.asked | session.error。
+- WebSocket 上，turn 完成/异常使用 `s2c.notify`；审批和问题的可回答事实使用
+  `s2c.pending.approval` / `s2c.pending.question`，不再重复发送同类别 `s2c.notify`。
+  APNs 仍使用上述四类 category 作为离线通知投影。
 - 触发规则（F-9）：turn 结束且该设备未打开此会话；出现 pending.approval / pending.question；会话 error。
 - notify 计入 seq 游标参与重放。
 
@@ -416,8 +429,11 @@ token 后发送：
 ## 8. 心跳与生命周期
 
 - 客户端每 25 秒发 `c2s.ping`（payload 空）；服务端回 `s2c.pong`（payload.serverTime）。
-- 服务端对死连接：60 秒无任何入站帧即断开（1001）。
-- 服务端优雅停机：先向所有连接发 `s2c.error`（E_INTERNAL，server stopping）再关闭。
+- 服务端对死连接：60 秒无任何入站帧即以 **1001** 关闭。
+- 服务端优雅停机：先向所有连接发 `s2c.error`（E_INTERNAL，server stopping），
+  再以 **1001** 关闭；客户端不应把这两类 1001 当成异常网络故障。
+- 单个客户端持续来不及读取、服务端待发送缓冲超过 4MB 时，以 **1013** 关闭；
+  客户端可按临时过载执行退避重连。
 
 ## 9. 错误帧
 

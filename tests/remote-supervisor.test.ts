@@ -36,6 +36,21 @@ test('remote helper IPC bounds diagnostic text', () => {
   assert.equal(event?.message?.length, 500)
 })
 
+test('runtime log URLs cannot downgrade an online remote status', () => {
+  const supervisor = new RemoteSupervisor({
+    enabled: true,
+    hostname: 'test-phone',
+    statePath: '/tmp/deeppilot-remote-test-state',
+    log: () => {},
+  })
+  const acceptLine = (supervisor as unknown as { acceptLine: (line: string) => void }).acceptLine.bind(supervisor)
+  acceptLine('{"phase":"online","publicURL":"https://test.ts.net"}')
+  acceptLine('{"phase":"login_required","authURL":"https://example.com/diagnostic"}')
+  assert.equal(supervisor.status().phase, 'online')
+  acceptLine('{"phase":"login_required","authURL":"https://login.tailscale.com/a/valid-but-late"}')
+  assert.equal(supervisor.status().phase, 'online')
+})
+
 test('remote supervisor degrades when the embedded helper is absent', async () => {
   const supervisor = new RemoteSupervisor({
     enabled: true,

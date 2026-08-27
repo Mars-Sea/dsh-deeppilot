@@ -70,6 +70,17 @@ export function parseHelperEvent(line: string): HelperEvent | null {
   }
 }
 
+function isTailscaleAuthURL(value: string | undefined): boolean {
+  if (!value) return false
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' &&
+      (url.hostname === 'login.tailscale.com' || url.hostname.endsWith('.login.tailscale.com'))
+  } catch {
+    return false
+  }
+}
+
 /** Translate Node's platform/architecture names to the GOOS/GOARCH directory
  *  names used by the committed helper matrix. */
 export function bundledHelperPlatformDir(
@@ -176,6 +187,7 @@ export class RemoteSupervisor {
         ? `embedded tunnel helper unavailable: ${configured}: ${String(lastError ?? 'not found')}`
         : `embedded tunnel helper not found for ${platform} (tried: ${candidates.join(', ')}); set remote.helperPath to override`
       this.setStatus({ phase: 'unavailable', message })
+      this.scheduleRestart(originURL)
       return
     }
     try {
@@ -183,6 +195,7 @@ export class RemoteSupervisor {
     } catch (error) {
       if (this.stopping) return
       this.setStatus({ phase: 'unavailable', message: `cannot create remote state dir: ${String(error)}` })
+      this.scheduleRestart(originURL)
       return
     }
 
@@ -270,6 +283,12 @@ export class RemoteSupervisor {
   private acceptLine(line: string): void {
     const event = parseHelperEvent(line)
     if (event === null || event.phase === undefined) return
+    if (event.phase === 'login_required') {
+      // UserLogf is diagnostic output, not a typed auth callback. Accept only
+      // the known login origin, and never let an incidental runtime URL knock
+      // an already-online Funnel back into the setup state.
+      if (this.statusValue.phase === 'online' || !isTailscaleAuthURL(event.authURL)) return
+    }
     if (event.phase === 'online') this.restartAttempt = 0
     this.setStatus({ ...event, phase: event.phase })
   }
@@ -282,6 +301,7 @@ export class RemoteSupervisor {
       this.restartTimer = undefined
       void this.start(originURL)
     }, delay)
+    this.restartTimer.unref?.()
   }
 
   private setStatus(next: Partial<RemoteStatus> & Pick<RemoteStatus, 'phase'>): void {

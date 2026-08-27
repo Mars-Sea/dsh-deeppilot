@@ -120,7 +120,7 @@ function injectCss(): void {
   const id = 'dsh-deeppilot/page.css'
   if (document.querySelector('style[data-plugin-css="' + id + '"]') !== null) return
   const tag = document.createElement('style')
-  tag.dataset.plugin = 'dsh-deeppilot'
+  tag.setAttribute('data-plugin-css', id)
   tag.textContent = CSS
   document.head.appendChild(tag)
 }

@@ -250,7 +250,9 @@ interface PhoneSessionRow {
   sessionId: string;
   updatedAt: number;
   running: boolean;
-  blank: boolean;
+  /** Host marks never-prompted sessions as blank; informational only — the
+   * summary projects them as idle (see toSummary) so phones can send. */
+  blank?: boolean;
   cwd?: string;
   origin?: string;
   parentSessionId?: string;
@@ -367,7 +369,10 @@ declare class HostBridge {
   private sinks;
   private ring;
   private cursor;
+  private userReceiptSeq;
   private abort;
+  private started;
+  private disposed;
   constructor(apiProxy: ApiProxyLike, historyBufferMax?: number);
   private pushOutlet;
   /**
@@ -481,6 +486,8 @@ declare class HostBridge {
 }
 //#endregion
 //#region src/index.d.ts
+/** Prune only when the provider supplies an authoritative token-lifecycle verdict. */
+declare function shouldPrunePushToken(outcome: 'sent' | 'invalid-token' | 'failed', reason?: string): boolean;
 /**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
  * clients. Registers exactly one WebSocket upgrade route (/phone) plus an
@@ -511,11 +518,11 @@ interface Config {
   /** Optional embedded remote transport. Reconciled when settings change. */
   remote?: {
     enabled?: boolean;
-    provider?: string;
+    provider?: 'tailscale-funnel';
     hostname?: string;
     statePath?: string;
     helperPath?: string;
-    funnelPort?: number;
+    funnelPort?: 443 | 8443 | 10000;
   };
   /**
    * Offline push (F-9). provider 'apns' sends direct Apple Push Notification
@@ -530,7 +537,7 @@ interface Config {
    */
   push?: {
     /** 'none' (default) | 'apns' | 'relay'. */
-    provider?: string;
+    provider?: 'none' | 'apns' | 'relay';
     /** Apple Developer team id (JWT iss claim). */
     teamId?: string;
     /** APNs auth key id (JWT kid header). */
@@ -553,21 +560,21 @@ declare const Config: z<Schemastery.ObjectS<{
   debug: z<boolean, boolean>;
   remote: z<Schemastery.ObjectS<{
     enabled: z<boolean, boolean>;
-    provider: z<string, string>;
+    provider: z<"tailscale-funnel", "tailscale-funnel">;
     hostname: z<string, string>;
     statePath: z<string, string>;
     helperPath: z<string, string>;
-    funnelPort: z<number, number>;
+    funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000>;
   }>, Schemastery.ObjectT<{
     enabled: z<boolean, boolean>;
-    provider: z<string, string>;
+    provider: z<"tailscale-funnel", "tailscale-funnel">;
     hostname: z<string, string>;
     statePath: z<string, string>;
     helperPath: z<string, string>;
-    funnelPort: z<number, number>;
+    funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000>;
   }>>;
   push: z<Schemastery.ObjectS<{
-    provider: z<string, string>;
+    provider: z<"none" | "apns" | "relay", "none" | "apns" | "relay">;
     teamId: z<string, string>;
     keyId: z<string, string>;
     keyPath: z<string, string>;
@@ -575,7 +582,7 @@ declare const Config: z<Schemastery.ObjectS<{
     relayUrl: z<string, string>;
     relayToken: z<string, string>;
   }>, Schemastery.ObjectT<{
-    provider: z<string, string>;
+    provider: z<"none" | "apns" | "relay", "none" | "apns" | "relay">;
     teamId: z<string, string>;
     keyId: z<string, string>;
     keyPath: z<string, string>;
@@ -591,21 +598,21 @@ declare const Config: z<Schemastery.ObjectS<{
   debug: z<boolean, boolean>;
   remote: z<Schemastery.ObjectS<{
     enabled: z<boolean, boolean>;
-    provider: z<string, string>;
+    provider: z<"tailscale-funnel", "tailscale-funnel">;
     hostname: z<string, string>;
     statePath: z<string, string>;
     helperPath: z<string, string>;
-    funnelPort: z<number, number>;
+    funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000>;
   }>, Schemastery.ObjectT<{
     enabled: z<boolean, boolean>;
-    provider: z<string, string>;
+    provider: z<"tailscale-funnel", "tailscale-funnel">;
     hostname: z<string, string>;
     statePath: z<string, string>;
     helperPath: z<string, string>;
-    funnelPort: z<number, number>;
+    funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000>;
   }>>;
   push: z<Schemastery.ObjectS<{
-    provider: z<string, string>;
+    provider: z<"none" | "apns" | "relay", "none" | "apns" | "relay">;
     teamId: z<string, string>;
     keyId: z<string, string>;
     keyPath: z<string, string>;
@@ -613,7 +620,7 @@ declare const Config: z<Schemastery.ObjectS<{
     relayUrl: z<string, string>;
     relayToken: z<string, string>;
   }>, Schemastery.ObjectT<{
-    provider: z<string, string>;
+    provider: z<"none" | "apns" | "relay", "none" | "apns" | "relay">;
     teamId: z<string, string>;
     keyId: z<string, string>;
     keyPath: z<string, string>;
@@ -626,5 +633,5 @@ declare const Config: z<Schemastery.ObjectS<{
 declare function requestToken(req: Pick<IncomingMessage, 'url' | 'headers'>): string | null;
 declare function apply(ctx: Context, options: unknown): void;
 //#endregion
-export { Config, HostBridge, apply, inject, name, requestToken };
+export { Config, HostBridge, apply, inject, name, requestToken, shouldPrunePushToken };
 //# sourceMappingURL=index.d.ts.map

@@ -120,7 +120,9 @@ interface PhoneSessionRow {
   sessionId: string
   updatedAt: number
   running: boolean
-  blank: boolean
+  /** Host marks never-prompted sessions as blank; informational only — the
+   * summary projects them as idle (see toSummary) so phones can send. */
+  blank?: boolean
   cwd?: string
   origin?: string
   parentSessionId?: string
@@ -172,15 +174,17 @@ export interface MuxFrameLike {
  * waits lives beside it. Flattening only `payload` loses that id and makes
  * both interactions silently disappear.
  */
-interface ApiStreamItemLike {
+export interface ApiStreamItemLike {
   rpcId?: string
   payload: MuxFrameLike
 }
 
-function unwrapStreamItem(item: MuxFrameLike | ApiStreamItemLike): MuxFrameLike {
+export function unwrapStreamItem(item: MuxFrameLike | ApiStreamItemLike): MuxFrameLike {
   const nested = item.payload
   if (nested && typeof nested === 'object' && typeof nested.type === 'string') {
-    return nested.rpcId || !item.rpcId ? nested : { ...nested, rpcId: item.rpcId }
+    // The envelope id identifies the server request that must be answered.
+    // Preserve it even if a future nested payload happens to carry another id.
+    return item.rpcId ? { ...nested, rpcId: item.rpcId } : nested
   }
   return item as MuxFrameLike
 }
@@ -245,6 +249,7 @@ interface PendingQuestion {
 }
 
 const MAX_RING_DEFAULT = 2000;
+export const MAX_MESSAGE_PROJECTION_BYTES = 256 * 1024
 
 /**
  * Process-wide bridge state: session mirror, pending approvals/questions,
@@ -263,7 +268,10 @@ export class HostBridge {
   private sinks = new Set<BridgeSink>()
   private ring: Array<{ seq: number; type: string; payload: unknown }> = []
   private cursor = 0;
+  private userReceiptSeq = 0;
   private abort = new AbortController();
+  private started = false
+  private disposed = false
 
   constructor(
     private readonly apiProxy: ApiProxyLike,
@@ -408,6 +416,7 @@ export class HostBridge {
   }
 
   private record(type: string, payload: unknown, except?: (sink: BridgeSink) => boolean): void {
+    if (this.disposed) return
     this.cursor += 1;
     const entry = { seq: this.cursor, type, payload };
     this.ring.push(entry);
@@ -425,14 +434,20 @@ export class HostBridge {
 
   /** Start consuming host + mux streams. Idempotent; aborts on dispose(). */
   start(): void {
+    if (this.started || this.disposed) return
+    this.started = true
     void this.runHostStream();
     void this.runMuxStream();
     void this.refreshSummaries();
   }
 
   dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
     this.abort.abort();
     this.sinks.clear();
+    this.sinkSessions.clear();
+    this.pushOutlet = undefined;
   }
 
   private async runHostStream(): Promise<void> {
@@ -624,7 +639,11 @@ export class HostBridge {
       this.subagentSessionIds = subagentIds;
       this.summaries = next;
       const removedIds = [...previousIds].filter((id) => !next.has(id))
-      for (const id of removedIds) this.lastAssistantText.delete(id);
+      // sessions.list is authoritative. This also removes assistant snippets
+      // captured for child/subagent event streams that never enter summaries.
+      for (const id of this.lastAssistantText.keys()) {
+        if (!next.has(id)) this.lastAssistantText.delete(id)
+      }
       this.record('s2c.sessions.delta', { upserted: [...next.values()], removedIds });
     } catch {
       // apiProxy absent or transient failure; keep last mirror
@@ -1032,7 +1051,8 @@ export class HostBridge {
         row.lastActivityTs = Date.now();
         this.pushSummary(row);
       }
-      return { ok: true, value: Date.now() };
+      this.userReceiptSeq += 1;
+      return { ok: true, value: this.userReceiptSeq };
     } catch (error) {
       return { ok: false, kind: 'internal', message: String(error) };
     }
@@ -1236,7 +1256,12 @@ function toSummary(
   return {
     id: row.sessionId,
     title: typeof values.title === 'string' ? values.title : '',
-    status: row.running ? 'running' : (row.blank ? 'unknown' : 'idle'),
+    // A blank session has never run a turn, and the running flag above
+    // already covers the live case. Reporting `unknown` here made the phone
+    // treat the composer as "still syncing" forever: nothing ever converges
+    // the state back because the first prompt is exactly what the disabled
+    // button cannot send. Idle is truthful for every non-running blank row.
+    status: row.running ? 'running' : 'idle',
     lastActivityTs: Number(row.updatedAt ?? Date.now()),
     todos: todoItems.length > 0
       ? {
@@ -1276,20 +1301,20 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
     case 'user/message':
       return {
         kind: 'message.final',
-        data: {
+        data: { ...limitMessageProjection({
           seq: event.seq,
           role: userRoleOf(event.data),
           text: messageText(event.data),
           ...attachmentProjection(event.data),
           ...(contextProjectionOf(event.data)),
           ts: tsOf(event),
-        },
+        }) },
       };
     case 'assistant/chunk': {
       if (chunkTypeOf(event.data) === 'reasoning-delta') {
-        return { kind: 'thinking.delta', data: { text: chunkText(event.data), ts: tsOf(event) } };
+        return { kind: 'thinking.delta', data: limitRealtimeText({ text: chunkText(event.data), ts: tsOf(event) }) };
       }
-      return { kind: 'message.delta', data: { text: chunkText(event.data), ts: tsOf(event) } };
+      return { kind: 'message.delta', data: limitRealtimeText({ text: chunkText(event.data), ts: tsOf(event) }) };
     }
     case 'assistant/message': {
       const text = messageText(event.data);
@@ -1299,7 +1324,7 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
       if (!text.trim() && !thinking.trim()) return null;
       return {
         kind: 'message.final',
-        data: { seq: event.seq, role: 'assistant', text, ...(thinking ? { thinking } : {}), ts: tsOf(event) },
+        data: { ...limitMessageProjection({ seq: event.seq, role: 'assistant', text, ...(thinking ? { thinking } : {}), ts: tsOf(event) }) },
       };
     }
     case 'tool/call': {
@@ -1705,7 +1730,111 @@ export function projectHistory(events: Array<{ event: SessionEventLike; view?: u
         break;
     }
   }
-  return messages.sort((a, b) => a.seq - b.seq);
+  return messages
+    .sort((a, b) => a.seq - b.seq)
+    .map(limitMessageProjection);
+}
+
+/**
+ * Enforce PROTOCOL.md's per-message 256 KB ceiling by UTF-8 JSON byte size.
+ * Keep structural identity and attachment references intact; progressively
+ * shorten human-readable fields until the serialized projection fits.
+ */
+export function limitMessageProjection(message: MessageProjection): MessageProjection {
+  if (jsonBytes(message) <= MAX_MESSAGE_PROJECTION_BYTES) return message
+  const next: MessageProjection = {
+    ...message,
+    ...(message.tool ? {
+      tool: {
+        ...message.tool,
+        name: truncateUtf8(message.tool.name, 4 * 1024),
+        summary: truncateUtf8(message.tool.summary, 64 * 1024),
+      },
+    } : {}),
+    ...(message.attachments ? {
+      attachments: message.attachments.slice(0, 16).map((attachment) => ({
+        ...attachment,
+        ...(attachment.name ? { name: truncateUtf8(attachment.name, 4 * 1024) } : {}),
+        ...(attachment.mediaType ? { mediaType: truncateUtf8(attachment.mediaType, 256) } : {}),
+        ...(attachment.attachmentId ? { attachmentId: truncateUtf8(attachment.attachmentId, 4 * 1024) } : {}),
+      })),
+    } : {}),
+    ...(message.context ? {
+      context: {
+        ...(message.context.label ? { label: truncateUtf8(message.context.label, 8 * 1024) } : {}),
+        ...(message.context.form ? { form: truncateUtf8(message.context.form, 256) } : {}),
+      },
+    } : {}),
+    truncated: true,
+  }
+
+  const textFields: Array<{
+    get: () => string
+    set: (value: string) => void
+  }> = []
+  if (typeof next.text === 'string') textFields.push({
+    get: () => next.text ?? '',
+    set: (value) => { next.text = value },
+  })
+  if (typeof next.thinking === 'string') textFields.push({
+    get: () => next.thinking ?? '',
+    set: (value) => { next.thinking = value },
+  })
+  if (next.tool) textFields.push({
+    get: () => next.tool?.summary ?? '',
+    set: (value) => { if (next.tool) next.tool.summary = value },
+  })
+  if (next.context?.label) textFields.push({
+    get: () => next.context?.label ?? '',
+    set: (value) => { if (next.context) next.context.label = value },
+  })
+
+  while (jsonBytes(next) > MAX_MESSAGE_PROJECTION_BYTES) {
+    const largest = textFields
+      .map((field) => ({ field, bytes: Buffer.byteLength(field.get(), 'utf8') }))
+      .sort((a, b) => b.bytes - a.bytes)[0]
+    if (largest && largest.bytes > 0) {
+      largest.field.set(truncateUtf8(largest.field.get(), Math.floor(largest.bytes / 2)))
+      continue
+    }
+    if (next.attachments && next.attachments.length > 0) {
+      next.attachments = next.attachments.slice(0, -1)
+      continue
+    }
+    break
+  }
+  return next
+}
+
+function limitRealtimeText(data: { text: string; ts: number }): Record<string, unknown> {
+  if (jsonBytes(data) <= MAX_MESSAGE_PROJECTION_BYTES) return data
+  let text = data.text
+  const next: Record<string, unknown> = { ...data, truncated: true }
+  while (jsonBytes(next) > MAX_MESSAGE_PROJECTION_BYTES && text.length > 0) {
+    text = truncateUtf8(text, Math.floor(Buffer.byteLength(text, 'utf8') / 2))
+    next.text = text
+  }
+  return next
+}
+
+function jsonBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8')
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return ''
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value
+  let low = 0
+  let high = value.length
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2)
+    const candidate = value.slice(0, mid)
+    if (Buffer.byteLength(candidate, 'utf8') <= maxBytes) low = mid
+    else high = mid - 1
+  }
+  let end = low
+  if (end > 0 && /[\uD800-\uDBFF]/.test(value[end - 1]!)) end -= 1
+  return value.slice(0, end)
 }
 
 function summarizeResult(content: unknown): string {

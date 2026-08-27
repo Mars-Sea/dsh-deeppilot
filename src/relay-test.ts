@@ -128,10 +128,9 @@ export async function runRelayProbe(options: RelayProbeOptions): Promise<RelayTe
     }
   }
 
-  const executed = steps.filter((step) => step.ok !== undefined)
   const overall: RelayTestResult['overall'] =
     steps.length > 0 && steps.some((step) => step.id === 'health' && step.ok) &&
-    executed.every((step) => step.ok)
+    steps.every((step) => step.ok)
       ? 'ok'
       : 'failed'
   return { url: base, overall, tokenIssued, steps }

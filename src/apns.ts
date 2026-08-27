@@ -15,7 +15,7 @@
  */
 
 import { connect as http2Connect, type ClientHttp2Session } from 'node:http2'
-import { createPrivateKey, sign as cryptoSign, type KeyObject } from 'node:crypto'
+import { createHash, createPrivateKey, sign as cryptoSign, type KeyObject } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { ApnsEnvironment } from './token.ts'
 import type { PushNotification } from './protocol.ts'
@@ -36,6 +36,11 @@ export type ApnsOutcome = 'sent' | 'invalid-token' | 'failed'
 export interface ApnsSendResult {
   outcome: ApnsOutcome
   reason?: string
+}
+
+/** Classify Apple's reason without losing recoverable configuration errors. */
+export function classifyApnsReason(reason: string): ApnsOutcome {
+  return reason === 'Unregistered' || reason === 'ExpiredToken' ? 'invalid-token' : 'failed'
 }
 
 const PROVIDER_TOKEN_TTL_MS = 50 * 60 * 1000 // Apple allows 1h; refresh early.
@@ -100,7 +105,9 @@ export interface ApnsSendRequest extends PushNotification {
 /** collapse-id accepts ≤64 bytes of ASCII; keep it stable per session+event. */
 export function collapseIdFor(notification: PushNotification): string {
   const raw = `${notification.category}:${notification.sessionId}`
-  return raw.replace(/[^a-zA-Z0-9.:-]/g, '').slice(0, 64)
+  const readable = raw.replace(/[^a-zA-Z0-9.:-]/g, '')
+  const digest = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 12)
+  return `${readable.slice(0, 51)}:${digest}`
 }
 
 function authorityFor(environment: ApnsEnvironment): string {
@@ -228,7 +235,12 @@ export class ApnsClient {
             // non-JSON body; fall through with empty reason
           }
           if (status !== 200 && !reason) reason = 'HTTP ' + String(status)
-          if (reason === 'Unregistered' || reason === 'BadDeviceToken') return settle('invalid-token', reason)
+          // Unregistered/ExpiredToken are authoritative lifecycle verdicts.
+          // BadDeviceToken can also mean the provider selected the wrong APNs
+          // environment; pruning then destroys a valid registration exactly
+          // when the operator needs its stored environment to diagnose config.
+          const outcome = classifyApnsReason(reason)
+          if (outcome === 'invalid-token') return settle(outcome, reason)
           if (this.debug) this.log(`apns rejected status=${status} reason=${reason}`)
           settle('failed', reason)
         })

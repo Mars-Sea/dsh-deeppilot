@@ -3,7 +3,7 @@ import test from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { BridgeConnection, AUTH_TIMEOUT_MS } from '../src/connection.ts'
+import { BridgeConnection, AUTH_TIMEOUT_MS, MAX_OUTBOUND_BUFFER_BYTES } from '../src/connection.ts'
 import { HostBridge } from '../src/host-bridge.ts'
 import type { ApiProxyLike } from '../src/host-bridge.ts'
 import { DeviceStore } from '../src/token.ts'
@@ -16,6 +16,7 @@ class FakeWebSocket {
   static OPEN = 1
   OPEN = 1
   readyState = 1
+  bufferedAmount = 0
   sent: any[] = []
   closes: Array<{ code: number | undefined; reason: string }> = []
   terminated = false
@@ -72,6 +73,7 @@ interface Harness {
   bridge: HostBridge
   store: DeviceStore
   logs: string[]
+  closed: Promise<void>
 }
 
 async function makeConnection(opts: {
@@ -84,6 +86,8 @@ async function makeConnection(opts: {
   const store = await DeviceStore.load(join(dir, 'devices.json'))
   const ws = new FakeWebSocket()
   const logs: string[] = []
+  let resolveClosed!: () => void
+  const closed = new Promise<void>((resolve) => { resolveClosed = resolve })
   const connection = new BridgeConnection(ws as never, {
     bridge,
     devices: store,
@@ -91,9 +95,14 @@ async function makeConnection(opts: {
     expectedToken: TOKEN,
     ...(opts.transportAuthenticated ? { transportAuthenticated: true } : {}),
     log: (m) => logs.push(m),
-    onClosed: () => { void rm(dir, { recursive: true, force: true }) },
+    onClosed: () => {
+      void (async () => {
+        await store.drain()
+        await rm(dir, { recursive: true, force: true })
+      })().catch(() => {}).finally(resolveClosed)
+    },
   })
-  return { ws, connection, bridge, store, logs }
+  return { ws, connection, bridge, store, logs, closed }
 }
 
 const lastFrame = (ws: FakeWebSocket) => ws.sent[ws.sent.length - 1]
@@ -400,4 +409,29 @@ test('a failed session.open rolls back its viewer registration', async () => {
     [...viewers.values()].every((set) => !set.has('missing-session')),
     'failed open must not keep viewer interest registered',
   )
+})
+
+test('idle timeout uses the protocol 1001 close code', async () => {
+  const { ws, connection } = await makeConnection({ transportAuthenticated: true })
+  connection.closeIdle()
+  assert.deepEqual(ws.closes, [{ code: 1001, reason: 'idle timeout' }])
+  assert.equal(ws.terminated, false)
+})
+
+test('server shutdown announces E_INTERNAL before closing with 1001', async () => {
+  const { ws, connection } = await makeConnection({ transportAuthenticated: true })
+  connection.closeForServerStop()
+  assert.equal(ws.sent[0]?.type, 's2c.error')
+  assert.equal(ws.sent[0]?.payload.code, 'E_INTERNAL')
+  assert.equal(ws.sent[0]?.payload.message, 'server stopping')
+  assert.deepEqual(ws.closes, [{ code: 1001, reason: 'server stopping' }])
+})
+
+test('a persistently backpressured client is shed before buffering more data', async () => {
+  const { ws, closed } = await makeConnection({ transportAuthenticated: true })
+  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  ws.bufferedAmount = MAX_OUTBOUND_BUFFER_BYTES + 1
+  ws.receive({ v: 1, type: 'c2s.ping', id: 'p1' })
+  assert.deepEqual(ws.closes, [{ code: 1013, reason: 'client too slow' }])
+  await closed
 })

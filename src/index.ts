@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import type { Duplex } from 'node:stream'
@@ -27,6 +27,14 @@ import {
 } from './remote-supervisor.ts'
 import { localLANIPv4Addresses } from './local-address.ts'
 import { UpdateChecker, type UpdateInfo } from './update-check.ts'
+
+/** Prune only when the provider supplies an authoritative token-lifecycle verdict. */
+export function shouldPrunePushToken(
+  outcome: 'sent' | 'invalid-token' | 'failed',
+  reason?: string,
+): boolean {
+  return outcome === 'invalid-token' && (reason === 'Unregistered' || reason === 'ExpiredToken')
+}
 
 /**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
@@ -63,11 +71,11 @@ export interface Config {
   /** Optional embedded remote transport. Reconciled when settings change. */
   remote?: {
     enabled?: boolean
-    provider?: string
+    provider?: 'tailscale-funnel'
     hostname?: string
     statePath?: string
     helperPath?: string
-    funnelPort?: number
+    funnelPort?: 443 | 8443 | 10000
   }
   /**
    * Offline push (F-9). provider 'apns' sends direct Apple Push Notification
@@ -82,7 +90,7 @@ export interface Config {
    */
   push?: {
     /** 'none' (default) | 'apns' | 'relay'. */
-    provider?: string
+    provider?: 'none' | 'apns' | 'relay'
     // --- apns ---
     /** Apple Developer team id (JWT iss claim). */
     teamId?: string
@@ -111,11 +119,11 @@ export const Config = z.object({
   debug: z.boolean().default(false),
   remote: z.object({
     enabled: z.boolean().default(false),
-    provider: z.string().default('tailscale-funnel'),
+    provider: z.union(['tailscale-funnel'] as const).default('tailscale-funnel'),
     hostname: z.string().default(DEFAULT_REMOTE_HOSTNAME),
     statePath: z.string().default(join(bridgeDataDir(), 'tailscale')),
     helperPath: z.string().default(''),
-    funnelPort: z.natural().default(443),
+    funnelPort: z.union([443, 8443, 10000] as const).default(443),
   }).default({
     enabled: false,
     provider: 'tailscale-funnel',
@@ -125,7 +133,7 @@ export const Config = z.object({
     funnelPort: 443,
   }),
   push: z.object({
-    provider: z.string().default('none'),
+    provider: z.union(['none', 'apns', 'relay'] as const).default('none'),
     teamId: z.string().default(''),
     keyId: z.string().default(''),
     keyPath: z.string().default(join(bridgeDataDir(), 'apns', 'AuthKey.p8')),
@@ -193,8 +201,16 @@ function readOwnPackageVersion(): string {
 
 function rejectUpgrade(socket: Duplex, status: number, reason: string): void {
   const body = JSON.stringify({ error: reason })
+  const statusText: Record<number, string> = {
+    401: 'Unauthorized',
+    429: 'Too Many Requests',
+    500: 'Internal Server Error',
+    503: 'Service Unavailable',
+  }
+  const authenticate = status === 401 ? 'WWW-Authenticate: Bearer realm="deeppilot"\r\n' : ''
   socket.end(
-    'HTTP/1.1 ' + status + ' Forbidden\r\n' +
+    'HTTP/1.1 ' + status + ' ' + (statusText[status] ?? 'Error') + '\r\n' +
+    authenticate +
     'Content-Type: application/json\r\n' +
     'Content-Length: ' + Buffer.byteLength(body) + '\r\n' +
     'Connection: close\r\n' +
@@ -259,7 +275,12 @@ export function apply(ctx: Context, options: unknown): void {
   // `enabled` decides whether the bridge starts at all (next restart). This is
   // registered unconditionally so the master switch stays reachable even while
   // the bridge is off — otherwise a disabled bridge could never be re-enabled.
-  installSettingsSection(ctx, settingsNamespace('deeppilot'), Config, normalizeOptions(undefined), {
+  installSettingsSection<Config>(
+    ctx,
+    settingsNamespace('deeppilot'),
+    Config as unknown as z<Config>,
+    normalizeOptions(undefined),
+    {
     setSource: (source) => {
       liveSource = source
       // Settings can attach after webServer. Defer one microtask so the
@@ -268,7 +289,8 @@ export function apply(ctx: Context, options: unknown): void {
       queueMicrotask(() => scheduleRemoteReconcile?.())
     },
     onChange: () => queueMicrotask(() => scheduleRemoteReconcile?.()),
-  })
+    },
+  )
 
   // Master switch, resolved against the latest available settings document.
   // Individual injected services also read currentConfig() when they activate.
@@ -299,16 +321,21 @@ export function apply(ctx: Context, options: unknown): void {
   }
   const pushRelayPath = join(dataDir, 'push-relay.json')
   const enrollmentCell: RelayEnrollmentCell = {}
+  let enrollmentWriteTail: Promise<void> = Promise.resolve()
 
   function persistEnrollment(): void {
-    void (async () => {
+    const snapshot = JSON.stringify({ version: 1, ...enrollmentCell }, null, 2) + '\n'
+    enrollmentWriteTail = enrollmentWriteTail.then(async () => {
+      const tempPath = pushRelayPath + '.' + randomBytes(6).toString('hex') + '.tmp'
       try {
         await mkdir(dataDir, { recursive: true })
-        await writeFile(pushRelayPath, JSON.stringify({ version: 1, ...enrollmentCell }, null, 2) + '\n', { mode: 0o600 })
+        await writeFile(tempPath, snapshot, { mode: 0o600 })
+        await rename(tempPath, pushRelayPath)
       } catch {
+        await unlink(tempPath).catch(() => {})
         // best-effort persistence; enrollment retries on next trigger
       }
-    })()
+    })
   }
 
   /** Fired from BridgeConnection when an app presents its built-in key. */
@@ -462,6 +489,19 @@ export function apply(ctx: Context, options: unknown): void {
   }
 
   const connections = new Set<BridgeConnection>()
+
+  const closeConnectionsForBridge = (bridge: HostBridge): void => {
+    for (const connection of connections) {
+      if (!connection.isAttachedTo(bridge)) continue
+      connection.closeForServerStop()
+      connections.delete(connection)
+    }
+  }
+
+  const closeAllConnections = (): void => {
+    for (const connection of connections) connection.closeForServerStop()
+    connections.clear()
+  }
 
   // ---------- offline push outlet (F-9) ----------
 
@@ -629,7 +669,8 @@ export function apply(ctx: Context, options: unknown): void {
    *  - each device is delivered on ITS registered environment (the build
    *    kind it self-reported), so sandbox and production devices coexist;
    *  - the device's per-category switches suppress muted categories;
-   *  - Unregistered/BadDeviceToken outcomes prune the stored token.
+   *  - only APNs' terminal Unregistered/ExpiredToken verdicts prune storage;
+   *    BadDeviceToken may be an environment mismatch and stays diagnosable.
    */
   const makePushOutlet = (): PushOutlet => ({
     // The capability bit must tell the truth: only advertise push when the
@@ -691,7 +732,7 @@ export function apply(ctx: Context, options: unknown): void {
           void send({ deviceToken: registration.token, environment: registration.environment, notification })
             .then(({ outcome, reason }) => {
               log(`push(${transport}) ${notification.category} → "${device.deviceName}" [${registration.environment}] = ${outcome}${reason ? ' (' + reason + ')' : ''}`)
-              if (outcome === 'invalid-token') {
+              if (shouldPrunePushToken(outcome, reason)) {
                 devices.clearPushToken(device.deviceId)
                 log(`push: pruned stale token of "${device.deviceName}" (${reason ?? 'unknown'}) — app re-registers on next launch`)
               }
@@ -802,6 +843,7 @@ export function apply(ctx: Context, options: unknown): void {
       return await runPushSelfTest()
     })
   const state: { bridge?: HostBridge } = {}
+  let pendingUpgrades = 0
 
   const handleUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
     void (async () => {
@@ -810,10 +852,12 @@ export function apply(ctx: Context, options: unknown): void {
           rejectUpgrade(socket, 503, 'bridge disabled')
           return
         }
-        if (connections.size >= MAX_CLIENT_CONNECTIONS) {
+        if (connections.size + pendingUpgrades >= MAX_CLIENT_CONNECTIONS) {
           rejectUpgrade(socket, 429, 'too many connections')
           return
         }
+        pendingUpgrades += 1
+        try {
         const { devices } = await ready
         const token = auth.token
         if (!token || !devices) {
@@ -838,6 +882,10 @@ export function apply(ctx: Context, options: unknown): void {
           return
         }
         wss.handleUpgrade(req, socket, head, (ws) => {
+          if (auth.token !== token || state.bridge !== bridge) {
+            ws.close(1012, 'bridge changed')
+            return
+          }
           const connection = new BridgeConnection(ws, {
             bridge,
             devices,
@@ -851,6 +899,9 @@ export function apply(ctx: Context, options: unknown): void {
           })
           connections.add(connection)
         })
+        } finally {
+          pendingUpgrades -= 1
+        }
       } catch (error) {
         log('upgrade failed: ' + String(error))
         rejectUpgrade(socket, 500, 'internal error')
@@ -906,7 +957,11 @@ export function apply(ctx: Context, options: unknown): void {
       state.bridge = bridge
       bridge.start()
       log('data plane active (mux + host streams)')
-      apiCtx.effect(() => () => bridge.dispose(), 'deeppilot: host streams')
+      apiCtx.effect(() => () => {
+        closeConnectionsForBridge(bridge)
+        if (state.bridge === bridge) state.bridge = undefined
+        bridge.dispose()
+      }, 'deeppilot: host streams')
     },
   )
 
@@ -948,7 +1003,7 @@ export function apply(ctx: Context, options: unknown): void {
         for (const connection of connections) {
           if (connection.isStale(now, 60_000)) {
             log('dropping stale connection')
-            connection.terminate()
+            connection.closeIdle()
             connections.delete(connection)
           }
         }
@@ -1049,4 +1104,20 @@ export function apply(ctx: Context, options: unknown): void {
       }
     },
   )
+
+  ;(ctx as unknown as SubContext).effect(() => async () => {
+    closeAllConnections()
+    const bridge = state.bridge
+    state.bridge = undefined
+    bridge?.dispose()
+    const sender = cachedSender
+    cachedSender = undefined
+    updateChecker.dispose()
+    const wssClosed = new Promise<void>((resolve) => wss.close(() => resolve()))
+    await Promise.allSettled([
+      enrollmentWriteTail,
+      sender?.dispose?.() ?? Promise.resolve(),
+      wssClosed,
+    ])
+  }, 'deeppilot: process resources')
 }

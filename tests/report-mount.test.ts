@@ -9,6 +9,7 @@ const reportRemote: ReportRemote = {
       ok: true,
       value: {
         protocolVersion: 1,
+        pluginVersion: '0.3.0',
         serverVersion: '0.1.0',
         enabled: true,
         tokenPath: '/tmp/auth-token',
@@ -16,6 +17,7 @@ const reportRemote: ReportRemote = {
         activeConnections: 0,
         historyBufferMax: 2000,
         debug: false,
+        lanAddresses: [],
         remote: {
           provider: 'tailscale-funnel',
           phase: 'disabled',

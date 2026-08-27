@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { helloTokenAccepted } from '../src/connection.ts'
-import { requestToken } from '../src/index.ts'
+import { Config, requestToken } from '../src/index.ts'
 import { bridgeDataDir, migrateLegacyBridgeDataDir } from '../src/token.ts'
 
 const expected = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFG'
@@ -24,6 +24,13 @@ test('hello authentication requires the token only for an untrusted upgrade', ()
   assert.equal(helloTokenAccepted(false, expected, expected), true)
   assert.equal(helloTokenAccepted(false, 'wrong', expected), false)
   assert.equal(helloTokenAccepted(undefined, undefined, expected), false)
+})
+
+test('configuration rejects unsupported providers and Funnel ports', () => {
+  assert.throws(() => Config({ remote: { provider: 'typo' } } as never), TypeError)
+  assert.throws(() => Config({ remote: { funnelPort: 444 } } as never), TypeError)
+  assert.throws(() => Config({ push: { provider: 'apnz' } } as never), TypeError)
+  assert.equal(Config({ remote: { funnelPort: 8443 }, push: { provider: 'relay' } }).remote.funnelPort, 8443)
 })
 
 test('bridge data is stored under the deeppilot directory', () => {

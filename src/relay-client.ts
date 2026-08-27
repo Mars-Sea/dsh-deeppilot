@@ -6,7 +6,7 @@
  *
  * Outcome contract mirrors src/apns.ts exactly so the dispatcher prunes dead
  * tokens identically on either path:
- *   sent | invalid-token (Unregistered/BadDeviceToken) | failed
+ *   sent | invalid-token (terminal Unregistered/ExpiredToken) | failed
  */
 
 import type { ApnsEnvironment } from './token.ts'

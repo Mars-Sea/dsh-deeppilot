@@ -8,6 +8,7 @@ import type { DeviceStore, ApnsEnvironment } from './token.ts'
 import { isValidApnsToken, tokenMatches } from './token.ts'
 
 export const AUTH_TIMEOUT_MS = 5_000
+export const MAX_OUTBOUND_BUFFER_BYTES = 4 * 1024 * 1024
 const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const MAX_PROMPT_IMAGES = 4
 const MAX_BASE64_CHARS_PER_IMAGE = 8 * 1024 * 1024
@@ -61,6 +62,7 @@ export function helloTokenAccepted(
  */
 export class BridgeConnection implements BridgeSink {
   private authenticated = false
+  private closed = false
   private helloTimer: NodeJS.Timeout | undefined
   private readonly openSessions = new Set<string>()
   /** Sanitized device identity from hello; needed for push registration. */
@@ -88,6 +90,22 @@ export class BridgeConnection implements BridgeSink {
   /** Hard-drop the socket (server-side stale sweep). */
   terminate(): void {
     this.ws.terminate()
+  }
+
+  /** Protocol-compliant idle timeout: let the peer observe a normal 1001 close. */
+  closeIdle(): void {
+    this.close(1001, 'idle timeout')
+  }
+
+  /** Announce an orderly plugin/data-plane shutdown before closing the socket. */
+  closeForServerStop(): void {
+    this.fail(undefined, 'E_INTERNAL', 'server stopping')
+    this.close(1001, 'server stopping')
+  }
+
+  /** Used by dependency-lifecycle cleanup to avoid closing a replacement bridge. */
+  isAttachedTo(bridge: HostBridge): boolean {
+    return this.deps.bridge === bridge
   }
 
   /** Device identity once hello succeeded; undefined before that. */
@@ -121,6 +139,8 @@ export class BridgeConnection implements BridgeSink {
   // ---------- lifecycle ----------
 
   private onClose(): void {
+    if (this.closed) return
+    this.closed = true
     if (this.helloTimer !== undefined) clearTimeout(this.helloTimer)
     for (const id of this.openSessions) {
       this.deps.bridge.markSinkClosed(this, id)
@@ -131,6 +151,7 @@ export class BridgeConnection implements BridgeSink {
   }
 
   private close(code: number, reason: string): void {
+    if (this.closed) return
     try {
       this.ws.close(code, reason)
     } catch {
@@ -147,7 +168,12 @@ export class BridgeConnection implements BridgeSink {
       ...(seq !== undefined ? { seq } : {}),
       payload,
     }
-    if (this.ws.readyState === this.ws.OPEN) this.ws.send(JSON.stringify(envelope))
+    if (this.ws.readyState !== this.ws.OPEN) return
+    if (this.ws.bufferedAmount > MAX_OUTBOUND_BUFFER_BYTES) {
+      this.close(1013, 'client too slow')
+      return
+    }
+    this.ws.send(JSON.stringify(envelope))
   }
 
   private fail(id: string | undefined, code: keyof typeof ERROR_CODES, message: string): void {
@@ -428,8 +454,8 @@ export class BridgeConnection implements BridgeSink {
           images.push({
             mediaType: image.mediaType as 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif',
             data: image.data,
-            ...(typeof image.name === 'string' && image.name.trim().length > 0
-              ? { name: image.name.trim().slice(0, 120) }
+            ...(typeof image.name === 'string' && sanitizeImageName(image.name).length > 0
+              ? { name: sanitizeImageName(image.name) }
               : {}),
           })
         }
@@ -555,6 +581,10 @@ export class BridgeConnection implements BridgeSink {
       }
     }
   }
+}
+
+function sanitizeImageName(value: string): string {
+  return value.replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, 120)
 }
 
 const ERROR_CODES = {

@@ -1,6 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert'
-import { HostBridge, projectHistory, projectEvent } from '../src/host-bridge.ts'
+import {
+  HostBridge,
+  MAX_MESSAGE_PROJECTION_BYTES,
+  limitMessageProjection,
+  projectHistory,
+  projectEvent,
+  unwrapStreamItem,
+} from '../src/host-bridge.ts'
 import type { ApiProxyLike, BridgeSink, MuxFrameLike } from '../src/host-bridge.ts'
 
 function makeFakeProxy() {
@@ -46,7 +53,7 @@ function makeFakeProxy() {
             await new Promise((resolve) => setTimeout(resolve, 5))
             continue
           }
-          yield queue.shift()
+          yield queue.shift()!
         }
       },
       host: async function* () {},
@@ -74,6 +81,45 @@ function makeSink(collected: Array<{ type: string; payload: any }>): BridgeSink 
     resync: () => {},
   }
 }
+
+test('outer stream rpcId wins when nested payload also carries an id', () => {
+  const frame = unwrapStreamItem({
+    rpcId: 'outer-request-id',
+    payload: { type: 'approval/requested', rpcId: 'nested-id', sessionId: 's1' },
+  })
+  assert.equal(frame.rpcId, 'outer-request-id')
+})
+
+test('message projections are truncated by serialized UTF-8 size', () => {
+  const projected = limitMessageProjection({
+    seq: 1,
+    role: 'assistant',
+    text: '深'.repeat(MAX_MESSAGE_PROJECTION_BYTES),
+    thinking: '考'.repeat(MAX_MESSAGE_PROJECTION_BYTES),
+    ts: 1,
+  })
+  assert.equal(projected.truncated, true)
+  assert.ok(Buffer.byteLength(JSON.stringify(projected), 'utf8') <= MAX_MESSAGE_PROJECTION_BYTES)
+  assert.doesNotMatch(projected.text ?? '', /[\uD800-\uDBFF]$/)
+})
+
+test('HostBridge.start is idempotent', async () => {
+  let muxStarts = 0
+  let hostStarts = 0
+  const { proxy } = makeFakeProxy()
+  proxy.events.mux = async function* (_req, signal) {
+    muxStarts += 1
+    while (!signal.aborted) await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  proxy.events.host = async function* () { hostStarts += 1 }
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  bridge.start()
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  assert.equal(muxStarts, 1)
+  assert.equal(hostStarts, 1)
+  bridge.dispose()
+})
 
 test('approval requested -> pending push -> respond allow', async () => {
   const { proxy, respondCalls, getPush } = makeFakeProxy()
@@ -500,6 +546,28 @@ test('subagent sessions stay off the phone list and out of turn notifications', 
   bridge.dispose()
 })
 
+test('blank sessions report idle so phones can send the first prompt', async () => {
+  const { proxy } = makeFakeProxy()
+  proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
+    // A phone-created session before its first prompt: blank and not running.
+    { sessionId: 'session-blank', updatedAt: 300, running: false, blank: true },
+    { sessionId: 'session-running', updatedAt: 200, running: true, blank: false },
+    { sessionId: 'session-idle', updatedAt: 100, running: false, blank: false },
+  ] } } })
+
+  const bridge = new HostBridge(proxy, 100)
+  await bridge.refreshSummaries()
+  const byId = new Map(bridge.listSessions().map((s) => [s.id, s.status]))
+  assert.equal(
+    byId.get('session-blank'),
+    'idle',
+    'a never-prompted session cannot converge from unknown: the composer would disable sending forever',
+  )
+  assert.equal(byId.get('session-running'), 'running')
+  assert.equal(byId.get('session-idle'), 'idle')
+  bridge.dispose()
+})
+
 test('sendPrompt forwards image content and projects attachment metadata', async () => {
   const { proxy } = makeFakeProxy()
   let promptRequest: any
@@ -712,8 +780,9 @@ test('live push: injected user-role events emit message.final with role=system',
   assert.ok(live, 'user/message must project live')
   assert.equal(live!.kind, 'message.final')
   assert.equal(live!.data.role, 'system')
-  assert.equal(live!.data.context.label, 'orca-cli')
-  assert.equal(live!.data.context.form, 'instructions')
+  const context = live!.data.context as { label?: string; form?: string }
+  assert.equal(context.label, 'orca-cli')
+  assert.equal(context.form, 'instructions')
 
   // The optimistic-echo path stays intact: a human prompt final keeps role=user
   // so the phone reconciles its pending bubble.
