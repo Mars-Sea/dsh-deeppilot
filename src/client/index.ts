@@ -932,7 +932,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
       ),
     ),
     report === null ? null : h('div', { className: 'pbb-versionFooter' },
-      h('span', null, 'v' + report.pluginVersion),
+      h('span', null, 'DeepPilot v' + report.pluginVersion),
       report.updateAvailable === true
         ? h('a', {
           href: typeof report.releaseUrl === 'string' && /^https:\/\//.test(report.releaseUrl)
