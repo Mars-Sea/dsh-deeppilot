@@ -70,15 +70,29 @@ export function parseHelperEvent(line: string): HelperEvent | null {
   }
 }
 
+/** Translate Node's platform/architecture names to the GOOS/GOARCH directory
+ *  names used by the committed helper matrix. */
+export function bundledHelperPlatformDir(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): string {
+  const goos = platform === 'win32' ? 'windows' : platform
+  const goarch = arch === 'x64' ? 'amd64' : arch
+  return `${goos}-${goarch}`
+}
+
 /** Build the list of candidate locations for the embedded tunnel helper, in
  *  priority order. The first existing executable wins at start() time. The
  *  order matters: explicit config (handled by the caller) > npm install
  *  layout > DSH-bundled layout > user data dir. */
-export function bundledHelperCandidates(): string[] {
+export function bundledHelperCandidates(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): string[] {
   const here = dirname(fileURLToPath(import.meta.url))
   const pkgRoot = resolve(here, '..')
-  const fileName = process.platform === 'win32' ? 'dsh-deeppilot-tunnel.exe' : 'dsh-deeppilot-tunnel'
-  const platformDir = `${process.platform}-${process.arch}`
+  const fileName = platform === 'win32' ? 'dsh-deeppilot-tunnel.exe' : 'dsh-deeppilot-tunnel'
+  const platformDir = bundledHelperPlatformDir(platform, arch)
 
   const candidates: string[] = []
   // 1. Standard npm layout: <pkgRoot>/bin/<os>-<arch>/<file>

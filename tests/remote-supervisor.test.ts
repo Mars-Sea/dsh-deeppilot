@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   bundledHelperCandidates,
+  bundledHelperPlatformDir,
   normalizeRemoteHostname,
   parseHelperEvent,
   RemoteSupervisor,
@@ -69,21 +70,38 @@ test('remote supervisor reports tried paths when no helper is bundled', async ()
   await supervisor.dispose()
 })
 
-test('bundled helper candidates list the current platform first', () => {
-  const candidates = bundledHelperCandidates()
-  assert.ok(candidates.length >= 4, 'expected at least four candidate locations')
-  const platformDir = `${process.platform}-${process.arch}`
-  const fileName = process.platform === 'win32' ? 'dsh-deeppilot-tunnel.exe' : 'dsh-deeppilot-tunnel'
-  // The first candidate is always the canonical npm layout, which is the
-  // only one that matters in a normal install. Other candidates cover
-  // DSH-bundled layouts and the user data dir.
-  assert.ok(candidates[0]?.endsWith(join(platformDir, fileName)),
-    `first candidate ${candidates[0]} should end with ${join(platformDir, fileName)}`)
-  for (const candidate of candidates) {
-    assert.ok(candidate.endsWith(fileName),
-      `candidate ${candidate} should end with ${fileName}`)
-  }
-})
+const helperPlatformCases: Array<{
+  platform: NodeJS.Platform
+  arch: string
+  directory: string
+  fileName: string
+}> = [
+  { platform: 'darwin', arch: 'x64', directory: 'darwin-amd64', fileName: 'dsh-deeppilot-tunnel' },
+  { platform: 'darwin', arch: 'arm64', directory: 'darwin-arm64', fileName: 'dsh-deeppilot-tunnel' },
+  { platform: 'linux', arch: 'x64', directory: 'linux-amd64', fileName: 'dsh-deeppilot-tunnel' },
+  { platform: 'linux', arch: 'arm64', directory: 'linux-arm64', fileName: 'dsh-deeppilot-tunnel' },
+  { platform: 'win32', arch: 'x64', directory: 'windows-amd64', fileName: 'dsh-deeppilot-tunnel.exe' },
+  { platform: 'win32', arch: 'arm64', directory: 'windows-arm64', fileName: 'dsh-deeppilot-tunnel.exe' },
+]
+
+for (const { platform, arch, directory, fileName } of helperPlatformCases) {
+  test(`bundled helper candidates map ${platform}-${arch} to ${directory}`, () => {
+    assert.equal(bundledHelperPlatformDir(platform, arch), directory)
+    const candidates = bundledHelperCandidates(platform, arch)
+    assert.ok(candidates.length >= 4, 'expected at least four candidate locations')
+    // The first candidate is always the canonical npm layout, which is the
+    // only one that matters in a normal install. Other candidates cover
+    // DSH-bundled layouts and the user data dir.
+    assert.ok(candidates[0]?.endsWith(join(directory, fileName)),
+      `first candidate ${candidates[0]} should end with ${join(directory, fileName)}`)
+    assert.ok(candidates[0] !== undefined && existsSync(candidates[0]),
+      `canonical helper candidate ${candidates[0]} should exist in the committed matrix`)
+    for (const candidate of candidates) {
+      assert.ok(candidate.endsWith(fileName),
+        `candidate ${candidate} should end with ${fileName}`)
+    }
+  })
+}
 
 test('dispose during an in-flight start never spawns the helper', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'deeppilot-sup-race-'))
