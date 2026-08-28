@@ -42,7 +42,6 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-settings"
       ],
-      "external": [],
       "platform": "web"
     }
   },

@@ -3,7 +3,7 @@ import test from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { BridgeConnection, AUTH_TIMEOUT_MS, MAX_OUTBOUND_BUFFER_BYTES } from '../src/connection.ts'
+import { BridgeConnection, AUTH_TIMEOUT_MS, MAX_OUTBOUND_BUFFER_BYTES, PRE_AUTH_FRAME_BYTES } from '../src/connection.ts'
 import { HostBridge } from '../src/host-bridge.ts'
 import type { ApiProxyLike } from '../src/host-bridge.ts'
 import { DeviceStore } from '../src/token.ts'
@@ -46,6 +46,12 @@ class FakeWebSocket {
   /** Deliver one protocol frame as the ws 'message' event would. */
   receive(payload: unknown): void {
     this.handlers.get('message')?.(Buffer.from(JSON.stringify(payload)))
+  }
+
+  /** Deliver a pre-serialized ws message; for oversized pre-auth frames
+   *  where JSON.stringify would itself balloon memory. */
+  receiveRaw(raw: string): void {
+    this.handlers.get('message')?.(Buffer.from(raw))
   }
 }
 
@@ -434,4 +440,53 @@ test('a persistently backpressured client is shed before buffering more data', a
   ws.receive({ v: 1, type: 'c2s.ping', id: 'p1' })
   assert.deepEqual(ws.closes, [{ code: 1013, reason: 'client too slow' }])
   await closed
+})
+
+// ---------- pre-auth DoS hardening (P3-B) ----------
+
+test('an oversized pre-auth frame is rejected without parsing or echoing an error', async () => {
+  // Before P3-B the ws server happily JSON.parsed a 64 MiB payload inside
+  // the 5-second auth window. Now any pre-auth frame over 64 KiB is closed
+  // immediately with RFC 6455 code 1009, so an anonymous peer cannot force
+  // expensive parse work before authenticating.
+  const { ws } = await makeConnection()
+  // Build a string that is parseable JSON but well over the cap; we do not
+  // expect the implementation to touch JSON.parse for it.
+  const huge = '{"v":1,"type":"c2s.ping","id":"p","payload":' + '"x"'.repeat(PRE_AUTH_FRAME_BYTES) + '}'
+  assert.ok(huge.length > PRE_AUTH_FRAME_BYTES, 'frame must actually exceed the cap')
+  const closed = new Promise<void>((resolve) => {
+    ws.on('close', () => resolve())
+  })
+  ws.receiveRaw(huge)
+  assert.deepEqual(ws.closes, [{ code: 1009, reason: 'pre-auth frame too large' }])
+  // Crucially: no s2c.error frame is sent — the connection is dropped before
+  // any work, and the cost of closing is just the length check.
+  assert.equal(
+    ws.sent.filter((f) => f.type === 's2c.error').length,
+    0,
+    'oversized pre-auth frame must not produce an s2c.error response',
+  )
+  await closed
+})
+
+test('authenticated sessions keep the full 64 MiB frame budget for image prompts', async () => {
+  // P3-B only tightens the pre-auth cap; the 64 MiB cap remains for
+  // authenticated sockets so image attachments are unaffected. Sanity-check
+  // by sending a normal hello + a fat prompt text the post-auth path will
+  // accept (it will bounce on the protocol's own prompt-text cap of 256 KiB
+  // but never on the pre-auth length guard).
+  const { ws } = await makeConnection({ transportAuthenticated: true })
+  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  ws.sent.length = 0
+  ws.receive({
+    v: 1,
+    type: 'c2s.session.sendPrompt',
+    id: 'm1',
+    payload: { sessionId: 's1', text: 'x'.repeat(256 * 1024 + 1) },
+  })
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL', 'protocol-level cap still applies post-auth')
+  // No 1009 close: we passed the pre-auth gate, then hit the protocol's own
+  // 256 KiB prompt-text cap. The cap we tightened is the pre-auth one.
+  assert.equal(ws.closes.length, 0)
 })

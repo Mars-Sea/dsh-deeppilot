@@ -9,6 +9,15 @@ import { isValidApnsToken, tokenMatches } from './token.ts'
 
 export const AUTH_TIMEOUT_MS = 5_000
 export const MAX_OUTBOUND_BUFFER_BYTES = 4 * 1024 * 1024
+/**
+ * Pre-auth frame cap. The 64 MiB cap on a fully authenticated socket exists
+ * to support multi-MB image attachments; before hello the only legal frames
+ * are c2s.ping and c2s.hello.auth, neither of which can legitimately exceed
+ * a few KB. Capping unauthenticated frames at 64 KiB keeps an anonymous TCP
+ * peer from forcing expensive JSON.parse work on a 64 MiB payload inside
+ * the 5-second auth window.
+ */
+export const PRE_AUTH_FRAME_BYTES = 64 * 1024
 const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const MAX_PROMPT_IMAGES = 4
 const MAX_BASE64_CHARS_PER_IMAGE = 8 * 1024 * 1024
@@ -191,6 +200,14 @@ export class BridgeConnection implements BridgeSink {
 
     private async onMessage(raw: string): Promise<void> {
       this.lastActivity = Date.now()
+      // Cheap length guard before the JSON parse: pre-auth frames are tiny
+      // (hello/ping), so anything over 64 KiB is either junk or an attempt
+      // to make us spend CPU before the auth deadline. Reject without
+      // trying to parse, so the cost is just the length check.
+      if (!this.authenticated && raw.length > PRE_AUTH_FRAME_BYTES) {
+        this.close(1009, 'pre-auth frame too large')
+        return
+      }
       let env: Envelope
     try {
       env = JSON.parse(raw) as Envelope
