@@ -37,6 +37,32 @@ export function shouldPrunePushToken(
 }
 
 /**
+ * Zero-touch relay self-heal: the relay answering 401 means its registry no
+ * longer honors our cached credential — a rotated server secret, a lost
+ * registry file, or a deliberately revoked record. Only auto-enrolled
+ * zero-touch cells may re-derive the credential (deterministic issuance makes
+ * the round trip idempotent on a healthy relay, and the relay refuses to
+ * re-issue revoked clientIds). An explicitly configured relayToken is a user
+ * setting: 401 stays a config error the user must fix, never rewritten here.
+ */
+export function shouldReEnrollRelayToken(
+  transport: 'apns' | 'relay',
+  outcome: 'sent' | 'invalid-token' | 'failed',
+  reason: string | undefined,
+  opts: { usedCellToken: boolean; hasEnrollKey: boolean; tokenStillCurrent: boolean },
+): boolean {
+  // RelayClient maps credential rejection to exactly this reason string.
+  return (
+    transport === 'relay' &&
+    outcome === 'failed' &&
+    reason === 'HTTP 401' &&
+    opts.hasEnrollKey &&
+    opts.usedCellToken &&
+    opts.tokenStillCurrent
+  )
+}
+
+/**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
  * clients. Registers exactly one WebSocket upgrade route (/phone) plus an
  * optional health probe (/phone/health) on the existing web server. The web
@@ -735,6 +761,13 @@ export function apply(ctx: Context, options: unknown): void {
           log(`push(${transport}) ${notification.category}: no offline targets (connected=${connectedIds.size}, tokenized=${tokenized})`)
           return
         }
+        // Relay self-heal inputs, resolved once per dispatch: the URL we are
+        // actually sending through, and whether the credential came from the
+        // zero-touch cell (explicit relayToken configs are never rewritten).
+        const relayUrl = resolved.value.kind === 'relay' ? resolved.value.url : undefined
+        const relayTokenUsed = resolved.value.kind === 'relay' ? resolved.value.token : undefined
+        const usedCellToken = relayTokenUsed !== undefined && relayTokenUsed === enrollmentCell.token
+        const hasEnrollKey = Boolean(enrollmentCell.enrollKey)
         for (const device of candidates) {
           const registration = device.apns!
           void send({ deviceToken: registration.token, environment: registration.environment, notification })
@@ -743,6 +776,28 @@ export function apply(ctx: Context, options: unknown): void {
               if (shouldPrunePushToken(outcome, reason)) {
                 devices.clearPushToken(device.deviceId)
                 log(`push: pruned stale token of "${device.deviceName}" (${reason ?? 'unknown'}) — app re-registers on next launch`)
+                return
+              }
+              if (
+                relayUrl !== undefined &&
+                shouldReEnrollRelayToken(transport, outcome, reason, {
+                  usedCellToken,
+                  hasEnrollKey,
+                  // Compare-and-clear: a delayed 401 from another request sent
+                  // with the old credential must not erase a token that an
+                  // earlier callback has already refreshed.
+                  tokenStillCurrent: enrollmentCell.token === relayTokenUsed,
+                })
+              ) {
+                // The relay no longer honors the cached credential. Drop it and
+                // re-derive from the enroll key; ensureRelayEnrolled's own
+                // throttle keeps parallel 401s from storming the endpoint, and
+                // senderFor's config fingerprint rebuilds the client with the
+                // fresh token on the next dispatch.
+                enrollmentCell.token = undefined
+                persistEnrollment()
+                log('push relay credential rejected (HTTP 401); re-enrolling')
+                void ensureRelayEnrolled(relayUrl)
               }
             })
             .catch(() => {})

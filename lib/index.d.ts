@@ -495,6 +495,20 @@ declare class HostBridge {
 /** Prune only when the provider supplies an authoritative token-lifecycle verdict. */
 declare function shouldPrunePushToken(outcome: 'sent' | 'invalid-token' | 'failed', reason?: string): boolean;
 /**
+ * Zero-touch relay self-heal: the relay answering 401 means its registry no
+ * longer honors our cached credential — a rotated server secret, a lost
+ * registry file, or a deliberately revoked record. Only auto-enrolled
+ * zero-touch cells may re-derive the credential (deterministic issuance makes
+ * the round trip idempotent on a healthy relay, and the relay refuses to
+ * re-issue revoked clientIds). An explicitly configured relayToken is a user
+ * setting: 401 stays a config error the user must fix, never rewritten here.
+ */
+declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 'sent' | 'invalid-token' | 'failed', reason: string | undefined, opts: {
+  usedCellToken: boolean;
+  hasEnrollKey: boolean;
+  tokenStillCurrent: boolean;
+}): boolean;
+/**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
  * clients. Registers exactly one WebSocket upgrade route (/phone) plus an
  * optional health probe (/phone/health) on the existing web server. The web
@@ -639,5 +653,5 @@ declare const Config: z<Schemastery.ObjectS<{
 declare function requestToken(req: Pick<IncomingMessage, 'url' | 'headers'>): string | null;
 declare function apply(ctx: Context, options: unknown): void;
 //#endregion
-export { Config, HostBridge, apply, inject, name, requestToken, shouldPrunePushToken };
+export { Config, HostBridge, apply, inject, name, requestToken, shouldPrunePushToken, shouldReEnrollRelayToken };
 //# sourceMappingURL=index.d.ts.map

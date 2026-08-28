@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ApnsClient, apnsPayload, classifyApnsReason, collapseIdFor, es256Jwt, p8ToDer } from '../src/apns.ts'
-import { shouldPrunePushToken } from '../src/index.ts'
+import { shouldPrunePushToken, shouldReEnrollRelayToken } from '../src/index.ts'
 import type { PushNotification } from '../src/protocol.ts'
 import { BridgeConnection } from '../src/connection.ts'
 import { HostBridge } from '../src/host-bridge.ts'
@@ -455,6 +455,26 @@ test('APNs token classification preserves environment-mismatch evidence', () => 
   assert.equal(classifyApnsReason('BadDeviceToken'), 'failed')
   assert.equal(shouldPrunePushToken('invalid-token', 'Unregistered'), true)
   assert.equal(shouldPrunePushToken('invalid-token', 'BadDeviceToken'), false)
+})
+
+test('relay 401 self-heal applies only to the still-current zero-touch credential', () => {
+  const zeroTouch = { usedCellToken: true, hasEnrollKey: true, tokenStillCurrent: true }
+  assert.equal(shouldReEnrollRelayToken('relay', 'failed', 'HTTP 401', zeroTouch), true)
+  // Registry rotation recovery only ever rides the exact credential-rejection
+  // reason RelayClient produces; anything else must not drop the token.
+  assert.equal(shouldReEnrollRelayToken('relay', 'failed', 'HTTP 500', zeroTouch), false)
+  assert.equal(shouldReEnrollRelayToken('relay', 'failed', 'HTTP 429', zeroTouch), false)
+  assert.equal(shouldReEnrollRelayToken('relay', 'sent', 'HTTP 401', zeroTouch), false)
+  assert.equal(shouldReEnrollRelayToken('relay', 'invalid-token', 'Unregistered', zeroTouch), false)
+  // Explicit relayToken configs are user settings, never rewritten silently.
+  assert.equal(shouldReEnrollRelayToken('relay', 'failed', 'HTTP 401', { ...zeroTouch, usedCellToken: false }), false)
+  // No enroll key means nothing to re-derive from.
+  assert.equal(shouldReEnrollRelayToken('relay', 'failed', 'HTTP 401', { ...zeroTouch, hasEnrollKey: false }), false)
+  // A slower request sent with the old token must not clear a credential that
+  // an earlier 401 callback has already refreshed.
+  assert.equal(shouldReEnrollRelayToken('relay', 'failed', 'HTTP 401', { ...zeroTouch, tokenStillCurrent: false }), false)
+  // The local apns path has no relay credential to heal.
+  assert.equal(shouldReEnrollRelayToken('apns', 'failed', 'HTTP 401', zeroTouch), false)
 })
 
 test('an unreadable APNs key degrades to a diagnostic failure', async () => {
