@@ -5,35 +5,34 @@ import {
 import type { Envelope, HelloAuthPayload } from './protocol.ts'
 import type { BridgeSink, HostBridge } from './host-bridge.ts'
 import type { DeviceStore, ApnsEnvironment } from './token.ts'
-import { isValidApnsToken, tokenMatches } from './token.ts'
+import { isValidApnsToken } from './token.ts'
+import {
+  AUTH_TIMEOUT_MS,
+  ERROR_CODES,
+  IMAGE_MEDIA_TYPES,
+  MAX_APP_VERSION_CHARS,
+  MAX_BASE64_CHARS_PER_IMAGE,
+  MAX_DEVICE_ID_CHARS,
+  MAX_DEVICE_NAME_CHARS,
+  MAX_OUTBOUND_BUFFER_BYTES,
+  MAX_PROMPT_IMAGES,
+  MAX_PROMPT_TEXT_CHARS,
+  PRE_AUTH_FRAME_BYTES,
+  helloTokenAccepted,
+  managementErrorCode,
+  pendingResponseErrorCode,
+  pendingResponseMessage,
+  sanitizeDeviceField,
+  sanitizeImageName,
+} from './connection-policy.ts'
 
-export const AUTH_TIMEOUT_MS = 5_000
-export const MAX_OUTBOUND_BUFFER_BYTES = 4 * 1024 * 1024
-/**
- * Pre-auth frame cap. The 64 MiB cap on a fully authenticated socket exists
- * to support multi-MB image attachments; before hello the only legal frames
- * are c2s.ping and c2s.hello.auth, neither of which can legitimately exceed
- * a few KB. Capping unauthenticated frames at 64 KiB keeps an anonymous TCP
- * peer from forcing expensive JSON.parse work on a 64 MiB payload inside
- * the 5-second auth window.
- */
-export const PRE_AUTH_FRAME_BYTES = 64 * 1024
-const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
-const MAX_PROMPT_IMAGES = 4
-const MAX_BASE64_CHARS_PER_IMAGE = 8 * 1024 * 1024
-/** Bounds a single prompt's text; the frame itself is capped by ws maxPayload. */
-const MAX_PROMPT_TEXT_CHARS = 256 * 1024
-// Client-supplied identity fields land in logs and devices.json — keep them
-// short and free of control characters so they can neither flood the registry
-// nor forge log lines.
-const MAX_DEVICE_ID_CHARS = 128
-const MAX_DEVICE_NAME_CHARS = 64
-const MAX_APP_VERSION_CHARS = 32
+export {
+  AUTH_TIMEOUT_MS,
+  MAX_OUTBOUND_BUFFER_BYTES,
+  PRE_AUTH_FRAME_BYTES,
+  helloTokenAccepted,
+} from './connection-policy.ts'
 
-function sanitizeDeviceField(value: unknown, maxChars: number): string {
-  const raw = typeof value === 'string' ? value : String(value ?? '')
-  return raw.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, maxChars)
-}
 
 export interface ConnectionStateDeps {
   bridge: HostBridge
@@ -56,13 +55,6 @@ export interface ConnectionStateDeps {
   onPushEnrollKey?: (enrollKey: string) => Promise<void> | void
 }
 
-export function helloTokenAccepted(
-  transportAuthenticated: boolean | undefined,
-  presentedToken: string | undefined,
-  expectedToken: string,
-): boolean {
-  return transportAuthenticated === true || tokenMatches(presentedToken, expectedToken)
-}
 
 /**
  * One connected phone. Implements BridgeSink so the HostBridge can push
@@ -597,54 +589,5 @@ export class BridgeConnection implements BridgeSink {
         this.resync()
       }
     }
-  }
-}
-
-function sanitizeImageName(value: string): string {
-  return value.replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, 120)
-}
-
-const ERROR_CODES = {
-  E_AUTH: 'token missing or invalid',
-  E_PROTOCOL: 'unknown type or malformed payload',
-  E_NOT_FOUND: 'session or request not found',
-  E_BUSY: 'session is busy',
-  E_UNSUPPORTED: 'protocol version or capability unsupported',
-  E_INTERNAL: 'internal error',
-} as const
-
-/** Error code for a failed approval/question response outcome. */
-function pendingResponseErrorCode(reason: 'not-pending' | 'bad-response' | 'transport'): keyof typeof ERROR_CODES {
-  switch (reason) {
-    case 'not-pending': return 'E_NOT_FOUND'
-    // The host refused the answer batch (shape/labels mismatch) — a client
-    // payload problem, not a missing pending request.
-    case 'bad-response': return 'E_PROTOCOL'
-    case 'transport': return 'E_INTERNAL'
-  }
-}
-
-/** Human-readable failure detail; `question not pending` must only ever mean
- * "nothing pending", never "the host rejected the answer". */
-function pendingResponseMessage(
-  kind: 'approval' | 'question',
-  reason: 'not-pending' | 'bad-response' | 'transport',
-): string {
-  switch (reason) {
-    case 'not-pending': return kind + ' not pending'
-    case 'bad-response': return kind + ' answer rejected by host: answer does not match the asked questions'
-    case 'transport': return 'host connection failed while answering ' + kind
-  }
-}
-
-function managementErrorCode(
-  kind: 'unsupported' | 'not-found' | 'busy' | 'invalid' | 'internal',
-): keyof typeof ERROR_CODES {
-  switch (kind) {
-    case 'unsupported': return 'E_UNSUPPORTED'
-    case 'not-found': return 'E_NOT_FOUND'
-    case 'busy': return 'E_BUSY'
-    case 'invalid': return 'E_PROTOCOL'
-    case 'internal': return 'E_INTERNAL'
   }
 }

@@ -349,6 +349,11 @@ test('turn end fans out one push per event with the same facts as s2c.notify', a
 
     const notify = collected.find((f) => f.type === 's2c.notify')
     assert.ok(notify, 'ws data plane still receives the notify frame')
+    const turnEndIndex = collected.findIndex((frame) =>
+      frame.type === 's2c.session.event' && frame.payload.kind === 'turn.end')
+    const notifyIndex = collected.findIndex((frame) => frame === notify)
+    assert.ok(turnEndIndex >= 0 && turnEndIndex < notifyIndex,
+      'turn state must precede its notification projection')
     assert.equal(h.fanOutCalls.length, 1, 'exactly one offline push mirrors the notify')
     const pushed = h.fanOutCalls[0]
     assert.equal(pushed.category, 'turn.completed')
@@ -537,6 +542,17 @@ test('approval and question requests also emit s2c.notify frames (N1 protocol pa
     assert.equal(question?.payload.title, '有问题需要回答')
     assert.equal(question?.payload.body, '选 A 还是 B？')
     assert.equal(question?.payload.notificationId, 'q-rpc-q-n')
+
+    const approvalPendingIndex = collected.findIndex((frame) =>
+      frame.type === 's2c.pending.approval' && frame.payload.requestId === 'apr-n1')
+    const approvalNotifyIndex = collected.findIndex((frame) => frame === approval)
+    const questionPendingIndex = collected.findIndex((frame) =>
+      frame.type === 's2c.pending.question' && frame.payload.requestId === 'q-rpc-q-n')
+    const questionNotifyIndex = collected.findIndex((frame) => frame === question)
+    assert.ok(approvalPendingIndex >= 0 && approvalPendingIndex < approvalNotifyIndex,
+      'approval state must precede its notification projection')
+    assert.ok(questionPendingIndex >= 0 && questionPendingIndex < questionNotifyIndex,
+      'question state must precede its notification projection')
 
     // s2c.notify must carry a seq number so it joins the replay ring
     // (PROTOCOL §6 + §7). The seq lives at the envelope level; the BridgeSink

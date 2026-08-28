@@ -66,7 +66,7 @@ interface PendingSnapshotPayload {
   questions: PendingQuestionPayload[];
 }
 //#endregion
-//#region src/host-bridge.d.ts
+//#region src/host-api.d.ts
 interface RpcOk<T> {
   ok: true;
   value: T;
@@ -357,6 +357,8 @@ interface PushOutlet {
    */
   isAvailable(): boolean;
 }
+//#endregion
+//#region src/host-bridge.d.ts
 declare class HostBridge {
   private readonly apiProxy;
   private readonly historyBufferMax;
@@ -386,6 +388,7 @@ declare class HostBridge {
     approvals: boolean;
     questions: boolean;
     pendingSnapshot: boolean;
+    notifyAllCategories: boolean;
     models: boolean;
     sessionManagement: boolean;
     projectSelection: boolean;
@@ -491,39 +494,7 @@ declare class HostBridge {
   respondQuestion(requestId: string, answers: unknown): Promise<PendingResponseOutcome>;
 }
 //#endregion
-//#region src/index.d.ts
-/** Prune only when the provider supplies an authoritative token-lifecycle verdict. */
-declare function shouldPrunePushToken(outcome: 'sent' | 'invalid-token' | 'failed', reason?: string): boolean;
-/**
- * Zero-touch relay self-heal: the relay answering 401 means its registry no
- * longer honors our cached credential — a rotated server secret, a lost
- * registry file, or a deliberately revoked record. Only auto-enrolled
- * zero-touch cells may re-derive the credential (deterministic issuance makes
- * the round trip idempotent on a healthy relay, and the relay refuses to
- * re-issue revoked clientIds). An explicitly configured relayToken is a user
- * setting: 401 stays a config error the user must fix, never rewritten here.
- */
-declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 'sent' | 'invalid-token' | 'failed', reason: string | undefined, opts: {
-  usedCellToken: boolean;
-  hasEnrollKey: boolean;
-  tokenStillCurrent: boolean;
-}): boolean;
-/**
- * dsh-deeppilot — data bridge between the DSH host and DeepPilot
- * clients. Registers exactly one WebSocket upgrade route (/phone) plus an
- * optional health probe (/phone/health) on the existing web server. The web
- * UI is never touched.
- *
- * Data plane: an in-process HostBridge consumes apiProxy.events.mux()/host()
- * streams, mirrors session summaries, tracks pending approvals/questions,
- * and fans projected protocol-v1 pushes out to every connected device.
- *
- * Protocol: src/protocol.ts, v1. The private app repository carries the
- * matching normative document and Swift models.
- */
-declare const name = "deeppilot";
-/** No eager service requirement: profiles without a web stack simply skip. */
-declare const inject: string[];
+//#region src/config.d.ts
 interface Config {
   /** Master switch; when false the plugin activates and does nothing. */
   enabled?: boolean;
@@ -545,28 +516,23 @@ interface Config {
     funnelPort?: 443 | 8443 | 10000;
   };
   /**
-   * Offline push (F-9). provider 'apns' sends direct Apple Push Notification
-   * deliveries from this Mac — outbound-only, no relay server, requires the
-   * user's own Apple developer credentials. provider 'relay' forwards notify
-   * projections to an operator-run relay (relay/server.js) holding the
-   * distributor's key — used when the App ships via TestFlight/App Store.
-   *
-   * Deliberately NO environment knob here: each device reports its own
-   * environment when registering (derived from its build kind), and
-   * deliveries route per device — mixed dev/TestFlight phones coexist.
+   * Offline push (F-9). `apns` sends directly from the Mac with the user's
+   * Apple credentials. `relay` sends notify projections to an operator-run
+   * relay for distributed builds. The device reports its own APNs environment,
+   * so development and TestFlight/App Store devices may coexist.
    */
   push?: {
-    /** 'none' (default) | 'apns' | 'relay'. */
+    /** `none` (default), `apns`, or `relay`. */
     provider?: 'none' | 'apns' | 'relay';
     /** Apple Developer team id (JWT iss claim). */
     teamId?: string;
     /** APNs auth key id (JWT kid header). */
     keyId?: string;
-    /** .p8 private key path; generated keys live under the bridge data dir. */
+    /** `.p8` private key path. */
     keyPath?: string;
     /** App bundle id — the apns-topic header. */
     bundleId?: string;
-    /** Relay base URL (https). See relay/README.md. */
+    /** Relay base URL. */
     relayUrl?: string;
     /** Per-user bearer token issued by the relay operator. */
     relayToken?: string;
@@ -649,8 +615,43 @@ declare const Config: z<Schemastery.ObjectS<{
     relayToken: z<string, string>;
   }>>;
 }>>;
+//#endregion
+//#region src/phone-http.d.ts
 /** Authorization is preferred; the query form remains for older app builds. */
 declare function requestToken(req: Pick<IncomingMessage, 'url' | 'headers'>): string | null;
+//#endregion
+//#region src/push-policy.d.ts
+/** Prune only when the provider supplies an authoritative token-lifecycle verdict. */
+declare function shouldPrunePushToken(outcome: 'sent' | 'invalid-token' | 'failed', reason?: string): boolean;
+/**
+ * Zero-touch relay self-heal: HTTP 401 means the relay no longer honors the
+ * cached credential. Only auto-enrolled cells with a still-current token may
+ * re-derive it; an explicitly configured relay token remains user-owned
+ * configuration and is never silently rewritten.
+ */
+declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 'sent' | 'invalid-token' | 'failed', reason: string | undefined, opts: {
+  usedCellToken: boolean;
+  hasEnrollKey: boolean;
+  tokenStillCurrent: boolean;
+}): boolean;
+//#endregion
+//#region src/index.d.ts
+/**
+ * dsh-deeppilot — data bridge between the DSH host and DeepPilot
+ * clients. Registers exactly one WebSocket upgrade route (/phone) plus an
+ * optional health probe (/phone/health) on the existing web server. The web
+ * UI is never touched.
+ *
+ * Data plane: an in-process HostBridge consumes apiProxy.events.mux()/host()
+ * streams, mirrors session summaries, tracks pending approvals/questions,
+ * and fans projected protocol-v1 pushes out to every connected device.
+ *
+ * Protocol: PROTOCOL.md is normative; src/protocol.ts and the private app's
+ * Swift models mirror that v1 contract.
+ */
+declare const name = "deeppilot";
+/** No eager service requirement: profiles without a web stack simply skip. */
+declare const inject: string[];
 declare function apply(ctx: Context, options: unknown): void;
 //#endregion
 export { Config, HostBridge, apply, inject, name, requestToken, shouldPrunePushToken, shouldReEnrollRelayToken };

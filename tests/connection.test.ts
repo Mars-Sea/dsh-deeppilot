@@ -157,6 +157,7 @@ test('hello registers a sanitized device and sends welcome with capabilities', a
   assert.equal(typeof lastFrame(ws).payload.cursor, 'number')
   assert.ok(lastFrame(ws).payload.capabilities.replay === true)
   assert.ok(lastFrame(ws).payload.capabilities.pendingSnapshot === true)
+  assert.ok(lastFrame(ws).payload.capabilities.notifyAllCategories === true)
 
   const rows = store.list()
   assert.equal(rows.length, 1)

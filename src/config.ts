@@ -1,0 +1,103 @@
+import { join } from 'node:path'
+import z from '@deepseek-ai/schemastery'
+import { DEFAULT_REMOTE_HOSTNAME } from './remote-supervisor.ts'
+import { bridgeDataDir } from './token.ts'
+
+export interface Config {
+  /** Master switch; when false the plugin activates and does nothing. */
+  enabled?: boolean
+  /** Pairing token file (0600); generated on first boot when missing. */
+  authTokenPath?: string
+  /** Paired-device registry JSON path. */
+  devicesPath?: string
+  /** Replay ring buffer bound (frames) per deployment. */
+  historyBufferMax?: number
+  /** Verbose per-frame diagnostics (never prints token or message bodies). */
+  debug?: boolean
+  /** Optional embedded remote transport. Reconciled when settings change. */
+  remote?: {
+    enabled?: boolean
+    provider?: 'tailscale-funnel'
+    hostname?: string
+    statePath?: string
+    helperPath?: string
+    funnelPort?: 443 | 8443 | 10000
+  }
+  /**
+   * Offline push (F-9). `apns` sends directly from the Mac with the user's
+   * Apple credentials. `relay` sends notify projections to an operator-run
+   * relay for distributed builds. The device reports its own APNs environment,
+   * so development and TestFlight/App Store devices may coexist.
+   */
+  push?: {
+    /** `none` (default), `apns`, or `relay`. */
+    provider?: 'none' | 'apns' | 'relay'
+    /** Apple Developer team id (JWT iss claim). */
+    teamId?: string
+    /** APNs auth key id (JWT kid header). */
+    keyId?: string
+    /** `.p8` private key path. */
+    keyPath?: string
+    /** App bundle id — the apns-topic header. */
+    bundleId?: string
+    /** Relay base URL. */
+    relayUrl?: string
+    /** Per-user bearer token issued by the relay operator. */
+    relayToken?: string
+  }
+}
+
+/** Operator-run relay used by distributed builds; overridable via config. */
+export const DEFAULT_RELAY_URL = 'https://pilot.hailab.dev'
+
+export const Config = z.object({
+  enabled: z.boolean().default(true),
+  authTokenPath: z.string().default(join(bridgeDataDir(), 'auth-token')),
+  devicesPath: z.string().default(join(bridgeDataDir(), 'devices.json')),
+  historyBufferMax: z.natural().min(100).default(2000),
+  debug: z.boolean().default(false),
+  remote: z.object({
+    enabled: z.boolean().default(false),
+    provider: z.union(['tailscale-funnel'] as const).default('tailscale-funnel'),
+    hostname: z.string().default(DEFAULT_REMOTE_HOSTNAME),
+    statePath: z.string().default(join(bridgeDataDir(), 'tailscale')),
+    helperPath: z.string().default(''),
+    funnelPort: z.union([443, 8443, 10000] as const).default(443),
+  }).default({
+    enabled: false,
+    provider: 'tailscale-funnel',
+    hostname: DEFAULT_REMOTE_HOSTNAME,
+    statePath: join(bridgeDataDir(), 'tailscale'),
+    helperPath: '',
+    funnelPort: 443,
+  }),
+  push: z.object({
+    provider: z.union(['none', 'apns', 'relay'] as const).default('none'),
+    teamId: z.string().default(''),
+    keyId: z.string().default(''),
+    keyPath: z.string().default(join(bridgeDataDir(), 'apns', 'AuthKey.p8')),
+    bundleId: z.string().default('dev.hailab.deeppilot'),
+    relayUrl: z.string().default(DEFAULT_RELAY_URL),
+    relayToken: z.string().default(''),
+  }).default({
+    provider: 'none',
+    teamId: '',
+    keyId: '',
+    keyPath: join(bridgeDataDir(), 'apns', 'AuthKey.p8'),
+    bundleId: 'dev.hailab.deeppilot',
+    relayUrl: DEFAULT_RELAY_URL,
+    relayToken: '',
+  }),
+})
+
+/**
+ * Cordis hands the second argument in different shapes depending on host
+ * composition: a reactive options getter, the resolved config value, or
+ * nothing when the patch row omits `config`. Normalize all of them.
+ */
+export function normalizeOptions(options: unknown): Config {
+  if (typeof options === 'function') return (options as () => Config)()
+  if (options && typeof options === 'object') return options as Config
+  const validated = (Config as unknown as (data: unknown) => Config)(undefined)
+  return validated ?? {}
+}

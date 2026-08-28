@@ -5,6 +5,7 @@ import {
   interpolate,
   registerLocale,
   t,
+  translateWith,
   translateOrThrow,
   type SupportedLocale,
 } from '../src/client/i18n.ts'
@@ -60,11 +61,32 @@ test('interpolate coerces non-string placeholders', () => {
 
 // ---------- t() resolution ----------
 
-test('t() returns the Chinese string when no ctx is provided', () => {
+test('t() uses the English fallback when no locale context is available', () => {
   // No ctx → detectLocale returns 'en' (we cannot introspect a host). The
   // "en" table is the source of truth, so we should get English back.
   assert.equal(t(undefined, 'nav'), 'DeepPilot')
   assert.equal(t(undefined, 'help.step1').startsWith('Turn on'), true)
+})
+
+test('translateWith calls the locale-aware slot translator directly', () => {
+  const zh = (key: string, vars?: Readonly<Record<string, unknown>>) =>
+    interpolate(translateOrThrow('zh', key), vars)
+  assert.equal(translateWith(zh, 'help.step1').startsWith('先打开'), true)
+  assert.equal(
+    translateWith(zh, 'pair.qrHint', { kind: '内网' }),
+    '二维码包含内网地址和配对 Token，将在 60 秒后自动隐藏。',
+  )
+})
+
+test('t() uses the locale snapshot when a namespace lookup is missing', () => {
+  const ctx = {
+    locale: {
+      register: () => () => {},
+      bind: () => (key: string) => key,
+      getSnapshot: () => ({ active: 'zh', revision: 1 }),
+    },
+  }
+  assert.equal(t(ctx as never, 'help.step1').startsWith('先打开'), true)
 })
 
 test('t() substitutes placeholders when a vars object is passed', () => {
@@ -77,8 +99,8 @@ test('t() substitutes placeholders when a vars object is passed', () => {
 })
 
 test('t() falls back to the host locale face when one is available', () => {
-  // Simulate a host whose locale face is set to Chinese. The bind()
-  // function returns the Chinese string for the sentinel key "nav".
+  // Simulate a host whose locale face is set to Chinese. The bound
+  // translator is authoritative when it knows the requested key.
   const ctx = {
     locale: {
       register: () => undefined,
@@ -88,24 +110,21 @@ test('t() falls back to the host locale face when one is available', () => {
       },
     },
   }
-  // Once the host answers with Chinese for "nav", t() should mirror that
-  // and pull all subsequent keys from the zh table.
+  // Once the host answers in Chinese, t() should preserve that result.
   assert.equal(t(ctx as never, 'help.step1').startsWith('先打开'), true)
 })
 
-test('t() falls back to the zh table when the host face throws', () => {
+test('t() stays usable when the host locale face throws', () => {
   // A misbehaving host (throws on every key) is a recovery test: we must
-  // not blow up the page, and we must prefer the local zh fallback over
-  // a blank string.
+  // not blow up the page or return a blank string.
   const ctx = {
     locale: {
       register: () => undefined,
       bind: () => () => { throw new Error('host down') },
     },
   }
-  // The probe ('nav') throws, so detectLocale returns 'en'. With no
-  // answer from the host we fall through to the local en table. Either
-  // way the user must see a non-empty, non-{key} string.
+  // Snapshot/browser detection falls back to English when neither is
+  // available, but the user must still see a non-empty, non-key string.
   const value = t(ctx as never, 'help.step1')
   assert.ok(value.length > 0)
   assert.notEqual(value, 'help.step1')
@@ -125,16 +144,17 @@ test('t() returns the original key for genuinely missing entries (last-resort zh
 
 test('registerLocale forwards the zh+en table to the host', () => {
   let captured: { namespace: string; table: unknown } | null = null
+  let disposed = false
   const ctx = {
     locale: {
       register: (namespace: string, table: unknown) => {
         captured = { namespace, table }
-        return undefined
+        return () => { disposed = true }
       },
       bind: () => () => '',
     },
   }
-  registerLocale(ctx as never)
+  const dispose = registerLocale(ctx as never)
   assert.ok(captured !== null, 'registerLocale must call ctx.locale.register')
   const cap = captured as { namespace: string; table: unknown }
   assert.equal(cap.namespace, 'settings.deeppilot')
@@ -145,13 +165,16 @@ test('registerLocale forwards the zh+en table to the host', () => {
   assert.equal(table.en.nav, 'DeepPilot')
   assert.equal(table.zh['help.step1'].startsWith('先打开'), true)
   assert.equal(table.en['help.step1'].startsWith('Turn on'), true)
+  dispose()
+  assert.equal(disposed, true)
 })
 
 test('registerLocale is a no-op when the locale face is absent', () => {
   // The shape contract on Context leaves locale optional; missing must
   // not throw.
   const ctx: { locale?: unknown } = {}
-  assert.doesNotThrow(() => registerLocale(ctx as never))
+  const dispose = registerLocale(ctx as never)
+  assert.doesNotThrow(dispose)
 })
 
 // ---------- locale typing ----------

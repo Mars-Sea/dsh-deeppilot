@@ -25,8 +25,9 @@ import type { Context } from '@deepseek-ai/cordis'
 /** DSH runtime locale face — structural, not imported (the package is not
  *  on this plugin's dependency surface). */
 interface LocaleFace {
-  register: (namespace: string, table: unknown) => unknown
-  bind: (namespace: string) => (key: string) => string
+  register: (namespace: string, table: unknown) => () => void
+  bind: (namespace: string) => (key: string, vars?: Readonly<Record<string, unknown>>) => string
+  getSnapshot?: () => { active: string; revision: number }
 }
 
 interface AnyCtx extends Context {
@@ -41,6 +42,9 @@ export const DEEPPILOT_LOCALE_NS = 'settings.deeppilot'
  *  language switches the host exposes; the fallback picks `en` if a user
  *  ever requests a locale we don't translate. */
 export type SupportedLocale = 'zh' | 'en'
+
+/** Translation function injected by a locale-aware slot. */
+export type Translate = (key: string, vars?: Readonly<Record<string, unknown>>) => string
 
 interface LocaleTables {
   zh: Record<string, string>
@@ -431,22 +435,36 @@ export function interpolate(
   })
 }
 
-/** Detect the active language from the locale face if we can; otherwise
- *  fall back to `en` (the only locale the host cannot give us, by
- *  construction, is one we did not register for). */
+/** Detect the active language from the locale snapshot or browser hints. */
 function detectLocale(ctx: AnyCtx): SupportedLocale {
-  const bind = ctx.locale?.bind(DEEPPILOT_LOCALE_NS)
-  if (bind === undefined) return 'en'
-  // Round-trip a sentinel key — bind() is the source of truth for "current
-  // language". If it gives us back a Chinese string we are in zh; otherwise
-  // we treat any other response (including the en value) as "not zh".
   try {
-    const probe = bind('nav')
-    if (probe === TABLES.zh['nav']) return 'zh'
+    const active = ctx.locale?.getSnapshot?.().active
+    if (active === 'zh' || active?.toLowerCase().startsWith('zh-')) return 'zh'
+    if (active === 'en' || active?.toLowerCase().startsWith('en-')) return 'en'
   } catch {
-    return 'en'
+    // Fall through to browser hints when the locale face is unavailable.
   }
+
+  const htmlLanguage = typeof document === 'undefined' ? '' : document.documentElement.lang
+  if (htmlLanguage.toLowerCase().startsWith('zh')) return 'zh'
+  const browserLanguages = typeof navigator === 'undefined' ? [] : navigator.languages
+  if (browserLanguages.some((language) => language.toLowerCase().startsWith('zh'))) return 'zh'
   return 'en'
+}
+
+/**
+ * Invoke the translation function supplied to a locale-aware slot. Keeping
+ * this adapter distinct from `t(ctx, ...)` prevents a translator function
+ * from being mistaken for a Cordis Context, which previously forced every
+ * settings-page lookup through the English no-host fallback.
+ */
+export function translateWith(
+  translator: unknown,
+  key: string,
+  vars?: Readonly<Record<string, unknown>>,
+): string {
+  if (typeof translator !== 'function') return key
+  return (translator as Translate)(key, vars)
 }
 
 /** Translation function. Callers always go through this — never the
@@ -482,15 +500,11 @@ export function t(
   return interpolate(template, vars)
 }
 
-/** Register our two-language table on the locale face. Safe to call
- *  multiple times: the host's register() is idempotent on a stable
- *  namespace, and a `register()` of the same table twice is a no-op for
- *  built-in tables in the dsh-client-locale runtime. We do not throw on
- *  double-register — the only consequence of doing it twice is
- *  "second wins", which is the same thing. */
-export function registerLocale(ctx: Context): void {
+/** Register both dictionaries and return the host-owned disposer. */
+export function registerLocale(ctx: Context): () => void {
   const anyCtx = ctx as AnyCtx
-  anyCtx.locale?.register(DEEPPILOT_LOCALE_NS, {
+  if (anyCtx.locale === undefined) return () => {}
+  return anyCtx.locale.register(DEEPPILOT_LOCALE_NS, {
     zh: TABLES.zh,
     en: TABLES.en,
   })

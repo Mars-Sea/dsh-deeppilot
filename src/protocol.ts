@@ -1,6 +1,6 @@
 /**
  * DeepPilot Bridge Protocol v1 — shared frame vocabulary (TypeScript face).
- * The normative spec is protocol/PROTOCOL.md at the repo root; this module
+ * The normative spec is PROTOCOL.md at the repo root; this module
  * mirrors it for the plugin implementation. The iOS app hand-mirrors the
  * same shapes in Swift.
  */
@@ -87,6 +87,8 @@ export interface WelcomeCapabilities {
   questions: boolean
   /** Client can request the complete currently-pending approval/question set. */
   pendingSnapshot?: boolean
+  /** Bridge emits s2c.notify for all four notification categories. */
+  notifyAllCategories?: boolean
   models: boolean
   sessionManagement: boolean
   projectSelection: boolean

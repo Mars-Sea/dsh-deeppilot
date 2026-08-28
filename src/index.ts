@@ -5,7 +5,6 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import type { Duplex } from 'node:stream'
 import type { Context } from '@deepseek-ai/cordis'
-import z from '@deepseek-ai/schemastery'
 import { WebSocketServer } from 'ws'
 import { BridgeConnection } from './connection.ts'
 import { HostBridge } from './host-bridge.ts'
@@ -27,40 +26,10 @@ import {
 } from './remote-supervisor.ts'
 import { localLANIPv4Addresses } from './local-address.ts'
 import { UpdateChecker, type UpdateInfo } from './update-check.ts'
-
-/** Prune only when the provider supplies an authoritative token-lifecycle verdict. */
-export function shouldPrunePushToken(
-  outcome: 'sent' | 'invalid-token' | 'failed',
-  reason?: string,
-): boolean {
-  return outcome === 'invalid-token' && (reason === 'Unregistered' || reason === 'ExpiredToken')
-}
-
-/**
- * Zero-touch relay self-heal: the relay answering 401 means its registry no
- * longer honors our cached credential — a rotated server secret, a lost
- * registry file, or a deliberately revoked record. Only auto-enrolled
- * zero-touch cells may re-derive the credential (deterministic issuance makes
- * the round trip idempotent on a healthy relay, and the relay refuses to
- * re-issue revoked clientIds). An explicitly configured relayToken is a user
- * setting: 401 stays a config error the user must fix, never rewritten here.
- */
-export function shouldReEnrollRelayToken(
-  transport: 'apns' | 'relay',
-  outcome: 'sent' | 'invalid-token' | 'failed',
-  reason: string | undefined,
-  opts: { usedCellToken: boolean; hasEnrollKey: boolean; tokenStillCurrent: boolean },
-): boolean {
-  // RelayClient maps credential rejection to exactly this reason string.
-  return (
-    transport === 'relay' &&
-    outcome === 'failed' &&
-    reason === 'HTTP 401' &&
-    opts.hasEnrollKey &&
-    opts.usedCellToken &&
-    opts.tokenStillCurrent
-  )
-}
+import { Config, DEFAULT_RELAY_URL, normalizeOptions } from './config.ts'
+import type { Config as PluginConfig } from './config.ts'
+import { rejectUpgrade, requestToken } from './phone-http.ts'
+import { shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
 
 /**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
@@ -72,110 +41,20 @@ export function shouldReEnrollRelayToken(
  * streams, mirrors session summaries, tracks pending approvals/questions,
  * and fans projected protocol-v1 pushes out to every connected device.
  *
- * Protocol: src/protocol.ts, v1. The private app repository carries the
- * matching normative document and Swift models.
+ * Protocol: PROTOCOL.md is normative; src/protocol.ts and the private app's
+ * Swift models mirror that v1 contract.
  */
 
 export const name = 'deeppilot'
 
 export { HostBridge } from './host-bridge.ts'
+export { Config } from './config.ts'
+export { requestToken } from './phone-http.ts'
+export { shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
 
 /** No eager service requirement: profiles without a web stack simply skip. */
 export const inject: string[] = []
 
-export interface Config {
-  /** Master switch; when false the plugin activates and does nothing. */
-  enabled?: boolean
-  /** Pairing token file (0600); generated on first boot when missing. */
-  authTokenPath?: string
-  /** Paired-device registry JSON path. */
-  devicesPath?: string
-  /** Replay ring buffer bound (frames) per deployment. */
-  historyBufferMax?: number
-  /** Verbose per-frame diagnostics (never prints token or message bodies). */
-  debug?: boolean
-  /** Optional embedded remote transport. Reconciled when settings change. */
-  remote?: {
-    enabled?: boolean
-    provider?: 'tailscale-funnel'
-    hostname?: string
-    statePath?: string
-    helperPath?: string
-    funnelPort?: 443 | 8443 | 10000
-  }
-  /**
-   * Offline push (F-9). provider 'apns' sends direct Apple Push Notification
-   * deliveries from this Mac — outbound-only, no relay server, requires the
-   * user's own Apple developer credentials. provider 'relay' forwards notify
-   * projections to an operator-run relay (relay/server.js) holding the
-   * distributor's key — used when the App ships via TestFlight/App Store.
-   *
-   * Deliberately NO environment knob here: each device reports its own
-   * environment when registering (derived from its build kind), and
-   * deliveries route per device — mixed dev/TestFlight phones coexist.
-   */
-  push?: {
-    /** 'none' (default) | 'apns' | 'relay'. */
-    provider?: 'none' | 'apns' | 'relay'
-    // --- apns ---
-    /** Apple Developer team id (JWT iss claim). */
-    teamId?: string
-    /** APNs auth key id (JWT kid header). */
-    keyId?: string
-    /** .p8 private key path; generated keys live under the bridge data dir. */
-    keyPath?: string
-    /** App bundle id — the apns-topic header. */
-    bundleId?: string
-    // --- relay ---
-    /** Relay base URL (https). See relay/README.md. */
-    relayUrl?: string
-    /** Per-user bearer token issued by the relay operator. */
-    relayToken?: string
-  }
-}
-
-/** Operator-run relay used by distributed builds; overridable via config. */
-const DEFAULT_RELAY_URL = 'https://pilot.hailab.dev'
-
-export const Config = z.object({
-  enabled: z.boolean().default(true),
-  authTokenPath: z.string().default(join(bridgeDataDir(), 'auth-token')),
-  devicesPath: z.string().default(join(bridgeDataDir(), 'devices.json')),
-  historyBufferMax: z.natural().min(100).default(2000),
-  debug: z.boolean().default(false),
-  remote: z.object({
-    enabled: z.boolean().default(false),
-    provider: z.union(['tailscale-funnel'] as const).default('tailscale-funnel'),
-    hostname: z.string().default(DEFAULT_REMOTE_HOSTNAME),
-    statePath: z.string().default(join(bridgeDataDir(), 'tailscale')),
-    helperPath: z.string().default(''),
-    funnelPort: z.union([443, 8443, 10000] as const).default(443),
-  }).default({
-    enabled: false,
-    provider: 'tailscale-funnel',
-    hostname: DEFAULT_REMOTE_HOSTNAME,
-    statePath: join(bridgeDataDir(), 'tailscale'),
-    helperPath: '',
-    funnelPort: 443,
-  }),
-  push: z.object({
-    provider: z.union(['none', 'apns', 'relay'] as const).default('none'),
-    teamId: z.string().default(''),
-    keyId: z.string().default(''),
-    keyPath: z.string().default(join(bridgeDataDir(), 'apns', 'AuthKey.p8')),
-    bundleId: z.string().default('dev.hailab.deeppilot'),
-    relayUrl: z.string().default(DEFAULT_RELAY_URL),
-    relayToken: z.string().default(''),
-  }).default({
-    provider: 'none',
-    teamId: '',
-    keyId: '',
-    keyPath: join(bridgeDataDir(), 'apns', 'AuthKey.p8'),
-    bundleId: 'dev.hailab.deeppilot',
-    relayUrl: DEFAULT_RELAY_URL,
-    relayToken: '',
-  }),
-})
 
 interface WebServerLike {
   register(route: {
@@ -225,57 +104,6 @@ function readOwnPackageVersion(): string {
   return '0.0.0+unknown'
 }
 
-function rejectUpgrade(socket: Duplex, status: number, reason: string): void {
-  const body = JSON.stringify({ error: reason })
-  const statusText: Record<number, string> = {
-    401: 'Unauthorized',
-    429: 'Too Many Requests',
-    500: 'Internal Server Error',
-    503: 'Service Unavailable',
-  }
-  const authenticate = status === 401 ? 'WWW-Authenticate: Bearer realm="deeppilot"\r\n' : ''
-  socket.end(
-    'HTTP/1.1 ' + status + ' ' + (statusText[status] ?? 'Error') + '\r\n' +
-    authenticate +
-    'Content-Type: application/json\r\n' +
-    'Content-Length: ' + Buffer.byteLength(body) + '\r\n' +
-    'Connection: close\r\n' +
-    '\r\n' +
-    body,
-  )
-}
-
-/** Authorization is preferred; the query form remains for older app builds. */
-export function requestToken(req: Pick<IncomingMessage, 'url' | 'headers'>): string | null {
-  const authorization = req.headers.authorization
-  if (typeof authorization === 'string') {
-    const match = /^Bearer\s+(.+)$/i.exec(authorization.trim())
-    if (match?.[1]) return match[1]
-  }
-  try {
-    return new URL(req.url ?? '/', 'http://phone.local').searchParams.get('token')
-  } catch {
-    return null
-  }
-}
-
-/**
- * Cordis hands the second argument in different shapes depending on host
- * composition: a reactive options getter, the resolved config value, or
- * nothing when the patch row omits `config`. Normalize all of them.
- */
-function normalizeOptions(options: unknown): Config {
-  if (typeof options === 'function') {
-    return (options as () => Config)()
-  }
-  if (options && typeof options === 'object') {
-    return options as Config
-  }
-  // Validate undefined through the schema so every default applies.
-  const validated = (Config as unknown as (data: unknown) => Config)(undefined)
-  return validated ?? {}
-}
-
 export function apply(ctx: Context, options: unknown): void {
   const cfg = normalizeOptions(options)
 
@@ -301,10 +129,10 @@ export function apply(ctx: Context, options: unknown): void {
   // `enabled` decides whether the bridge starts at all (next restart). This is
   // registered unconditionally so the master switch stays reachable even while
   // the bridge is off — otherwise a disabled bridge could never be re-enabled.
-  installSettingsSection<Config>(
+  installSettingsSection<PluginConfig>(
     ctx,
     settingsNamespace('deeppilot'),
-    Config as unknown as z<Config>,
+    Config as unknown as Parameters<typeof installSettingsSection<PluginConfig>>[2],
     normalizeOptions(undefined),
     {
     setSource: (source) => {

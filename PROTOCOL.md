@@ -43,7 +43,7 @@
 { "type": "s2c.welcome", "payload": {
   "protocolVersion": 1,
   "serverVersion": "0.1.0",
-  "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "pendingSnapshot": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true },
+  "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "pendingSnapshot": true, "notifyAllCategories": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true },
   "cursor": 1042,
   "resumed": true
 } }
@@ -378,11 +378,20 @@ APNs 只承载通知投影，不承载回答所需的 requestId 和完整问题�
 ```
 
 - category：turn.completed | approval.required | question.asked | session.error。
-- WebSocket 上，turn 完成/异常使用 `s2c.notify`；审批和问题的可回答事实使用
-  `s2c.pending.approval` / `s2c.pending.question`，不再重复发送同类别 `s2c.notify`。
-  APNs 仍使用上述四类 category 作为离线通知投影。
-- 触发规则（F-9）：turn 结束且该设备未打开此会话；出现 pending.approval / pending.question；会话 error。
-- notify 计入 seq 游标参与重放。
+- `welcome.capabilities.notifyAllCategories=true` 表示 Bridge 会为上述四类事件统一发送
+  `s2c.notify`。此时客户端只能从 `s2c.notify` 触发横幅、声音等通知展示，不得再从
+  `s2c.session.event(turn.end)`、`s2c.pending.approval` 或 `s2c.pending.question` 重复展示。
+- `s2c.session.event` 和 `s2c.pending.*` 仍是会话内容、待处理状态及回答操作的权威数据源；
+  `s2c.notify` 只是面向用户的展示投影。Bridge 必须先记录权威事件，再记录对应 notify，
+  以保证按 seq 重放时状态先于通知到达。
+- 旧 Bridge 缺失 `notifyAllCategories` 时，客户端可继续从 turn.end / pending.* 做兼容回退；
+  一旦能力为 true，就必须关闭这些回退分支。
+- 触发规则（F-9）：对未打开该会话的在线设备，在 turn 结束、出现
+  pending.approval / pending.question 或会话 error 时发送；离线设备走同事实的 APNs 投影。
+- `notificationId` 标识同一个逻辑通知，在实时 WS、WS 重放和 APNs 投影之间保持稳定；
+  客户端应按该字段幂等去重。notify 计入 seq 游标参与重放。
+- `title` / `body` 是可直接展示的回退文本；客户端可按已知 category 使用本地化标题，
+  但不得改写动态 body 或依赖 title 文案判断类别。
 
 ### 离线推送（APNs，v1.x 追加）
 
@@ -453,5 +462,7 @@ token 后发送：
 ## 10. 能力协商与版本策略
 
 - welcome.capabilities 中为 false 的能力，客户端不得调用对应 c2s 帧（服务端将回 E_UNSUPPORTED）。
+- `notifyAllCategories` 是服务端投影保证而非新请求权限：缺失/false 表示客户端保留旧事件
+  通知回退，true 表示四类通知均由 `s2c.notify` 唯一负责展示。
 - v1.x 新增字段一律向后兼容：双方必须忽略未知字段。
 - 破坏性变更升级 v 为 2，v1 保持可用一个过渡期。
