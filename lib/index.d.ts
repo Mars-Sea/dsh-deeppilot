@@ -404,6 +404,12 @@ declare class HostBridge {
   markSinkClosed(sink: BridgeSink, sessionId: string): void;
   dropSinkSessions(sink: BridgeSink): void;
   private isViewedBy;
+  /** F-9: when a notification-worthy event fires, mirror it to every
+   *  online device that is not currently viewing the session (the s2c.notify
+   *  frame counts toward the seq cursor and joins the replay ring per
+   *  PROTOCOL §6 + §7), then fan the same payload out to offline devices
+   *  holding an APNs token. */
+  private emitNotify;
   /** F-9: when a turn completes, notify every device not viewing the session. */
   private emitTurnCompletedNotify;
   /**

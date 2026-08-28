@@ -54,9 +54,13 @@ export async function loadOrCreateToken(tokenPath: string): Promise<string> {
     const existing = (await readFile(full, 'utf8')).trim()
     if (existing.length >= 32) return existing
     // Existing-but-truncated auth material is evidence of storage corruption,
-    // not a first launch. Replacing it here silently invalidates every paired
-    // phone and destroys the only clue explaining the disconnect.
-    throw new Error(`pairing token is malformed at ${full}`)
+    // not a first launch. Preserve the broken file under a .corrupt sidecar
+    // (best effort) and fail loud: replacing it here silently invalidates
+    // every paired phone and destroys the only clue explaining the
+    // disconnect, while a missing sidecar makes the cause of "all devices
+    // 401'd after restart" untriagable.
+    await preserveCorruptSidecar(full)
+    throw new Error(`pairing token is malformed at ${full} (length=${existing.length}); original preserved as ${full}.corrupt`)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
@@ -64,6 +68,25 @@ export async function loadOrCreateToken(tokenPath: string): Promise<string> {
   await mkdir(dirname(full), { recursive: true })
   await writeFile(full, token + '\n', { mode: 0o600 })
   return token
+}
+
+/**
+ * Copy a malformed auth-token file to `<path>.corrupt` so a future operator
+ * can inspect what was on disk at the moment of corruption. Best-effort:
+ * a copy failure (permissions, full disk, ...) must not block the loud
+ * throw that actually surfaces the issue.
+ */
+async function preserveCorruptSidecar(full: string): Promise<void> {
+  try {
+    const original = await readFile(full)
+    const sidecar = `${full}.corrupt`
+    // Overwrite any previous sidecar; the most recent failure is the one
+    // operators care about, and stack-keeping risks leaking real secrets
+    // long after a token has been rotated.
+    await writeFile(sidecar, original, { mode: 0o600 })
+  } catch {
+    // best-effort: see function comment
+  }
 }
 
 /**

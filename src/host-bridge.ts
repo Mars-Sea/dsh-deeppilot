@@ -353,6 +353,41 @@ export class HostBridge {
     return this.sinkSessions.get(sink)?.has(sessionId) ?? false;
   }
 
+  /** F-9: when a notification-worthy event fires, mirror it to every
+   *  online device that is not currently viewing the session (the s2c.notify
+   *  frame counts toward the seq cursor and joins the replay ring per
+   *  PROTOCOL §6 + §7), then fan the same payload out to offline devices
+   *  holding an APNs token. */
+  private emitNotify(args: {
+    sessionId: string
+    category: NotifyCategory
+    title: string
+    body: string
+    notificationId: string
+  }): void {
+    if (this.subagentSessionIds.has(args.sessionId)) return;
+    const body = args.body.length > 120 ? args.body.slice(0, 119) + '…' : args.body;
+    this.record(
+      's2c.notify',
+      {
+        notificationId: args.notificationId,
+        category: args.category,
+        sessionId: args.sessionId,
+        title: args.title,
+        body,
+        ts: Date.now(),
+      },
+      (sink) => this.isViewedBy(sink, args.sessionId),
+    );
+    this.fanOutPush({
+      notificationId: args.notificationId,
+      category: args.category,
+      sessionId: args.sessionId,
+      title: args.title,
+      body,
+    });
+  }
+
   /** F-9: when a turn completes, notify every device not viewing the session. */
   private emitTurnCompletedNotify(sessionId: string, ok: boolean): void {
     if (this.subagentSessionIds.has(sessionId)) return;
@@ -360,18 +395,13 @@ export class HostBridge {
     const row = this.summaries.get(sessionId);
     const title = ok ? '任务完成' : '任务异常结束';
     const body = this.lastAssistantText.get(sessionId) ?? row?.title ?? '';
-    const truncatedBody = body.length > 120 ? body.slice(0, 119) + '…' : body;
-    const category: NotifyCategory = ok ? 'turn.completed' : 'session.error';
-    const notificationId = 'n-' + (this.cursor + 1);
-    this.record('s2c.notify', {
-      notificationId,
-      category,
+    this.emitNotify({
       sessionId,
+      category: ok ? 'turn.completed' : 'session.error',
       title,
-      body: truncatedBody,
-      ts: Date.now(),
-    }, (sink) => this.isViewedBy(sink, sessionId));
-    this.fanOutPush({ notificationId, category, sessionId, title, body: truncatedBody });
+      body,
+      notificationId: 'n-' + (this.cursor + 1),
+    });
   }
 
   /**
@@ -531,27 +561,28 @@ export class HostBridge {
         if (!p.approvalId || !frame.rpcId) break;
         const toolName = String(p.toolName ?? 'tool');
         const summary = String(p.reason ?? '');
+        const sessionId = String(p.sessionId ?? '');
         this.approvals.set(p.approvalId, {
           rpcId: frame.rpcId,
-          sessionId: String(p.sessionId ?? ''),
+          sessionId,
           toolName,
           reason: summary,
         });
         this.record('s2c.pending.approval', {
           requestId: p.approvalId,
-          sessionId: String(p.sessionId ?? ''),
+          sessionId,
           toolName,
           summary,
           riskLevel: riskOf(toolName),
         });
-        this.fanOutPush({
-          notificationId: 'apr-' + p.approvalId,
+        this.emitNotify({
+          sessionId,
           category: 'approval.required',
-          sessionId: String(p.sessionId ?? ''),
           title: '需要批准',
           body: toolName + ': ' + summary,
+          notificationId: 'apr-' + p.approvalId,
         });
-        this.bumpPendingFlags(String(p.sessionId ?? ''));
+        this.bumpPendingFlags(sessionId);
         break;
       }
       case 'approval/resolved': {
@@ -570,12 +601,12 @@ export class HostBridge {
         const sessionId = String(p?.sessionId ?? '');
         this.questions.set(requestId, { rpcId: frame.rpcId, sessionId, questions: p?.questions });
         this.record('s2c.pending.question', { requestId, sessionId, questions: p?.questions ?? [] });
-        this.fanOutPush({
-          notificationId: requestId,
-          category: 'question.asked',
+        this.emitNotify({
           sessionId,
+          category: 'question.asked',
           title: '有问题需要回答',
           body: firstQuestionText(p?.questions),
+          notificationId: requestId,
         });
         this.bumpPendingFlags(sessionId);
         break;

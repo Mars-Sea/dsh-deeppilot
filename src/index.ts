@@ -391,7 +391,15 @@ export function apply(ctx: Context, options: unknown): void {
         // first boot: no enrollment yet
       }
     } catch (error) {
-      log('auth material unavailable, bridge degraded: ' + String(error))
+      // A malformed auth-token is the only failure that warrants a louder
+      // signal than the generic "bridge degraded" line: every paired phone
+      // is about to be 401'd, and the .corrupt sidecar is the only artifact
+      // an operator has to figure out why.
+      const message = String(error)
+      if (message.includes('pairing token is malformed at')) {
+        console.warn('[deeppilot] ' + message)
+      }
+      log('auth material unavailable, bridge degraded: ' + message)
       return { token: null, devices: null }
     }
     return { token: auth.token, devices: auth.devices }

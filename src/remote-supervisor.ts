@@ -41,6 +41,28 @@ interface HelperEvent {
 }
 
 const RESTART_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
+/**
+ * Throttle for configuration-level failures (helper binary missing, state dir
+ * unwritable). The environment will not self-heal between attempts, so the
+ * previous "1s..30s exponential" backoff was a CPU/for-loop on a misconfigured
+ * Host. 60s matches the APNs sender-failure throttle on the host plugin
+ * (index.ts SENDER_FAILURE_RETRY_MS) and the relay enrollment throttle.
+ */
+const UNAVAILABLE_RETRY_MS = 60_000
+
+/**
+ * Exposed for tests: the backoff schedule depends on the failure category
+ * (unavailable = config, won't self-heal; crash = transient). Tying this to
+ * the constants above keeps the public schedule easy to assert against.
+ */
+export function restartDelayMs(kind: 'unavailable' | 'crash', attempt: number): number {
+  if (kind === 'unavailable') return UNAVAILABLE_RETRY_MS
+  const index = Math.min(attempt, RESTART_DELAYS_MS.length - 1)
+  // RESTART_DELAYS_MS is a non-empty literal array, so the indexed value is
+  // always defined; the explicit fallback is just to satisfy the strict
+  // noUncheckedIndexedAccess setting without a non-null assertion.
+  return RESTART_DELAYS_MS[index] ?? RESTART_DELAYS_MS[RESTART_DELAYS_MS.length - 1]!
+}
 
 export const DEFAULT_REMOTE_HOSTNAME = 'dsh-deeppilot'
 
@@ -187,7 +209,7 @@ export class RemoteSupervisor {
         ? `embedded tunnel helper unavailable: ${configured}: ${String(lastError ?? 'not found')}`
         : `embedded tunnel helper not found for ${platform} (tried: ${candidates.join(', ')}); set remote.helperPath to override`
       this.setStatus({ phase: 'unavailable', message })
-      this.scheduleRestart(originURL)
+      this.scheduleRestart(originURL, 'unavailable')
       return
     }
     try {
@@ -195,7 +217,7 @@ export class RemoteSupervisor {
     } catch (error) {
       if (this.stopping) return
       this.setStatus({ phase: 'unavailable', message: `cannot create remote state dir: ${String(error)}` })
-      this.scheduleRestart(originURL)
+      this.scheduleRestart(originURL, 'unavailable')
       return
     }
 
@@ -253,7 +275,7 @@ export class RemoteSupervisor {
         phase: 'error',
         message: detail || `helper exited (${signal ?? String(code)})`,
       })
-      this.scheduleRestart(originURL)
+      this.scheduleRestart(originURL, 'crash')
     })
   }
 
@@ -293,10 +315,17 @@ export class RemoteSupervisor {
     this.setStatus({ ...event, phase: event.phase })
   }
 
-  private scheduleRestart(originURL: string): void {
+  private scheduleRestart(originURL: string, kind: 'unavailable' | 'crash' = 'crash'): void {
     if (this.stopping || this.restartTimer !== undefined) return
-    const delay = RESTART_DELAYS_MS[Math.min(this.restartAttempt, RESTART_DELAYS_MS.length - 1)]
-    this.restartAttempt += 1
+    // Configuration-level failures (helper missing, state dir unwritable)
+    // cannot self-heal in a tight loop; throttle to one probe per minute so
+    // a misconfigured Host stays observable without becoming a CPU sink.
+    // Crashes still get the original exponential backoff so a transient
+    // helper failure recovers quickly.
+    const delay = kind === 'unavailable'
+      ? UNAVAILABLE_RETRY_MS
+      : RESTART_DELAYS_MS[Math.min(this.restartAttempt, RESTART_DELAYS_MS.length - 1)]
+    if (kind === 'crash') this.restartAttempt += 1
     this.restartTimer = setTimeout(() => {
       this.restartTimer = undefined
       void this.start(originURL)

@@ -10,6 +10,7 @@ import {
   normalizeRemoteHostname,
   parseHelperEvent,
   RemoteSupervisor,
+  restartDelayMs,
 } from '../src/remote-supervisor.ts'
 
 test('remote hostname migrates every pre-DeepPilot default', () => {
@@ -147,4 +148,27 @@ test('dispose during an in-flight start never spawns the helper', async () => {
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+// ---------- N3: backoff schedule differs by failure category ----------
+
+test('unavailable failures throttle to a fixed window, crashes keep exponential backoff', () => {
+  // A missing helper binary / unwritable state dir will not self-heal on a
+  // tight loop; the old schedule (1s..30s) would have hammered the host
+  // every restart. Unavailable is now a flat 60s wait. Crashes still get the
+  // exponential ladder so a transient helper failure recovers quickly.
+  for (const attempt of [0, 1, 5, 50]) {
+    assert.equal(
+      restartDelayMs('unavailable', attempt), 60_000,
+      `unavailable attempt ${attempt} must always be 60s`,
+    )
+  }
+  assert.equal(restartDelayMs('crash', 0), 1_000)
+  assert.equal(restartDelayMs('crash', 1), 2_000)
+  assert.equal(restartDelayMs('crash', 2), 4_000)
+  assert.equal(restartDelayMs('crash', 5), 30_000, 'final plateau of the crash schedule')
+  assert.equal(
+    restartDelayMs('crash', 999), 30_000,
+    'out-of-range attempt must saturate at the plateau, not throw',
+  )
 })

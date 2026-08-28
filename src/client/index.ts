@@ -321,9 +321,33 @@ export function apply(ctx: Context): void {
     adoptEnabled()
   }
 
+  // Track the last scope-confirmed value so a rejected write can roll the
+  // optimistic store back instead of leaving the UI in a state the Host never
+  // accepted. Seed from adoptEnabled's result by reading the store.
+  const lastConfirmedEnabled = (): boolean => {
+    const snap = scope?.getSnapshot()
+    if (snap?.status === 'ready' && snap.value !== undefined) return snap.value.enabled !== false
+    // Pre-adopt fallback so the first flip still has a sane rollback target.
+    return enabledStore.getSnapshot().enabled
+  }
+  const lastConfirmedRemoteEnabled = (): boolean => {
+    const snap = scope?.getSnapshot()
+    if (snap?.status === 'ready') return snap.value?.remote?.enabled === true
+    return remoteEnabledStore.getSnapshot().enabled
+  }
+
   const setDeepPilotEnabled = (value: boolean): void => {
+    const previous = lastConfirmedEnabled()
     enabledStore.set({ status: 'ready', enabled: value })
-    if (scope !== undefined) void scope.set('enabled', value)
+    if (scope === undefined) return
+    void scope.set('enabled', value).then(() => { /* next adoptEnabled will refresh */ }, (error: unknown) => {
+      // Roll the store back so the switch reflects the durable truth, and
+      // surface the failure: silent rejections used to leave a "turned off"
+      // UI live with a still-on Host until the next unrelated change.
+      enabledStore.set({ status: 'ready', enabled: previous })
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[deeppilot] failed to persist enabled=' + String(value) + ': ' + message)
+    })
   }
 
   const remoteEnabledStore = createSnapshotStore<RemoteEnabledState>({ status: 'loading', enabled: false })
@@ -342,12 +366,24 @@ export function apply(ctx: Context): void {
   }
 
   const setDeepPilotRemoteEnabled = (value: boolean): void => {
+    const previous = lastConfirmedRemoteEnabled()
     remoteEnabledStore.set({ status: 'ready', enabled: value })
     if (scope === undefined) return
     const currentRemote = scope.getSnapshot().value?.remote ?? {}
-    void scope.set('remote', { ...currentRemote, enabled: value })
+    void scope.set('remote', { ...currentRemote, enabled: value }).then(() => { /* next adopt refreshes */ }, (error: unknown) => {
+      remoteEnabledStore.set({ status: 'ready', enabled: previous })
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[deeppilot] failed to persist remote.enabled=' + String(value) + ': ' + message)
+    })
   }
 
+  if (anyCtx.slots === undefined) {
+    // locale/settingsScope/remote all have visible degradations when missing;
+    // slots is the registration seam itself — a missing slot service means
+    // the whole page is silently blank. Surface it loudly so the cause shows
+    // up next to the other diagnostic lines.
+    console.error('[deeppilot] settings slots service unavailable; the DeepPilot section will not appear')
+  }
   anyCtx.slots?.inject('settings.section', () =>
     (anyCtx.slots as NonNullable<AnyCtx['slots']>).register({
       name: 'settings.section',

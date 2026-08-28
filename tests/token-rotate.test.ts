@@ -134,3 +134,35 @@ test('concurrent touches never leave a half-written devices.json behind', async 
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+// ---------- N2: corrupt-token sidecar + loud throw ----------
+
+test('a truncated auth-token throws and preserves the original as a .corrupt sidecar', async () => {
+  // N2: silently regenerating a token used to orphan every paired phone with
+  // no on-disk clue. Now the loader must (a) refuse to start a session with a
+  // malformed file, and (b) copy the broken file to <path>.corrupt so an
+  // operator can inspect the cause.
+  const dir = await makeTempDir()
+  try {
+    const tokenPath = join(dir, 'auth-token')
+    // Plant a 12-char string (well under the 32-char minimum): a disk-full
+    // truncation, an editor saving a partial file, anything below the bar.
+    const broken = 'short-token-12'
+    await writeFile(tokenPath, broken + '\n', { mode: 0o600 })
+
+    await assert.rejects(
+      () => loadOrCreateToken(tokenPath),
+      /pairing token is malformed at/,
+      'loadOrCreateToken must refuse to overwrite a corrupted file',
+    )
+
+    // The original must still be on disk (untouched), and a .corrupt sidecar
+    // must hold the exact bytes the operator would have lost.
+    const stillThere = (await readFile(tokenPath, 'utf8')).trim()
+    assert.equal(stillThere, broken, 'the broken file is not overwritten')
+    const sidecar = await readFile(tokenPath + '.corrupt', 'utf8')
+    assert.equal(sidecar.trim(), broken, 'the .corrupt sidecar carries the same bytes')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

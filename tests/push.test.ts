@@ -477,3 +477,91 @@ test('an unreadable APNs key degrades to a diagnostic failure', async () => {
   assert.equal(result.outcome, 'failed', 'an unreadable key degrades to failed instead of throwing')
   assert.ok(result.reason && result.reason.length > 0, 'failure carries a diagnostic reason')
 })
+
+// ---------- s2c.notify coverage for every category ----------
+
+test('approval and question requests also emit s2c.notify frames (N1 protocol parity)', async () => {
+  // Before N1 only turn.completed/session.error produced s2c.notify frames;
+  // approval.required and question.asked only went to APNs. Online clients
+  // subscribed to s2c.notify now miss approval/question banners; parity
+  // with the protocol's four-category notify surface closes that gap.
+  const h = await makeHarness()
+  try {
+    const collected: Array<{ type: string; payload: any; seq?: number }> = []
+    h.bridge.addSink({
+      push: (type, payload, seq) => collected.push({ type, payload, seq }),
+      lastCursor: () => 0,
+      replay: () => {},
+      replayDone: () => {},
+      resync: () => {},
+    })
+    h.getFeed()({
+      type: 'approval/requested', rpcId: 'rpc-apr-n', approvalId: 'apr-n1',
+      sessionId: 'session-n1', toolName: 'bash', reason: 'pnpm install',
+    })
+    h.getFeed()({
+      type: 'question/requested', rpcId: 'rpc-q-n', sessionId: 'session-n1',
+      questions: [{ id: 'mode', question: '选 A 还是 B？', options: [] }],
+    })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    const notifies = collected.filter((f) => f.type === 's2c.notify')
+    assert.equal(notifies.length, 2, 'both approval and question must produce a notify frame')
+    const approval = notifies.find((n) => n.payload.category === 'approval.required')
+    const question = notifies.find((n) => n.payload.category === 'question.asked')
+    assert.ok(approval, 'approval.required notify is present')
+    assert.ok(question, 'question.asked notify is present')
+    assert.equal(approval?.payload.title, '需要批准')
+    assert.equal(approval?.payload.body, 'bash: pnpm install')
+    assert.equal(approval?.payload.notificationId, 'apr-apr-n1', 'notificationId matches the APNs side')
+    assert.equal(question?.payload.title, '有问题需要回答')
+    assert.equal(question?.payload.body, '选 A 还是 B？')
+    assert.equal(question?.payload.notificationId, 'q-rpc-q-n')
+
+    // s2c.notify must carry a seq number so it joins the replay ring
+    // (PROTOCOL §6 + §7). The seq lives at the envelope level; the BridgeSink
+    // receives it as the third argument to push().
+    assert.ok(typeof approval?.seq === 'number' && approval!.seq > 0)
+    assert.ok(typeof question?.seq === 'number' && question!.seq > 0)
+  } finally {
+    h.cleanup()
+  }
+})
+
+test('notify is suppressed for the device that is currently viewing the session', async () => {
+  // F-9 rule: only devices that are not viewing the session get a notify.
+  // The "viewer" sink must not see the approval notify for the same session.
+  const h = await makeHarness()
+  try {
+    const viewerCollected: Array<{ type: string; payload: any }> = []
+    const awayCollected: Array<{ type: string; payload: any }> = []
+    const viewer = {
+      push: (type: string, payload: any) => viewerCollected.push({ type, payload }),
+      lastCursor: () => 0, replay: () => {}, replayDone: () => {}, resync: () => {},
+    }
+    const away = {
+      push: (type: string, payload: any) => awayCollected.push({ type, payload }),
+      lastCursor: () => 0, replay: () => {}, replayDone: () => {}, resync: () => {},
+    }
+    h.bridge.addSink(viewer)
+    h.bridge.addSink(away)
+    h.bridge.markSinkOpen(viewer, 'session-suppressed')
+
+    h.getFeed()({
+      type: 'approval/requested', rpcId: 'rpc-sup', approvalId: 'apr-sup',
+      sessionId: 'session-suppressed', toolName: 'bash', reason: 'pnpm install',
+    })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    assert.equal(
+      viewerCollected.filter((f) => f.type === 's2c.notify').length, 0,
+      'viewer must not receive the notify for the session it is on',
+    )
+    assert.equal(
+      awayCollected.filter((f) => f.type === 's2c.notify').length, 1,
+      'other devices still receive the notify',
+    )
+  } finally {
+    h.cleanup()
+  }
+})

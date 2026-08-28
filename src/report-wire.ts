@@ -120,9 +120,22 @@ function str(source: Record<string, unknown>, key: string, field: string): strin
   if (typeof value !== 'string') reject(field)
   return value
 }
-function num(source: Record<string, unknown>, key: string, field: string): number {
+
+/**
+ * Non-negative integer: counters and timestamps (activeConnections,
+ * historyBufferMax, updatedAt, lastSeenTs, protocolVersion, etc.). A bare
+ * `typeof number` check accepts 1.5, -1, and 1e20 — all of which then
+ * surface verbatim on the settings page and break any sort or arithmetic
+ * the UI does.
+ */
+function int(source: Record<string, unknown>, key: string, field: string): number {
   const value = source[key]
-  if (typeof value !== 'number' || !Number.isFinite(value)) reject(field)
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value < 0
+  ) reject(field)
   return value
 }
 function bool(source: Record<string, unknown>, key: string, field: string): boolean {
@@ -142,14 +155,14 @@ function parseDevice(value: unknown): ReportDevice {
     const a = rec(s.apns, 'device.apns')
     const environment = str(a, 'environment', 'device.apns.environment')
     if (environment !== 'development' && environment !== 'production') reject('device.apns.environment')
-    apns = { environment, updatedAt: num(a, 'updatedAt', 'device.apns.updatedAt') }
+    apns = { environment, updatedAt: int(a, 'updatedAt', 'device.apns.updatedAt') }
   }
   return {
     deviceId: str(s, 'deviceId', 'device.deviceId'),
     deviceName: str(s, 'deviceName', 'device.deviceName'),
     appVersion: str(s, 'appVersion', 'device.appVersion'),
-    firstSeenTs: num(s, 'firstSeenTs', 'device.firstSeenTs'),
-    lastSeenTs: num(s, 'lastSeenTs', 'device.lastSeenTs'),
+    firstSeenTs: int(s, 'firstSeenTs', 'device.firstSeenTs'),
+    lastSeenTs: int(s, 'lastSeenTs', 'device.lastSeenTs'),
     ...(apns ? { apns } : {}),
   }
 }
@@ -173,7 +186,7 @@ function parseRemote(value: unknown): DeepPilotReport['remote'] {
     ...(typeof publicURL === 'string' ? { publicURL } : {}),
     ...(typeof authURL === 'string' ? { authURL } : {}),
     ...(typeof message === 'string' ? { message } : {}),
-    updatedAt: num(s, 'updatedAt', 'remote.updatedAt'),
+    updatedAt: int(s, 'updatedAt', 'remote.updatedAt'),
   }
 }
 
@@ -182,7 +195,17 @@ function parseRelayTestStep(value: unknown): RelayTestStep {
   const id = str(st, 'id', 'step.id')
   if (id !== 'health' && id !== 'enroll') reject('step.id')
   const latencyMs = st.latencyMs
-  if (latencyMs !== undefined && typeof latencyMs !== 'number') reject('step.latencyMs')
+  if (latencyMs !== undefined) {
+    // Same int() check the report uses for counters: latency is always a
+    // non-negative whole-millisecond number; a NaN/Infinity/negative arrives
+    // from a buggy host and must not silently render as `(NaNms)`.
+    if (
+      typeof latencyMs !== 'number' ||
+      !Number.isFinite(latencyMs) ||
+      !Number.isInteger(latencyMs) ||
+      latencyMs < 0
+    ) reject('step.latencyMs')
+  }
   return {
     id,
     ok: bool(st, 'ok', 'step.ok'),
@@ -223,7 +246,7 @@ function parsePushTestResult(value: unknown): PushTestResult {
       environment: str(r, 'environment', 'result.environment'),
       outcome: str(r, 'outcome', 'result.outcome'),
       ...(typeof reason === 'string' && reason.length > 0 ? { reason } : {}),
-      ...(typeof tokenFingerprint === 'string' && /^[0-9a-f]{1,32}$/.test(tokenFingerprint)
+      ...(typeof tokenFingerprint === 'string' && /^[0-9a-f]{10}$/.test(tokenFingerprint)
         ? { tokenFingerprint }
         : {}),
     }
@@ -247,7 +270,7 @@ function parseReport(value: unknown): DeepPilotReport {
   // GitHub check) won't include them, and the UI must keep rendering.
   const releaseUrl = s.releaseUrl
   return {
-    protocolVersion: num(s, 'protocolVersion', 'protocolVersion'),
+    protocolVersion: int(s, 'protocolVersion', 'protocolVersion'),
     serverVersion: str(s, 'serverVersion', 'serverVersion'),
     pluginVersion: str(s, 'pluginVersion', 'pluginVersion'),
     ...(s.updateAvailable === true ? { updateAvailable: true } : {}),
@@ -256,8 +279,8 @@ function parseReport(value: unknown): DeepPilotReport {
     enabled: bool(s, 'enabled', 'enabled'),
     tokenPath: str(s, 'tokenPath', 'tokenPath'),
     tokenReady: bool(s, 'tokenReady', 'tokenReady'),
-    activeConnections: num(s, 'activeConnections', 'activeConnections'),
-    historyBufferMax: num(s, 'historyBufferMax', 'historyBufferMax'),
+    activeConnections: int(s, 'activeConnections', 'activeConnections'),
+    historyBufferMax: int(s, 'historyBufferMax', 'historyBufferMax'),
     debug: bool(s, 'debug', 'debug'),
     lanAddresses: lanAddresses as string[],
     remote: parseRemote(s.remote),
