@@ -371,8 +371,9 @@ export class BridgeConnection implements BridgeSink {
         if (!p?.sessionId || typeof p.beforeSeq !== 'number') {
           return this.fail(env.id, 'E_PROTOCOL', 'sessionId and beforeSeq required')
         }
-        const ok = await this.deps.bridge.historyPage(this, p.sessionId, p.beforeSeq, Math.min(p.limit ?? 100, 500))
-        if (!ok) this.fail(env.id, 'E_NOT_FOUND', 'history unavailable')
+        const page = await this.deps.bridge.historyPage(p.sessionId, p.beforeSeq, Math.min(p.limit ?? 100, 500))
+        if (!page) return this.fail(env.id, 'E_NOT_FOUND', 'history unavailable')
+        this.send('s2c.history.page', { sessionId: p.sessionId, ...page }, env.id)
         return
       }
       case 'c2s.session.attachment': {

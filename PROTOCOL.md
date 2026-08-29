@@ -108,8 +108,8 @@ completed），供会话详情页渲染任务进度；无任务时为 null 或�
 
 ```json
 { "type": "s2c.session.tail", "payload": { "sessionId": "…", "messages": [Message], "oldestSeq": 12, "hasMore": true } }
-{ "type": "c2s.session.history", "payload": { "sessionId": "…", "beforeSeq": 12, "limit": 100 } }
-{ "type": "s2c.history.page", "payload": { "sessionId": "…", "messages": [Message], "hasMore": false } }
+{ "type": "c2s.session.history", "id": "history-1", "payload": { "sessionId": "…", "beforeSeq": 12, "limit": 100 } }
+{ "type": "s2c.history.page", "id": "history-1", "payload": { "sessionId": "…", "messages": [Message], "hasMore": false } }
 ```
 
 Message 投影：

@@ -26,6 +26,50 @@ interface SessionSummary {
   workspaceId?: string | null;
   workspacePath?: string | null;
 }
+type MessageRole = 'user' | 'assistant' | 'tool' | 'system' | 'error';
+type ToolState = 'running' | 'ok' | 'error';
+/** Provenance of host-injected context; present only on `role: "system"` rows.
+ * Mirrors the durable DSH message source (`dsh-llm` MessageSource): `label`
+ * names the producer (plugin name, skill name, instruction paths…), `form` is
+ * the semantic ContextForm vocabulary ('instructions' | 'catalog' | 'snapshot'
+ * | 'notice' | 'relay' | 'recall'). Both degrade gracefully — clients must
+ * tolerate absent fields and unknown values. */
+interface MessageContextInfo {
+  label?: string;
+  form?: string;
+}
+/** One image carried by a user message. `attachmentId` keys the read-back RPC
+ * (c2s.session.attachment); width/height let clients reserve layout space. */
+interface MessageAttachment {
+  kind: 'image';
+  name?: string;
+  mediaType?: string;
+  attachmentId?: string;
+  width?: number;
+  height?: number;
+}
+interface MessageProjection {
+  seq: number;
+  role: MessageRole;
+  text?: string;
+  /** Reasoning ("thinking") text accompanying the answer, when present. */
+  thinking?: string;
+  streaming?: boolean;
+  tool?: {
+    name: string;
+    state: ToolState;
+    summary: string;
+  };
+  attachments?: MessageAttachment[];
+  /** Present only on system rows: provenance of the injected context.
+   * The DSH host logs synthetic agent.inject() content (runtime-context
+   * snapshots, background-job notices, workspace instructions…) as user-role
+   * messages whose `source.kind` is not 'user'; those project here as
+   * `role: "system"` so clients never show them as human prompts. */
+  context?: MessageContextInfo;
+  ts: number;
+  truncated?: boolean;
+}
 type NotifyCategory = 'turn.completed' | 'approval.required' | 'question.asked' | 'session.error';
 /**
  * One offline-push-worthy event (same facts as s2c.notify / pending frames,
@@ -452,7 +496,10 @@ declare class HostBridge {
   pendingSnapshot(): PendingSnapshotPayload;
   /** Tail history for an opened session; pushes s2c.session.tail to the sink. */
   openSession(sink: BridgeSink, sessionId: string, tailCount: number): Promise<boolean>;
-  historyPage(sink: BridgeSink, sessionId: string, beforeSeq: number, limit: number): Promise<boolean>;
+  historyPage(sessionId: string, beforeSeq: number, limit: number): Promise<{
+    messages: MessageProjection[];
+    hasMore: boolean;
+  } | null>;
   /** Result of one attachment read-back for the phone. */
   attachmentData(sessionId: string, attachmentId: string): Promise<{
     mediaType?: string;

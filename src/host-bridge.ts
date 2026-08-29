@@ -607,19 +607,22 @@ export class HostBridge {
     }
   }
 
-  async historyPage(sink: BridgeSink, sessionId: string, beforeSeq: number, limit: number): Promise<boolean> {
+  async historyPage(
+    sessionId: string,
+    beforeSeq: number,
+    limit: number,
+  ): Promise<{ messages: MessageProjection[]; hasMore: boolean } | null> {
     try {
       const response = await this.apiProxy.sessions.history({
         rpcId: randomUUID(),
         payload: { sessionId, beforeSeq, maxMessages: clampTail(limit) },
       });
-      if (!response.result || !response.result.ok) return false;
+      if (!response.result || !response.result.ok) return null;
       const result = response.result.value;
       const messages = projectHistory(result.events ?? []);
-      sink.push('s2c.history.page', { sessionId, messages, hasMore: Boolean(result.hasMore) });
-      return true;
+      return { messages, hasMore: Boolean(result.hasMore) };
     } catch {
-      return false;
+      return null;
     }
   }
 

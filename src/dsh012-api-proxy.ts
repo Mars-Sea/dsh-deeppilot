@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { isSubagentRow } from './host-api.ts'
+import { projectHistory } from './host-event-projection.ts'
 import type {
   ApiProxyLike,
   DirectoryListingLike,
@@ -93,12 +94,29 @@ export class Dsh012ApiProxy implements ApiProxyLike {
         throw error
       }
       const before = request.payload?.beforeSeq
-      const limit = request.payload?.maxMessages ?? 100
+      const limit = Math.max(1, request.payload?.maxMessages ?? 100)
       const source = inspected.events
-        .filter(event => typeof (event as { seq?: unknown }).seq === 'number')
-        .filter(event => before === undefined || Number((event as { seq: number }).seq) < before)
-      const page = source.slice(Math.max(0, source.length - limit))
-      return { events: page as HistoryResult['events'], hasMore: page.length < source.length }
+        .filter((event): event is HistoryResult['events'][number]['event'] =>
+          typeof event === 'object' && event !== null
+          && typeof (event as { type?: unknown }).type === 'string'
+          && typeof (event as { seq?: unknown }).seq === 'number')
+        .filter(event => before === undefined || event.seq < before)
+      let end = source.length
+      let events: HistoryResult['events'] = []
+      while (end > 0 && projectHistory(events).length < limit) {
+        const start = Math.max(0, end - limit)
+        events = [
+          ...source.slice(start, end).map(event => ({ event })),
+          ...events,
+        ]
+        end = start
+      }
+      let trimmed = false
+      while (events.length > 0 && projectHistory(events).length > limit) {
+        events = events.slice(1)
+        trimmed = true
+      }
+      return { events, hasMore: end > 0 || trimmed }
     }),
     prompt: async (request) => this.call(() => this.session.prompt({
       ...request.payload!,

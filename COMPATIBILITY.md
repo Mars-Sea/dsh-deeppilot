@@ -19,15 +19,12 @@ unit tests does not prove every DSH build, network, Mac, or iPhone combination.
   can still run; remote Funnel reports `unavailable`.
 - If a DSH host API is missing, only the dependent capability should be
   disabled. The plugin must not crash the host.
-- On the `0.1.2-alpha.1` test host, sessions created by that host can be
-  listed, opened, and exchanged with the paired iOS client. Some sessions
-  persisted by pre-0.1.2 hosts are listed but their history is rejected by the
-  alpha Host cold-session reader; the phone receives `E_NOT_FOUND`, while the
-  original session remains intact and usable in the Host Web UI. This is an
-  upstream alpha persistence-compatibility boundary, not a data-loss path.
-  Re-test it against the first public 0.1.2 release and adopt any upstream
-  migration or compatible history-reader API before claiming old-session
-  support.
+- On the `0.1.2-alpha.1` test host, the compatibility facade converts the
+  current Session controller's raw event arrays into the stable wrapped
+  history entries consumed by the phone bridge. Sessions persisted by earlier
+  Hosts can therefore be listed and opened when the 0.1.2 Host's own
+  persistence reader accepts their log vocabulary. Unsupported persisted
+  formats still fail closed in the Host without modifying the original log.
 - Query-string token authentication is legacy compatibility only. Current
   clients use Bearer or first-frame authentication.
 
@@ -36,8 +33,8 @@ unit tests does not prove every DSH build, network, Mac, or iPhone combination.
 - Intel macOS support for the embedded helper;
 - signed/notarized helper distribution;
 - Windows or Linux host validation;
-- repair or migration of pre-0.1.2 persisted session history under the
-  0.1.2-alpha.1 Host;
+- repair or migration of persisted history rejected by the `0.1.2-alpha.1`
+  Host's own session reader;
 - every DSH developer-preview revision;
 - physical-device performance and every carrier/network combination;
 - production APNs delivery without a real provider credential and device.
