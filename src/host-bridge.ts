@@ -23,7 +23,10 @@ import type {
 export * from './host-api.ts'
 import {
   MAX_MESSAGE_PROJECTION_BYTES,
+  MAX_SESSION_PAGE_MESSAGES_BYTES,
+  canonicalSessionMessages,
   limitMessageProjection,
+  limitSessionPageMessages,
   messageText,
   projectEvent,
   projectHistory,
@@ -31,7 +34,10 @@ import {
 
 export {
   MAX_MESSAGE_PROJECTION_BYTES,
+  MAX_SESSION_PAGE_MESSAGES_BYTES,
+  canonicalSessionMessages,
   limitMessageProjection,
+  limitSessionPageMessages,
   projectEvent,
   projectHistory,
 } from './host-event-projection.ts'
@@ -592,13 +598,15 @@ export class HostBridge {
       });
       if (!response.result || !response.result.ok) return false;
       const result = response.result.value;
-      const messages = projectHistory(result.events ?? []);
+      const projected = projectHistory(result.events ?? []);
+      const page = limitSessionPageMessages(projected);
+      const messages = page.messages;
       const oldestSeq = messages.length > 0 ? messages[0]!.seq : 0;
       sink.push('s2c.session.tail', {
         sessionId,
         messages,
         oldestSeq,
-        hasMore: Boolean(result.hasMore),
+        hasMore: Boolean(result.hasMore) || page.dropped > 0,
       });
       this.deriveTitleFallback(sessionId, messages);
       return true;
@@ -607,19 +615,33 @@ export class HostBridge {
     }
   }
 
-  async historyPage(sink: BridgeSink, sessionId: string, beforeSeq: number, limit: number): Promise<boolean> {
+  async historyPage(
+    sessionId: string,
+    beforeSeq: number,
+    limit: number,
+  ): Promise<{ sessionId: string; messages: MessageProjection[]; hasMore: boolean } | null> {
     try {
       const response = await this.apiProxy.sessions.history({
         rpcId: randomUUID(),
         payload: { sessionId, beforeSeq, maxMessages: clampTail(limit) },
       });
-      if (!response.result || !response.result.ok) return false;
+      if (!response.result || !response.result.ok) return null;
       const result = response.result.value;
-      const messages = projectHistory(result.events ?? []);
-      sink.push('s2c.history.page', { sessionId, messages, hasMore: Boolean(result.hasMore) });
-      return true;
+      // Some host versions include the boundary event even though beforeSeq
+      // is exclusive. Enforce the phone protocol here so a client can never
+      // request and append the same page indefinitely.
+      const projected = projectHistory(result.events ?? [])
+        .filter((message) => message.seq < beforeSeq);
+      const page = limitSessionPageMessages(projected);
+      return {
+        sessionId,
+        messages: page.messages,
+        // An empty exclusive page cannot advance beforeSeq. Advertising more
+        // here would make the client request the same boundary forever.
+        hasMore: page.messages.length > 0 && (Boolean(result.hasMore) || page.dropped > 0),
+      };
     } catch {
-      return false;
+      return null;
     }
   }
 

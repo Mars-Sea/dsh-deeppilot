@@ -66,6 +66,16 @@ export class BridgeConnection implements BridgeSink {
   private closed = false
   private helloTimer: NodeJS.Timeout | undefined
   private readonly openSessions = new Set<string>()
+  /**
+   * Realtime events that arrive while a session's history snapshot is in
+   * flight. The wire contract requires tail first; sending these immediately
+   * lets the later tail roll the client back over messages it just rendered.
+   */
+  private readonly openingSessionEvents = new Map<string, Array<{
+    type: string
+    payload: unknown
+    seq?: number
+  }>>()
   /** Sanitized device identity from hello; needed for push registration. */
   private deviceId: string | undefined
 
@@ -117,6 +127,16 @@ export class BridgeConnection implements BridgeSink {
   // ---------- BridgeSink ----------
 
   push(type: string, payload: unknown, seq?: number): void {
+    if (type === 's2c.session.event') {
+      const sessionId = (payload as { sessionId?: unknown } | undefined)?.sessionId
+      if (typeof sessionId === 'string') {
+        const buffered = this.openingSessionEvents.get(sessionId)
+        if (buffered) {
+          buffered.push({ type, payload, ...(seq !== undefined ? { seq } : {}) })
+          return
+        }
+      }
+    }
     if (this.deps.debug === true) this.deps.log('push ' + type + ' seq=' + String(seq))
     this.send(type, payload, undefined, seq)
   }
@@ -147,6 +167,7 @@ export class BridgeConnection implements BridgeSink {
       this.deps.bridge.markSinkClosed(this, id)
     }
     this.openSessions.clear()
+    this.openingSessionEvents.clear()
     this.deps.bridge.dropSinkSessions(this)
     if (this.authenticated) this.deps.bridge.removeSink(this)
   }
@@ -278,22 +299,31 @@ export class BridgeConnection implements BridgeSink {
         const p = env.payload as { sessionId?: string; tailCount?: number }
         if (!p?.sessionId || typeof p.sessionId !== 'string') return this.fail(env.id, 'E_PROTOCOL', 'sessionId required')
         const sessionId = p.sessionId
-        this.openSessions.add(sessionId)
-        this.deps.bridge.markSinkOpen(this, sessionId)
+        const bufferedEvents: Array<{ type: string; payload: unknown; seq?: number }> = []
+        this.openingSessionEvents.set(sessionId, bufferedEvents)
         const ok = await this.deps.bridge.openSession(this, sessionId, p.tailCount ?? 100)
         if (!ok) {
-          // Roll the viewer registration back: a failed open must not keep
-          // suppressing turn notifications for a session this device never
-          // actually received.
-          this.openSessions.delete(sessionId)
-          this.deps.bridge.markSinkClosed(this, sessionId)
+          if (this.openingSessionEvents.get(sessionId) === bufferedEvents) {
+            this.openingSessionEvents.delete(sessionId)
+          }
           return this.fail(env.id, 'E_NOT_FOUND', 'session history unavailable')
+        }
+        // A concurrent close or replacement open invalidates this attempt.
+        // Its tail has already been sent, but it must not reactivate realtime
+        // delivery after the user left the screen.
+        if (this.openingSessionEvents.get(sessionId) !== bufferedEvents) return
+        this.openSessions.add(sessionId)
+        this.deps.bridge.markSinkOpen(this, sessionId)
+        this.openingSessionEvents.delete(sessionId)
+        for (const frame of bufferedEvents) {
+          this.push(frame.type, frame.payload, frame.seq)
         }
         return
       }
       case 'c2s.session.close': {
         const p = env.payload as { sessionId?: string }
         if (!p?.sessionId) return this.fail(env.id, 'E_PROTOCOL', 'sessionId required')
+        this.openingSessionEvents.delete(p.sessionId)
         this.openSessions.delete(p.sessionId)
         this.deps.bridge.markSinkClosed(this, p.sessionId)
         this.send('s2c.ack', {}, env.id)
@@ -371,8 +401,9 @@ export class BridgeConnection implements BridgeSink {
         if (!p?.sessionId || typeof p.beforeSeq !== 'number') {
           return this.fail(env.id, 'E_PROTOCOL', 'sessionId and beforeSeq required')
         }
-        const ok = await this.deps.bridge.historyPage(this, p.sessionId, p.beforeSeq, Math.min(p.limit ?? 100, 500))
-        if (!ok) this.fail(env.id, 'E_NOT_FOUND', 'history unavailable')
+        const page = await this.deps.bridge.historyPage(p.sessionId, p.beforeSeq, Math.min(p.limit ?? 100, 500))
+        if (!page) return this.fail(env.id, 'E_NOT_FOUND', 'history unavailable')
+        this.send('s2c.history.page', page, env.id)
         return
       }
       case 'c2s.session.attachment': {

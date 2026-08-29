@@ -181,6 +181,7 @@ export interface MessageAttachment {
 }
 
 export interface MessageProjection {
+  /** Durable row identity; unique within one session/page. */
   seq: number
   role: MessageRole
   text?: string
@@ -207,6 +208,7 @@ export interface SessionAttachmentPayload {
 
 export interface SessionTailPayload {
   sessionId: string
+  /** Aggregate JSON array is bounded to 900 KB; hasMore covers any dropped prefix. */
   messages: MessageProjection[]
   oldestSeq: number
   hasMore: boolean
@@ -214,6 +216,7 @@ export interface SessionTailPayload {
 
 export interface HistoryPagePayload {
   sessionId: string
+  /** Response envelope echoes the c2s.session.history id; array is bounded to 900 KB. */
   messages: MessageProjection[]
   hasMore: boolean
 }

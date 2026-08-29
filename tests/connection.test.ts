@@ -418,6 +418,88 @@ test('a failed session.open rolls back its viewer registration', async () => {
   )
 })
 
+test('session.open sends tail before realtime events produced during history lookup', async () => {
+  let historyStarted!: () => void
+  let releaseHistory!: () => void
+  const started = new Promise<void>((resolve) => { historyStarted = resolve })
+  const gate = new Promise<void>((resolve) => { releaseHistory = resolve })
+  const { ws, bridge } = await makeConnection({
+    transportAuthenticated: true,
+    proxyOverrides: {
+      sessions: {
+        list: async () => ({ result: { ok: true, value: { items: [] } } }),
+        history: async () => {
+          historyStarted()
+          await gate
+          return { result: { ok: true, value: { events: [], hasMore: false } } }
+        },
+        prompt: async () => ({ result: { ok: true, value: { accepted: true } } }),
+        create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
+      },
+    },
+  })
+  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  ws.sent.length = 0
+
+  ws.receive({ v: 1, type: 'c2s.session.open', id: 'o1', payload: { sessionId: 's1' } })
+  await started
+  ;(bridge as any).onMuxFrame({
+    type: 'session/event',
+    sessionId: 's1',
+    event: {
+      type: 'assistant/chunk',
+      seq: 7,
+      data: { chunk: { type: 'text-delta', index: 0, text: 'new token' } },
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.equal(ws.sent.length, 0, 'realtime event must wait while the tail is in flight')
+
+  releaseHistory()
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.deepEqual(
+    ws.sent.map((frame) => frame.type),
+    ['s2c.session.tail', 's2c.session.event'],
+  )
+  assert.equal(ws.sent[1].payload.data.text, 'new token')
+})
+
+test('session.history correlates the page with the request id', async () => {
+  const { ws } = await makeConnection({
+    transportAuthenticated: true,
+    proxyOverrides: {
+      sessions: {
+        list: async () => ({ result: { ok: true, value: { items: [] } } }),
+        history: async () => ({
+          result: {
+            ok: true,
+            value: {
+              events: [{ event: { type: 'user/message', seq: 4, time: 1, data: 'older row' } }],
+              hasMore: false,
+            },
+          },
+        }),
+        prompt: async () => ({ result: { ok: true, value: { accepted: true } } }),
+        create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
+      },
+    },
+  })
+  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  ws.sent.length = 0
+
+  ws.receive({
+    v: 1,
+    type: 'c2s.session.history',
+    id: 'history-1',
+    payload: { sessionId: 's1', beforeSeq: 10, limit: 100 },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  assert.equal(lastFrame(ws).type, 's2c.history.page')
+  assert.equal(lastFrame(ws).id, 'history-1')
+  assert.equal(lastFrame(ws).payload.messages[0].seq, 4)
+})
+
 test('idle timeout uses the protocol 1001 close code', async () => {
   const { ws, connection } = await makeConnection({ transportAuthenticated: true })
   connection.closeIdle()

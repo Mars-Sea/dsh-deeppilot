@@ -97,7 +97,7 @@ completed），供会话详情页渲染任务进度；无任务时为 null 或�
 
 ### c2s.session.open（payload: sessionId, tailCount? 默认 100）
 
-服务端先回一次性 `s2c.session.tail`，随后该会话实时事件以 `s2c.session.event` 推送。多设备各自 open 各自收，互不影响。
+服务端先回一次性 `s2c.session.tail`，随后该会话实时事件以 `s2c.session.event` 推送。历史快照请求尚未完成时产生的实时事件必须暂存，并在 tail 之后按原顺序发送，客户端不得先看到 event 再被较旧的 tail 回滚。多设备各自 open 各自收，互不影响。
 
 ### c2s.session.close（payload: sessionId）
 
@@ -108,9 +108,13 @@ completed），供会话详情页渲染任务进度；无任务时为 null 或�
 
 ```json
 { "type": "s2c.session.tail", "payload": { "sessionId": "…", "messages": [Message], "oldestSeq": 12, "hasMore": true } }
-{ "type": "c2s.session.history", "payload": { "sessionId": "…", "beforeSeq": 12, "limit": 100 } }
-{ "type": "s2c.history.page", "payload": { "sessionId": "…", "messages": [Message], "hasMore": false } }
+{ "type": "c2s.session.history", "id": "history-1", "payload": { "sessionId": "…", "beforeSeq": 12, "limit": 100 } }
+{ "type": "s2c.history.page", "id": "history-1", "payload": { "sessionId": "…", "messages": [Message], "hasMore": false } }
 ```
+
+`c2s.session.history` 必须携带 `id`；对应的 `s2c.history.page` 回显同一 `id`，使客户端能够在页面真正应用后结束加载状态并恢复可见消息锚点。同一会话在前一个 history 请求完成前不得并发请求下一页。
+
+`Message.seq` 是会话内唯一且稳定的消息行身份。同一个 tail/page 内不得重复 `seq`；`s2c.history.page.messages` 必须全部满足 `seq < beforeSeq`。Host 返回重复或包含边界的事件时，Bridge 必须先按 `seq` 去重并过滤边界，避免客户端上滑时反复追加同一页。
 
 Message 投影：
 
@@ -144,6 +148,7 @@ Message 投影：
 - `streaming: true` 只出现在推送中间态，final/tail/history 中恒为 false。
 - `truncated: true` 表示该条 Message 的 UTF-8 JSON 序列化投影原本超过 256KB，
   Bridge 已缩短正文/推理/摘要或附件元数据，使最终单条投影不超过 256KB。
+- 一次 `s2c.session.tail` / `s2c.history.page` 的 `messages` JSON 数组不超过 900KB；超出时保留最接近请求边界的较新后缀，并令 `hasMore: true`，客户端继续分页即可完整取回，禁止发送一个超大整帧后让客户端静默丢弃。
 - `attachments`：仅 user 行携带的图片清单。`kind` 恒为 image；`attachmentId` 是宿主附件服务的持久引用，
   供 c2s.session.attachment 读回原图；`width`/`height` 为像素尺寸（可选，供客户端预留布局）。
   旧 Bridge 不下发 attachmentId/宽高，客户端必须容忍缺失。

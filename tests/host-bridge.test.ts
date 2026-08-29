@@ -3,7 +3,9 @@ import assert from 'node:assert'
 import {
   HostBridge,
   MAX_MESSAGE_PROJECTION_BYTES,
+  MAX_SESSION_PAGE_MESSAGES_BYTES,
   limitMessageProjection,
+  limitSessionPageMessages,
   projectHistory,
   projectEvent,
   unwrapStreamItem,
@@ -101,6 +103,70 @@ test('message projections are truncated by serialized UTF-8 size', () => {
   assert.equal(projected.truncated, true)
   assert.ok(Buffer.byteLength(JSON.stringify(projected), 'utf8') <= MAX_MESSAGE_PROJECTION_BYTES)
   assert.doesNotMatch(projected.text ?? '', /[\uD800-\uDBFF]$/)
+})
+
+test('session pages stay below the aggregate frame budget without creating a history gap', () => {
+  const projected = Array.from({ length: 8 }, (_, index) => limitMessageProjection({
+    seq: index + 1,
+    role: 'assistant',
+    text: String(index + 1) + ':' + 'x'.repeat(180_000),
+    ts: index + 1,
+  }))
+
+  const page = limitSessionPageMessages(projected)
+
+  assert.ok(page.dropped > 0)
+  assert.ok(Buffer.byteLength(JSON.stringify(page.messages), 'utf8') <= MAX_SESSION_PAGE_MESSAGES_BYTES)
+  assert.equal(page.messages.at(-1)?.seq, 8, 'the newest boundary row must stay in this page')
+  assert.equal(page.messages[0]!.seq, page.dropped + 1, 'the next beforeSeq request must recover every dropped prefix row')
+})
+
+test('session pages collapse duplicate host sequences before sending', () => {
+  const page = limitSessionPageMessages([
+    { seq: 1, role: 'assistant', text: 'stale duplicate', ts: 1 },
+    { seq: 1, role: 'system', text: 'canonical duplicate', ts: 2 },
+    { seq: 2, role: 'assistant', text: 'next', ts: 3 },
+  ])
+
+  assert.deepEqual(page.messages.map((message) => message.seq), [1, 2])
+  assert.equal(page.messages[0]!.text, 'canonical duplicate')
+  assert.equal(page.dropped, 0, 'duplicate removal is normalization, not frame truncation')
+})
+
+test('history pages enforce the exclusive beforeSeq boundary', async () => {
+  const { proxy } = makeFakeProxy()
+  proxy.sessions.history = async () => ({ result: { ok: true as const, value: {
+    events: [
+      { event: { type: 'assistant/message', seq: 9, time: 1, data: 'older' } },
+      { event: { type: 'assistant/message', seq: 10, time: 2, data: 'boundary' } },
+      { event: { type: 'assistant/message', seq: 11, time: 3, data: 'newer' } },
+    ],
+    hasMore: true,
+  } } })
+  const bridge = new HostBridge(proxy, 100)
+
+  const page = await bridge.historyPage('s1', 10, 100)
+
+  assert.deepEqual(page?.messages.map((message) => message.seq), [9])
+  bridge.dispose()
+})
+
+test('history pages stop when boundary filtering leaves no older sequence', async () => {
+  const { proxy } = makeFakeProxy()
+  proxy.sessions.history = async () => ({ result: { ok: true as const, value: {
+    events: [
+      { event: { type: 'assistant/message', seq: 10, time: 1, data: 'boundary' } },
+      { event: { type: 'assistant/message', seq: 11, time: 2, data: 'newer' } },
+    ],
+    hasMore: true,
+  } } })
+  const bridge = new HostBridge(proxy, 100)
+
+  const page = await bridge.historyPage('s1', 10, 100)
+
+  assert.deepEqual(page?.messages, [])
+  assert.equal(page?.hasMore, false)
+  bridge.dispose()
 })
 
 test('HostBridge.start is idempotent', async () => {

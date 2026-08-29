@@ -2,6 +2,35 @@ import type { MessageProjection, SessionEventKind } from './protocol.ts'
 import type { SessionEventLike } from './host-api.ts'
 
 export const MAX_MESSAGE_PROJECTION_BYTES = 256 * 1024
+/// Aggregate message-array budget for one tail/history frame. The complete
+/// envelope stays below the legacy iOS 1 MB decoder cap with ample metadata
+/// headroom, while each individual projection keeps its 256 KB allowance.
+export const MAX_SESSION_PAGE_MESSAGES_BYTES = 900 * 1024
+
+/** One durable host event sequence becomes exactly one phone message row.
+ * Keep the last projection when a host history response repeats an event. */
+export function canonicalSessionMessages(messages: MessageProjection[]): MessageProjection[] {
+  const bySequence = new Map<number, MessageProjection>()
+  for (const message of messages) bySequence.set(message.seq, message)
+  return [...bySequence.values()].sort((a, b) => a.seq - b.seq)
+}
+
+export function limitSessionPageMessages(messages: MessageProjection[]): {
+  messages: MessageProjection[]
+  dropped: number
+} {
+  const canonical = canonicalSessionMessages(messages)
+  let bytes = 2 // JSON array brackets
+  const kept: MessageProjection[] = []
+  for (let index = canonical.length - 1; index >= 0; index -= 1) {
+    const message = canonical[index]!
+    const candidateBytes = jsonBytes(message) + (kept.length > 0 ? 1 : 0)
+    if (bytes + candidateBytes > MAX_SESSION_PAGE_MESSAGES_BYTES) break
+    kept.unshift(message)
+    bytes += candidateBytes
+  }
+  return { messages: kept, dropped: canonical.length - kept.length }
+}
 
 export function projectEvent(sessionId: string, event: SessionEventLike): { kind: SessionEventKind; data: Record<string, unknown> } | null {
   switch (event.type) {
@@ -364,9 +393,7 @@ export function projectHistory(events: Array<{ event: SessionEventLike; view?: u
         break;
     }
   }
-  return messages
-    .sort((a, b) => a.seq - b.seq)
-    .map(limitMessageProjection);
+  return canonicalSessionMessages(messages.map(limitMessageProjection));
 }
 
 /**
