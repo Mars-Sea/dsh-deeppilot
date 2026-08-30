@@ -29,7 +29,7 @@
 
 ## 从 npm 安装
 
-需要 Node.js 22+、DSH `web` profile 与 macOS。内嵌 Funnel helper 目前支持
+需要 Node.js 22+、带 `web` profile 的 DSH 0.1.2 与 macOS。内嵌 Funnel helper 目前支持
 Apple silicon；可信局域网模式不依赖 helper。
 
 ```sh

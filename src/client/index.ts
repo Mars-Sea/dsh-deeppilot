@@ -2,8 +2,8 @@
  * Browser half of the dsh-deeppilot bundle.
  *
  * Registers a "DeepPilot" settings page following the exact structure of the
- * working settings pages in the harness: a controller + snapshot store
- * (createSnapshotStore) surfaced to the slot component as a `use` hook, with
+ * working settings pages in the harness: a controller + local snapshot store
+ * surfaced to the slot component as a `use` hook, with
  * the report fetched Host-side through the deeppilot/report Typert Remote.
  * The master switch (enabled) is read/written through the shared settings
  * namespace (`ctx.settingsScope.bind({ namespace: 'deeppilot' })`), the
@@ -16,8 +16,8 @@
  * failure mode so a broken setup is never a silent blank panel.
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import type { DeepPilotReport, PairingGrantSnapshot } from '../report-wire.ts'
+import { createSnapshotStore } from './snapshot-store.ts'
 import { mountReportRemote } from './report-mount.ts'
 import type { ClientRemoteLike, ReportRemote } from './report-mount.ts'
 import { registerLocale as registerDeepPilotLocale, t } from './i18n.ts'

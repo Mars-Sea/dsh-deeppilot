@@ -688,9 +688,10 @@ declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 
  * optional health probe (/phone/health) on the existing web server. The web
  * UI is never touched.
  *
- * Data plane: an in-process HostBridge consumes apiProxy.events.mux()/host()
- * streams, mirrors session summaries, tracks pending approvals/questions,
- * and fans projected protocol-v2 pushes out to every connected device.
+ * Data plane: an in-process HostBridge consumes a local compatibility façade
+ * over DSH 0.1.2 Session/Workspace controllers, mirrors session summaries,
+ * tracks pending approvals/questions, and fans projected protocol-v2 pushes
+ * out to every connected device.
  *
  * Protocol: PROTOCOL.md is normative; src/protocol.ts and the private app's
  * Swift models mirror that v2 contract.

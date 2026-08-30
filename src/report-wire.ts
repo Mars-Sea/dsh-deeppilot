@@ -462,6 +462,9 @@ export const REPORT_HOST_CONTRIBUTION = {
   package: REPORT_REMOTE_PACKAGE,
   face: 'host' as const,
   schemas: [],
+  // Typert contributions in dsh 0.1.2 include reflection metadata even when
+  // a hand-written Remote has no generated reflection exports.
+  model: { services: [], events: [], objects: [] },
   invocations: INVOCATION_DESCRIPTORS,
 }
 

@@ -8,7 +8,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { WebSocketServer } from 'ws'
 import { BridgeConnection } from './connection.ts'
 import { HostBridge } from './host-bridge.ts'
-import type { ApiProxyLike, PushOutlet } from './host-bridge.ts'
+import type { PushOutlet } from './host-bridge.ts'
+import { Dsh012ApiProxy } from './dsh012-api-proxy.ts'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { applyReportRemote } from './report-remote.ts'
 import { runRelayProbe } from './relay-test.ts'
@@ -46,9 +47,10 @@ import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } fro
  * optional health probe (/phone/health) on the existing web server. The web
  * UI is never touched.
  *
- * Data plane: an in-process HostBridge consumes apiProxy.events.mux()/host()
- * streams, mirrors session summaries, tracks pending approvals/questions,
- * and fans projected protocol-v2 pushes out to every connected device.
+ * Data plane: an in-process HostBridge consumes a local compatibility façade
+ * over DSH 0.1.2 Session/Workspace controllers, mirrors session summaries,
+ * tracks pending approvals/questions, and fans projected protocol-v2 pushes
+ * out to every connected device.
  *
  * Protocol: PROTOCOL.md is normative; src/protocol.ts and the private app's
  * Swift models mirror that v2 contract.
@@ -930,18 +932,21 @@ export function apply(ctx: Context, options: unknown): void {
     }
   }
 
-  // Data plane: consume mux/host streams once the API gateway exists.
+  // Data plane: dsh 0.1.2 removed apiProxy. Build the bridge's stable
+  // protocol-facing façade from the public Session/Workspace controllers.
   ;(ctx as unknown as { inject: (deps: string[], fn: (sub: unknown) => void) => void }).inject(
-    ['apiProxy'],
+    ['sessionController'],
     (sub) => {
       if (currentConfig().enabled !== true) {
         log('bridge disabled; data plane stays inactive')
         return
       }
-      const apiCtx = sub as unknown as { apiProxy?: ApiProxyLike } & SubContext
-      const proxy = apiCtx.apiProxy
-      if (!proxy) {
-        log('apiProxy service absent; data plane stays inactive')
+      const apiCtx = sub as unknown as Context & SubContext
+      let proxy: Dsh012ApiProxy
+      try {
+        proxy = new Dsh012ApiProxy(apiCtx)
+      } catch (error) {
+        log('dsh 0.1.2 session bridge unavailable: ' + String(error))
         return
       }
       const bridge = new HostBridge(proxy, cfg.historyBufferMax)

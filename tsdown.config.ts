@@ -32,7 +32,10 @@ const client = defineConfig({
   dts: false,
   clean: false,
   deps: {
-    neverBundle: ['react', 'react/jsx-runtime', '@deepseek-ai/cordis', '@deepseek-ai/dsh-client-runtime/client'],
+    neverBundle: ['react', 'react/jsx-runtime', '@deepseek-ai/cordis'],
+    // Snapshot storage is vendored in src/client/snapshot-store.ts. Do not
+    // externalize dsh-client-store: it is not published/seeded consistently
+    // in 0.1.2 Web hosts.
     // DSH's browser module table only seeds platform packages. qrcode is a
     // private implementation dependency of this plugin and must travel inside
     // client.js instead of becoming a runtime require("qrcode").

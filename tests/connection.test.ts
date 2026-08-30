@@ -364,6 +364,24 @@ test('an ordinary prompt passes validation and is acknowledged', async () => {
   assert.equal(lastFrame(ws).id, 'm2')
 })
 
+test('history page echoes the request id so the client can settle its timeout', async () => {
+  const { ws, authenticate } = await makeConnection()
+  authenticate()
+  ws.sent.length = 0
+
+  ws.receive({
+    v: 2,
+    type: 'c2s.session.history',
+    id: 'history-1',
+    payload: { sessionId: 's1', beforeSeq: 442, limit: 100 },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  assert.equal(lastFrame(ws).type, 's2c.history.page')
+  assert.equal(lastFrame(ws).id, 'history-1')
+  assert.deepEqual(lastFrame(ws).payload, { sessionId: 's1', messages: [], hasMore: false })
+})
+
 test('attachment read-back validates the payload and relays host image data', async () => {
   const { ws, authenticate } = await makeConnection()
   authenticate()

@@ -15,7 +15,6 @@ const allowed = new Set([
   'react',
   'react/jsx-runtime',
   '@deepseek-ai/cordis',
-  '@deepseek-ai/dsh-client-runtime/client',
 ])
 const requires = [...source.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)].map((match) => match[1])
 const unexpected = [...new Set(requires.filter((name) => !allowed.has(name)))]
@@ -23,7 +22,10 @@ const unexpected = [...new Set(requires.filter((name) => !allowed.has(name)))]
 if (unexpected.length > 0) {
   throw new Error(`client bundle contains unavailable runtime requires: ${unexpected.join(', ')}`)
 }
-for (const expected of ['react', '@deepseek-ai/dsh-client-runtime/client']) {
-  if (!requires.includes(expected)) throw new Error(`client bundle is missing expected runtime require: ${expected}`)
+if (!requires.includes('react')) {
+  throw new Error('client bundle is missing its React runtime require')
+}
+for (const removed of ['@deepseek-ai/dsh-client-runtime/client', '@deepseek-ai/dsh-client-store']) {
+  if (requires.includes(removed)) throw new Error(`client bundle retained unavailable runtime require: ${removed}`)
 }
 console.log(`client bundle runtime requires verified (${[...new Set(requires)].join(', ')})`)

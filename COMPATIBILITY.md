@@ -7,7 +7,7 @@ This file separates tested evidence from intended behavior. Passing unit tests d
 | Component | Baseline | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | package engine and CI |
-| DSH packages | current supported developer-preview family | build/type contracts and isolated Host smoke tests |
+| DSH Host API | 0.1.2 controller family | source-built 0.1.2 Host, paired iOS client, new- and legacy-session history, and `/phone` protocol tests |
 | Host OS | macOS on Apple silicon | embedded helper artifact and local integration testing |
 | Remote access | Tailscale Funnel, ports 443/8443/10000 | helper and supervisor tests |
 | iOS | native DeepPilot client, protocol v2 | simulator build and v2 pairing/challenge evidence |
@@ -18,12 +18,20 @@ This file separates tested evidence from intended behavior. Passing unit tests d
 - Bearer authentication, URL credentials, and first-frame shared tokens are rejected. A supported client registers a P-256 public key through `/phone/pair` and signs each WebSocket challenge.
 - Without a compatible embedded helper, the core bridge and trusted-LAN mode can still run; remote Funnel reports `unavailable`.
 - If a DSH Host API is missing, only the dependent capability should be disabled. The plugin must not crash the Host.
+- On the tested 0.1.2 Host, the compatibility facade converts the
+  current Session controller's raw event arrays into the stable wrapped
+  history entries consumed by the phone bridge. Sessions persisted by earlier
+  Hosts can therefore be listed and opened when the 0.1.2 Host's own
+  persistence reader accepts their log vocabulary. Unsupported persisted
+  formats still fail closed in the Host without modifying the original log.
 
 ## Not yet claimed
 
 - Intel macOS support for the embedded helper;
 - signed/notarized helper distribution;
 - Windows or Linux host validation;
+- repair or migration of persisted history rejected by the `0.1.2`
+  Host's own session reader;
 - every DSH developer-preview revision;
 - physical-device performance and every carrier/network combination;
 - production APNs delivery without a real provider credential and device.

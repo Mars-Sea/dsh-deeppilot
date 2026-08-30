@@ -31,7 +31,7 @@ Host on your own Mac and does not replace or modify the DSH Web UI.
 
 ## Install from npm
 
-Requirements: Node.js 22+, a DSH `web` profile, and macOS. The bundled Funnel
+Requirements: Node.js 22+, DSH 0.1.2 with a `web` profile, and macOS. The bundled Funnel
 helper currently supports Apple silicon; trusted-LAN mode does not require it.
 
 ```sh
