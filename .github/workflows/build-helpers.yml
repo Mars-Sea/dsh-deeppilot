@@ -85,7 +85,7 @@ jobs:
             | xargs -0 sha256sum >> SHA256SUMS
           cat SHA256SUMS
       - name: Open PR with refreshed helper binaries (pushes to main if dispatch + trusted)
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           commit-message: 'chore(helpers): refresh bin/ matrix and SHA256SUMS'
           title: 'chore(helpers): refresh bin/ matrix and SHA256SUMS'
