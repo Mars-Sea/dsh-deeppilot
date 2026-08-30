@@ -40,12 +40,16 @@ export interface ConnectionStateDeps {
   serverVersion: string
   /** Pairing secret used when the HTTP upgrade was not already authenticated. */
   expectedToken: string
-  /** True when Authorization or the legacy query parameter passed at upgrade. */
+  /** True when the Authorization header passed at upgrade. */
   transportAuthenticated?: boolean
   debug?: boolean
   log: (message: string) => void
   /** Called once when the socket closes (cleanly or not). */
   onClosed?: (connection: BridgeConnection) => void
+  /** Releases an unauthenticated connection slot and updates failure state. */
+  onAuthenticationSettled?: (ok: boolean, reason: 'success' | 'invalid-token' | 'timeout' | 'closed') => void
+  /** Emits a privacy-preserving audit event after a valid hello. */
+  onDeviceAuthenticated?: (deviceId: string) => void
   /**
    * Zero-touch push enrollment: fired when a distributed app presents the
    * distributor's shared enrollKey during c2s.push.register. May perform the
@@ -58,11 +62,12 @@ export interface ConnectionStateDeps {
 
 /**
  * One connected phone. Implements BridgeSink so the HostBridge can push
- * projected frames and replays. Bearer/query credentials may authenticate the
+ * projected frames and replays. Bearer credentials may authenticate the
  * HTTP upgrade; otherwise the first hello frame is verified here.
  */
 export class BridgeConnection implements BridgeSink {
   private authenticated = false
+  private authenticationSettled = false
   private closed = false
   private helloTimer: NodeJS.Timeout | undefined
   private readonly openSessions = new Set<string>()
@@ -94,7 +99,10 @@ export class BridgeConnection implements BridgeSink {
       /* close follows */
     })
     this.helloTimer = setTimeout(() => {
-      if (!this.authenticated) this.close(4402, 'auth timeout')
+      if (!this.authenticated) {
+        this.settleAuthentication(false, 'timeout')
+        this.close(4402, 'auth timeout')
+      }
     }, AUTH_TIMEOUT_MS)
   }
 
@@ -162,6 +170,7 @@ export class BridgeConnection implements BridgeSink {
   private onClose(): void {
     if (this.closed) return
     this.closed = true
+    if (!this.authenticationSettled) this.settleAuthentication(false, 'closed')
     if (this.helloTimer !== undefined) clearTimeout(this.helloTimer)
     for (const id of this.openSessions) {
       this.deps.bridge.markSinkClosed(this, id)
@@ -170,6 +179,12 @@ export class BridgeConnection implements BridgeSink {
     this.openingSessionEvents.clear()
     this.deps.bridge.dropSinkSessions(this)
     if (this.authenticated) this.deps.bridge.removeSink(this)
+  }
+
+  private settleAuthentication(ok: boolean, reason: 'success' | 'invalid-token' | 'timeout' | 'closed'): void {
+    if (this.authenticationSettled) return
+    this.authenticationSettled = true
+    this.deps.onAuthenticationSettled?.(ok, reason)
   }
 
   private close(code: number, reason: string): void {
@@ -578,9 +593,13 @@ export class BridgeConnection implements BridgeSink {
     const p = (env.payload ?? {}) as Partial<HelloAuthPayload>
     if (!helloTokenAccepted(this.deps.transportAuthenticated, p.token, this.deps.expectedToken)) {
       this.fail(env.id, 'E_AUTH', 'token missing or invalid')
+      this.settleAuthentication(false, 'invalid-token')
       this.close(4401, 'invalid token')
       return
     }
+    // The secret is valid even if the following identity payload is malformed.
+    // Release the anonymous slot and clear source failure history immediately.
+    this.settleAuthentication(true, 'success')
     if (!p.deviceId) {
       this.fail(env.id, 'E_PROTOCOL', 'deviceId required')
       this.close(4403, 'deviceId required')
@@ -598,7 +617,7 @@ export class BridgeConnection implements BridgeSink {
     this.deviceId = deviceId
     if (this.helloTimer !== undefined) clearTimeout(this.helloTimer)
     this.deps.devices.touch({ deviceId, deviceName, appVersion }, Date.now())
-    this.deps.log('device paired: ' + deviceName + ' (' + deviceId + ')')
+    this.deps.onDeviceAuthenticated?.(deviceId)
 
     const cursor = typeof p.resumeCursor === 'number' && p.resumeCursor >= 0
       ? p.resumeCursor

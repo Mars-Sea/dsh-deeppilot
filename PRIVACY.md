@@ -13,6 +13,8 @@ By default, runtime state is stored under `$DSH_HOME/deeppilot/`:
   timestamps, notification preferences, and APNs registrations;
 - `tailscale/`: local state for the optional embedded `tsnet` node.
 
+The canonical directory is repaired to owner-only mode `0700` at startup.
+
 The pairing token and full APNs tokens are not rendered in routine logs. The
 settings report exposes only token readiness and masked/fingerprint values
 needed for diagnostics.
@@ -60,5 +62,7 @@ available.
 ## Logs
 
 Routine logs contain lifecycle state, delivery outcomes, and masked token
-prefixes. They are designed not to contain pairing tokens or message bodies.
-Frame-level diagnostics are emitted only when `debug` is enabled.
+prefixes. Authentication events use process-local salted hashes rather than
+raw device identifiers or source addresses. These values cannot be correlated
+across restarts. Logs are designed not to contain pairing tokens or message
+bodies. Frame-level diagnostics are emitted only when `debug` is enabled.

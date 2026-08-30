@@ -82,6 +82,12 @@ const TABLES: LocaleTables = {
     'remote.on': '已配置：内嵌 Funnel 会自动启动并同步状态。',
     'remote.off': '关闭：仅保留局域网连接。',
     'remote.openAuth': '打开授权页面',
+    'remote.limitTitle': '每个公网来源的连接上限',
+    'remote.limitDescription': '默认 8，范围 1–16。应用后 Funnel 会重启，已有远程连接将短暂重连。',
+    'remote.limitApply': '应用',
+    'remote.limitApplied': '连接上限已保存，远程入口正在重新加载。',
+    'remote.limitInvalid': '请输入 1–16 之间的整数。',
+    'remote.limitFailed': '连接上限保存失败：',
 
     // ---- remote phases ----
     'phase.disabled': '未启用',
@@ -211,6 +217,7 @@ const TABLES: LocaleTables = {
     'diag.missingReportHook': 'useDeepPilotReport hook 缺失',
     'diag.missingEnabledHook': 'useDeepPilotEnabled hook 缺失',
     'diag.missingRemoteEnabledHook': 'useDeepPilotRemoteEnabled hook 缺失',
+    'diag.missingRemoteLimitHook': 'useDeepPilotRemoteConnectionLimit hook 缺失',
     'diag.missingRefresh': 'refresh 回调缺失',
     'diag.missingReveal': 'revealPairingToken 回调缺失',
     'diag.missingRotate': 'rotatePairingToken 回调缺失',
@@ -218,6 +225,7 @@ const TABLES: LocaleTables = {
     'diag.missingTestPush': 'testPush 回调缺失',
     'diag.missingSetEnabled': 'setDeepPilotEnabled 回调缺失',
     'diag.missingSetRemote': 'setDeepPilotRemoteEnabled 回调缺失',
+    'diag.missingSetRemoteLimit': 'setDeepPilotRemoteConnectionLimit 回调缺失',
     'diag.renderError': '渲染异常: ',
     'diag.prefix': 'diag: ',
 
@@ -252,6 +260,12 @@ const TABLES: LocaleTables = {
     'remote.on': 'Configured: the embedded Funnel will start and sync state automatically.',
     'remote.off': 'Off: LAN connections only.',
     'remote.openAuth': 'Open authorization page',
+    'remote.limitTitle': 'Connections per public source',
+    'remote.limitDescription': 'Default 8; range 1–16. Applying restarts Funnel and briefly reconnects existing remote clients.',
+    'remote.limitApply': 'Apply',
+    'remote.limitApplied': 'Connection limit saved; the remote endpoint is reloading.',
+    'remote.limitInvalid': 'Enter an integer from 1 to 16.',
+    'remote.limitFailed': 'Failed to save connection limit: ',
 
     // ---- remote phases ----
     'phase.disabled': 'Disabled',
@@ -380,6 +394,7 @@ const TABLES: LocaleTables = {
     'diag.missingReportHook': 'useDeepPilotReport hook missing',
     'diag.missingEnabledHook': 'useDeepPilotEnabled hook missing',
     'diag.missingRemoteEnabledHook': 'useDeepPilotRemoteEnabled hook missing',
+    'diag.missingRemoteLimitHook': 'useDeepPilotRemoteConnectionLimit hook missing',
     'diag.missingRefresh': 'refresh callback missing',
     'diag.missingReveal': 'revealPairingToken callback missing',
     'diag.missingRotate': 'rotatePairingToken callback missing',
@@ -387,6 +402,7 @@ const TABLES: LocaleTables = {
     'diag.missingTestPush': 'testPush callback missing',
     'diag.missingSetEnabled': 'setDeepPilotEnabled callback missing',
     'diag.missingSetRemote': 'setDeepPilotRemoteEnabled callback missing',
+    'diag.missingSetRemoteLimit': 'setDeepPilotRemoteConnectionLimit callback missing',
     'diag.renderError': 'Render error: ',
     'diag.prefix': 'diag: ',
 

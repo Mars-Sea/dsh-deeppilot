@@ -85,6 +85,7 @@ interface Harness {
 async function makeConnection(opts: {
   transportAuthenticated?: boolean
   proxyOverrides?: Partial<ApiProxyLike>
+  onAuthenticationSettled?: (ok: boolean, reason: 'success' | 'invalid-token' | 'timeout' | 'closed') => void
 } = {}): Promise<Harness> {
   const bridge = new HostBridge(makeProxy(opts.proxyOverrides), 100)
   // Each harness gets its own registry file so tests never share state.
@@ -101,6 +102,7 @@ async function makeConnection(opts: {
     expectedToken: TOKEN,
     ...(opts.transportAuthenticated ? { transportAuthenticated: true } : {}),
     log: (m) => logs.push(m),
+    ...(opts.onAuthenticationSettled ? { onAuthenticationSettled: opts.onAuthenticationSettled } : {}),
     onClosed: () => {
       void (async () => {
         await store.drain()
@@ -138,6 +140,17 @@ test('hello with a wrong token fails closed without revealing which part was wro
   assert.equal(lastFrame(ws).payload.code, 'E_AUTH')
   assert.deepEqual(ws.closes, [{ code: 4401, reason: 'invalid token' }])
   assert.deepEqual(store.list(), [], 'failed pairing must not register a device')
+})
+
+test('authentication settlement fires once for a failed hello and synchronous close', async () => {
+  const settled: Array<{ ok: boolean; reason: string }> = []
+  const { ws } = await makeConnection({
+    onAuthenticationSettled: (ok, reason) => settled.push({ ok, reason }),
+  })
+
+  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { token: 'wrong', deviceId: 'd1' } })
+
+  assert.deepEqual(settled, [{ ok: false, reason: 'invalid-token' }])
 })
 
 // ---------- hello / device identity ----------

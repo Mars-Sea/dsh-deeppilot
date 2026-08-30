@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
@@ -13,7 +13,7 @@ import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-sett
 import { applyReportRemote } from './report-remote.ts'
 import { runRelayProbe } from './relay-test.ts'
 import type { PushTestResult } from './report-wire.ts'
-import { DeviceStore, bridgeDataDir, expandHome, loadOrCreateToken, migrateLegacyBridgeDataDir, tokenMatches, writeNewToken } from './token.ts'
+import { DeviceStore, bridgeDataDir, ensurePrivateBridgeDataDir, expandHome, loadOrCreateToken, migrateLegacyBridgeDataDir, tokenMatches, writeNewToken } from './token.ts'
 import type { ApnsEnvironment } from './token.ts'
 import { ApnsClient } from './apns.ts'
 import { RelayClient } from './relay-client.ts'
@@ -24,11 +24,13 @@ import {
   RemoteSupervisor,
   type RemoteStatus,
 } from './remote-supervisor.ts'
+import { normalizeFunnelConnectionLimit } from './funnel-policy.ts'
 import { localLANIPv4Addresses } from './local-address.ts'
 import { UpdateChecker, type UpdateInfo } from './update-check.ts'
 import { Config, DEFAULT_RELAY_URL, normalizeOptions } from './config.ts'
 import type { Config as PluginConfig } from './config.ts'
-import { rejectUpgrade, requestToken } from './phone-http.ts'
+import { rejectUpgrade, requestClientIdentity, requestToken } from './phone-http.ts'
+import { AuthRateLimiter } from './auth-rate-limit.ts'
 import { shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
 
 /**
@@ -110,6 +112,12 @@ export function apply(ctx: Context, options: unknown): void {
   const log = (message: string): void => {
     console.log('[deeppilot] ' + message)
   }
+  const auditSalt = randomBytes(32)
+  const auditLabel = (value: string): string => createHash('sha256')
+    .update(auditSalt)
+    .update(value)
+    .digest('hex')
+    .slice(0, 12)
 
   /**
    * Settings-section source: while a settings service is attached this holds
@@ -224,6 +232,7 @@ export function apply(ctx: Context, options: unknown): void {
       } catch (error) {
         log('legacy plugin-state migration skipped: ' + String(error))
       }
+      await ensurePrivateBridgeDataDir()
       auth.tokenPath = cfg.authTokenPath ?? join(dataDir, 'auth-token')
       auth.token = await loadOrCreateToken(auth.tokenPath)
       auth.devices = await DeviceStore.load(cfg.devicesPath ?? join(dataDir, 'devices.json'))
@@ -735,6 +744,7 @@ export function apply(ctx: Context, options: unknown): void {
     })
   const state: { bridge?: HostBridge } = {}
   let pendingUpgrades = 0
+  const authRateLimiter = new AuthRateLimiter()
 
   const handleUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
     void (async () => {
@@ -755,13 +765,26 @@ export function apply(ctx: Context, options: unknown): void {
           rejectUpgrade(socket, 503, 'bridge degraded')
           return
         }
+        const source = requestClientIdentity(req)
         const presentedToken = requestToken(req)
-        if (presentedToken !== null && !tokenMatches(presentedToken, token)) {
-          rejectUpgrade(socket, 401, 'invalid token')
+        const transportAuthenticated = tokenMatches(presentedToken, token)
+        const admission = transportAuthenticated
+          ? { ok: true, retryAfterMs: 0, release: () => {} }
+          : authRateLimiter.admit(source)
+        if (!admission.ok) {
+          rejectUpgrade(socket, 429, 'authentication rate limited', admission.retryAfterMs / 1_000)
+          return
+        }
+        if (presentedToken !== null && !transportAuthenticated) {
+          const failure = authRateLimiter.recordFailure(source)
+          admission.release()
+          if (failure.newlyBlocked) log(`authentication source blocked source=${auditLabel(source)}`)
+          rejectUpgrade(socket, failure.blocked ? 429 : 401, failure.blocked ? 'authentication rate limited' : 'invalid token', failure.retryAfterMs / 1_000)
           return
         }
         const bridge = state.bridge
         if (!bridge) {
+          admission.release()
           rejectUpgrade(socket, 503, 'bridge not ready')
           return
         }
@@ -769,27 +792,52 @@ export function apply(ctx: Context, options: unknown): void {
         // flight; a connection validated against the previous token must not
         // survive it.
         if (auth.token !== token) {
+          admission.release()
           rejectUpgrade(socket, 401, 'invalid token')
           return
         }
-        wss.handleUpgrade(req, socket, head, (ws) => {
-          if (auth.token !== token || state.bridge !== bridge) {
-            ws.close(1012, 'bridge changed')
-            return
-          }
-          const connection = new BridgeConnection(ws, {
-            bridge,
-            devices,
-            serverVersion: SERVER_VERSION,
-            expectedToken: token,
-            transportAuthenticated: presentedToken !== null,
-            log,
-            debug: currentConfig().debug === true,
-            onClosed: (closed) => connections.delete(closed),
-            onPushEnrollKey: handlePushEnrollKey,
+        try {
+          wss.handleUpgrade(req, socket, head, (ws) => {
+            if (auth.token !== token || state.bridge !== bridge) {
+              admission.release()
+              ws.close(1012, 'bridge changed')
+              return
+            }
+            try {
+              const connection = new BridgeConnection(ws, {
+                bridge,
+                devices,
+                serverVersion: SERVER_VERSION,
+                expectedToken: token,
+                transportAuthenticated,
+                log,
+                debug: currentConfig().debug === true,
+                onClosed: (closed) => connections.delete(closed),
+                onAuthenticationSettled: (ok) => {
+                  admission.release()
+                  if (ok) {
+                    authRateLimiter.recordSuccess(source)
+                  } else {
+                    const failure = authRateLimiter.recordFailure(source)
+                    if (failure.newlyBlocked) log(`authentication source blocked source=${auditLabel(source)}`)
+                  }
+                },
+                onDeviceAuthenticated: (deviceId) => {
+                  log(`device authenticated id=${auditLabel(deviceId)} source=${auditLabel(source)}`)
+                },
+                onPushEnrollKey: handlePushEnrollKey,
+              })
+              connections.add(connection)
+            } catch (error) {
+              admission.release()
+              ws.close(1011, 'connection setup failed')
+              throw error
+            }
           })
-          connections.add(connection)
-        })
+        } catch (error) {
+          admission.release()
+          throw error
+        }
         } finally {
           pendingUpgrades -= 1
         }
@@ -810,11 +858,24 @@ export function apply(ctx: Context, options: unknown): void {
         res.end(JSON.stringify({ ok: false, degraded: true }))
         return
       }
+      const source = requestClientIdentity(req)
       if (!tokenMatches(requestToken(req), token)) {
-        res.statusCode = 401
+        const admission = authRateLimiter.admit(source)
+        if (!admission.ok) {
+          res.statusCode = 429
+          res.setHeader('Retry-After', String(Math.max(1, Math.ceil(admission.retryAfterMs / 1_000))))
+          res.end(JSON.stringify({ ok: false }))
+          return
+        }
+        const failure = authRateLimiter.recordFailure(source)
+        admission.release()
+        if (failure.newlyBlocked) log(`authentication source blocked source=${auditLabel(source)}`)
+        res.statusCode = failure.blocked ? 429 : 401
+        if (failure.blocked) res.setHeader('Retry-After', String(Math.max(1, Math.ceil(failure.retryAfterMs / 1_000))))
         res.end(JSON.stringify({ ok: false }))
         return
       }
+      authRateLimiter.recordSuccess(source)
       res.statusCode = 200
       res.end(JSON.stringify({
         ok: true,
@@ -943,6 +1004,7 @@ export function apply(ctx: Context, options: unknown): void {
           statePath: remoteConfig.statePath?.trim() || join(dataDir, 'tailscale'),
           helperPath,
           funnelPort: remotePort,
+          maxConnectionsPerSource: normalizeFunnelConnectionLimit(remoteConfig.maxConnectionsPerSource),
         }
         const nextKey = JSON.stringify(next)
         if (nextKey === appliedRemoteKey) return
@@ -958,6 +1020,7 @@ export function apply(ctx: Context, options: unknown): void {
           statePath: next.statePath,
           ...(next.helperPath ? { helperPath: next.helperPath } : {}),
           funnelPort: next.funnelPort,
+          maxConnectionsPerSource: next.maxConnectionsPerSource,
           log,
         })
         remoteSupervisor = supervisor

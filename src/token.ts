@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 
@@ -19,6 +19,14 @@ function dshDataRoot(): string {
 /** DeepPilot data directory: under $DSH_HOME when set, else ~/.dsh. */
 export function bridgeDataDir(): string {
   return resolve(dshDataRoot(), 'deeppilot')
+}
+
+/** Create or repair the canonical secret-bearing directory as owner-only. */
+export async function ensurePrivateBridgeDataDir(): Promise<string> {
+  const target = bridgeDataDir()
+  await mkdir(target, { recursive: true, mode: 0o700 })
+  await chmod(target, 0o700)
+  return target
 }
 
 /**

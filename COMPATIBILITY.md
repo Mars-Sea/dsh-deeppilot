@@ -19,8 +19,8 @@ unit tests does not prove every DSH build, network, Mac, or iPhone combination.
   can still run; remote Funnel reports `unavailable`.
 - If a DSH host API is missing, only the dependent capability should be
   disabled. The plugin must not crash the host.
-- Query-string token authentication is legacy compatibility only. Current
-  clients use Bearer or first-frame authentication.
+- URL query credentials are rejected. Supported clients use Bearer or
+  first-frame authentication.
 
 ## Not yet claimed
 

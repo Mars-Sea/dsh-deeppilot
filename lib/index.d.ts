@@ -563,6 +563,8 @@ interface Config {
     statePath?: string;
     helperPath?: string;
     funnelPort?: 443 | 8443 | 10000;
+    /** Concurrent Funnel WebSockets allowed from one public source address. */
+    maxConnectionsPerSource?: number;
   };
   /**
    * Offline push (F-9). `apns` sends directly from the Mac with the user's
@@ -600,6 +602,7 @@ declare const Config: z<Schemastery.ObjectS<{
     statePath: z<string, string>;
     helperPath: z<string, string>;
     funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000>;
+    maxConnectionsPerSource: z<number, number>;
   }>, Schemastery.ObjectT<{
     enabled: z<boolean, boolean>;
     provider: z<"tailscale-funnel", "tailscale-funnel">;
@@ -607,6 +610,7 @@ declare const Config: z<Schemastery.ObjectS<{
     statePath: z<string, string>;
     helperPath: z<string, string>;
     funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000>;
+    maxConnectionsPerSource: z<number, number>;
   }>>;
   push: z<Schemastery.ObjectS<{
     provider: z<"none" | "apns" | "relay", "none" | "apns" | "relay">;
@@ -638,6 +642,7 @@ declare const Config: z<Schemastery.ObjectS<{
     statePath: z<string, string>;
     helperPath: z<string, string>;
     funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000>;
+    maxConnectionsPerSource: z<number, number>;
   }>, Schemastery.ObjectT<{
     enabled: z<boolean, boolean>;
     provider: z<"tailscale-funnel", "tailscale-funnel">;
@@ -645,6 +650,7 @@ declare const Config: z<Schemastery.ObjectS<{
     statePath: z<string, string>;
     helperPath: z<string, string>;
     funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000>;
+    maxConnectionsPerSource: z<number, number>;
   }>>;
   push: z<Schemastery.ObjectS<{
     provider: z<"none" | "apns" | "relay", "none" | "apns" | "relay">;
@@ -666,7 +672,7 @@ declare const Config: z<Schemastery.ObjectS<{
 }>>;
 //#endregion
 //#region src/phone-http.d.ts
-/** Authorization is preferred; the query form remains for older app builds. */
+/** Credentials are accepted only from the Authorization header. */
 declare function requestToken(req: Pick<IncomingMessage, 'url' | 'headers'>): string | null;
 //#endregion
 //#region src/push-policy.d.ts

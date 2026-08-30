@@ -3,7 +3,8 @@ import * as QRCode from 'qrcode/lib/browser.js'
 import type { DeepPilotReport, PushTestResult, RelayTestResult } from '../report-wire.ts'
 import { encodePairingQRPayload, selectPairingTarget } from '../pairing-qr.ts'
 import { translateWith as t } from './i18n.ts'
-import type { EnabledState, PageState, RemoteEnabledState } from './index.ts'
+import type { EnabledState, PageState, RemoteConnectionLimitState, RemoteEnabledState } from './index.ts'
+import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, MAX_FUNNEL_CONNECTIONS_PER_SOURCE } from '../funnel-policy.ts'
 
 type T = (key: string, vars?: Readonly<Record<string, unknown>>) => string
 
@@ -47,6 +48,8 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   const [tokenMessage, setTokenMessage] = useState('')
   const [rotateArmed, setRotateArmed] = useState(false)
   const [remoteMessage, setRemoteMessage] = useState('')
+  const [remoteLimitDraft, setRemoteLimitDraft] = useState(String(DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE))
+  const [remoteLimitMessage, setRemoteLimitMessage] = useState('')
   const [qrDataURL, setQRDataURL] = useState<string | null>(null)
   const [qrBusy, setQRBusy] = useState(false)
   const [qrMessage, setQRMessage] = useState('')
@@ -127,6 +130,12 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   }, [remoteMessage])
 
   useEffect(() => {
+    if (!remoteLimitMessage) return
+    const timer = globalThis.setTimeout(() => setRemoteLimitMessage(''), 4_000)
+    return () => globalThis.clearTimeout(timer)
+  }, [remoteLimitMessage])
+
+  useEffect(() => {
     if (qrDataURL === null) return
     const timer = globalThis.setTimeout(() => {
       setQRDataURL(null)
@@ -147,6 +156,8 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   let switchReady = false
   let remoteEnabled = false
   let remoteSwitchReady = false
+  let remoteConnectionLimit = DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE
+  let remoteConnectionLimitReady = false
   let failed = false
 
   try {
@@ -183,9 +194,36 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
       diag.push(t(props.t, 'diag.missingRemoteEnabledHook'))
     }
     if (typeof props.setDeepPilotRemoteEnabled !== 'function') diag.push(t(props.t, 'diag.missingSetRemote'))
+    if (typeof props.useDeepPilotRemoteConnectionLimit === 'function') {
+      const state = props.useDeepPilotRemoteConnectionLimit((s: RemoteConnectionLimitState) => s)
+      remoteConnectionLimit = state.value
+      remoteConnectionLimitReady = state.status === 'ready'
+    } else {
+      diag.push(t(props.t, 'diag.missingRemoteLimitHook'))
+    }
+    if (typeof props.setDeepPilotRemoteConnectionLimit !== 'function') diag.push(t(props.t, 'diag.missingSetRemoteLimit'))
   } catch (error) {
     diag.push(t(props.t, 'diag.renderError') + (error instanceof Error ? error.message : String(error)))
     failed = true
+  }
+
+  useEffect(() => {
+    setRemoteLimitDraft(String(remoteConnectionLimit))
+  }, [remoteConnectionLimit])
+
+  const parsedRemoteLimit = Number(remoteLimitDraft)
+  const remoteLimitValid = Number.isInteger(parsedRemoteLimit) && parsedRemoteLimit >= 1 && parsedRemoteLimit <= MAX_FUNNEL_CONNECTIONS_PER_SOURCE
+  const applyRemoteLimit = (): void => {
+    if (!remoteLimitValid || typeof props.setDeepPilotRemoteConnectionLimit !== 'function') {
+      setRemoteLimitMessage(t(props.t, 'remote.limitInvalid'))
+      return
+    }
+    setRemoteLimitMessage('')
+    void props.setDeepPilotRemoteConnectionLimit(parsedRemoteLimit).then(() => {
+      setRemoteLimitMessage(t(props.t, 'remote.limitApplied'))
+    }, (error: unknown) => {
+      setRemoteLimitMessage(t(props.t, 'remote.limitFailed') + (error instanceof Error ? error.message : String(error)))
+    })
   }
 
   const pairingTarget = report === null
@@ -421,6 +459,44 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
             }
           },
         }),
+      ),
+      h('div', { className: 'pbb-limitRow' },
+        h('div', { className: 'pbb-switchText' },
+          h('label', { className: 'pbb-switchTitle', htmlFor: 'deeppilot-funnel-source-limit' }, t(props.t, 'remote.limitTitle')),
+          h('span', { className: 'pbb-switchDesc' }, t(props.t, 'remote.limitDescription')),
+          !remoteLimitValid
+            ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'remote.limitInvalid'))
+            : remoteLimitMessage
+              ? h('p', { className: 'pbb-diag' + (remoteLimitMessage.startsWith(t(props.t, 'remote.limitFailed')) ? ' pbb-diagBad' : '') }, remoteLimitMessage)
+              : null,
+        ),
+        h('div', { className: 'pbb-limitControl' },
+          h('input', {
+            id: 'deeppilot-funnel-source-limit',
+            className: 'pbb-numberInput',
+            type: 'number',
+            min: 1,
+            max: MAX_FUNNEL_CONNECTIONS_PER_SOURCE,
+            step: 1,
+            inputMode: 'numeric',
+            value: remoteLimitDraft,
+            disabled: !remoteConnectionLimitReady,
+            'aria-label': t(props.t, 'remote.limitTitle'),
+            onChange: (event: { currentTarget: { value: string } }) => setRemoteLimitDraft(event.currentTarget.value),
+            onKeyDown: (event: { key: string; preventDefault: () => void }) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                applyRemoteLimit()
+              }
+            },
+          }),
+          h('button', {
+            type: 'button',
+            className: 'pbb-action',
+            disabled: !remoteConnectionLimitReady || !remoteLimitValid || parsedRemoteLimit === remoteConnectionLimit,
+            onClick: applyRemoteLimit,
+          }, t(props.t, 'remote.limitApply')),
+        ),
       ),
       h('details', { className: 'pbb-help' },
         h('summary', null, t(props.t, 'help.remoteTitle')),

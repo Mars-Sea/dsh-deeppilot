@@ -56,9 +56,14 @@ dsh plugin --profile web remove dsh-deeppilot
 是明文流量，只应在可信网络使用。可选 Funnel 模式只暴露经过认证的 DeepPilot
 连接与健康检查端点，不会暴露完整 DSH Web UI。
 
+DeepPilot 设置页提供“每个公网来源的连接上限”，默认 `8`，可设置为 `1`–`16`。
+修改后 Funnel helper 会短暂重启，已连接的远程客户端会自动重连一次。
+
 离线推送是可选功能。中继模式只发送目标 APNs 设备 Token 和有限的通知内容；
 完整会话历史与实时输出不会经过中继。启用远程访问或推送前，请阅读
-[PRIVACY.md](./PRIVACY.md) 与 [SECURITY.md](./SECURITY.md)。
+[PRIVACY.md](./PRIVACY.md) 与 [SECURITY.md](./SECURITY.md)。设备级协议 v2
+升级方案单独记录在 [docs/SECURITY_ROADMAP.zh-CN.md](./docs/SECURITY_ROADMAP.zh-CN.md)，
+它目前是路线图，不代表已实现能力。
 
 ## App 截图
 

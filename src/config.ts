@@ -1,6 +1,9 @@
 import { join } from 'node:path'
 import z from '@deepseek-ai/schemastery'
-import { DEFAULT_REMOTE_HOSTNAME } from './remote-supervisor.ts'
+import {
+  DEFAULT_REMOTE_HOSTNAME,
+} from './remote-supervisor.ts'
+import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, MAX_FUNNEL_CONNECTIONS_PER_SOURCE } from './funnel-policy.ts'
 import { bridgeDataDir } from './token.ts'
 
 export interface Config {
@@ -22,6 +25,8 @@ export interface Config {
     statePath?: string
     helperPath?: string
     funnelPort?: 443 | 8443 | 10000
+    /** Concurrent Funnel WebSockets allowed from one public source address. */
+    maxConnectionsPerSource?: number
   }
   /**
    * Offline push (F-9). `apns` sends directly from the Mac with the user's
@@ -63,6 +68,11 @@ export const Config = z.object({
     statePath: z.string().default(join(bridgeDataDir(), 'tailscale')),
     helperPath: z.string().default(''),
     funnelPort: z.union([443, 8443, 10000] as const).default(443),
+    maxConnectionsPerSource: z.natural()
+      .min(1)
+      .max(MAX_FUNNEL_CONNECTIONS_PER_SOURCE)
+      .default(DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE)
+      .description('Funnel 每个来源允许的并发连接数（1–16，修改后远程连接会短暂重连）'),
   }).default({
     enabled: false,
     provider: 'tailscale-funnel',
@@ -70,6 +80,7 @@ export const Config = z.object({
     statePath: join(bridgeDataDir(), 'tailscale'),
     helperPath: '',
     funnelPort: 443,
+    maxConnectionsPerSource: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE,
   }),
   push: z.object({
     provider: z.union(['none', 'apns', 'relay'] as const).default('none'),

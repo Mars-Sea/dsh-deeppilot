@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expandHome } from './token.ts'
+import { normalizeFunnelConnectionLimit } from './funnel-policy.ts'
 
 export type RemotePhase =
   | 'disabled'
@@ -30,6 +31,7 @@ export interface RemoteSupervisorOptions {
   statePath: string
   helperPath?: string
   funnelPort?: 443 | 8443 | 10000
+  maxConnectionsPerSource?: number
   log: (message: string) => void
 }
 
@@ -73,6 +75,20 @@ export function normalizeRemoteHostname(value: string | undefined): string {
     return DEFAULT_REMOTE_HOSTNAME
   }
   return hostname
+}
+
+export function tunnelHelperArguments(
+  originURL: string,
+  statePath: string,
+  options: Pick<RemoteSupervisorOptions, 'hostname' | 'funnelPort' | 'maxConnectionsPerSource'>,
+): string[] {
+  return [
+    '--origin', originURL,
+    '--hostname', normalizeRemoteHostname(options.hostname),
+    '--state-dir', statePath,
+    '--port', String(options.funnelPort ?? 443),
+    '--max-connections-per-source', String(normalizeFunnelConnectionLimit(options.maxConnectionsPerSource)),
+  ]
 }
 
 /** Parse one helper IPC line without ever evaluating or interpolating it. */
@@ -227,12 +243,7 @@ export class RemoteSupervisor {
     if (this.stopping) return
 
     this.setStatus({ phase: 'starting', message: undefined })
-    const child = spawn(helper, [
-      '--origin', originURL,
-      '--hostname', normalizeRemoteHostname(this.options.hostname),
-      '--state-dir', statePath,
-      '--port', String(this.options.funnelPort ?? 443),
-    ], {
+    const child = spawn(helper, tunnelHelperArguments(originURL, statePath, this.options), {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         PATH: process.env.PATH ?? '/usr/bin:/bin',

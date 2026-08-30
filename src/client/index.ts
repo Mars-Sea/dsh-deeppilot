@@ -24,6 +24,7 @@ import { registerLocale as registerDeepPilotLocale, t } from './i18n.ts'
 import type { PushTestResult, RelayTestResult } from '../report-wire.ts'
 import { injectCss } from './styles.ts'
 import { DeepPilotSettingsPage } from './settings-page.ts'
+import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, normalizeFunnelConnectionLimit } from '../funnel-policy.ts'
 
 export { DeepPilotSettingsPage } from './settings-page.ts'
 
@@ -47,7 +48,7 @@ type AnyCtx = Context & {
 interface SettingsScopeLike {
   getSnapshot(): {
     status: 'loading' | 'ready' | 'unavailable'
-    value?: { enabled?: boolean; remote?: { enabled?: boolean; [key: string]: unknown } }
+    value?: { enabled?: boolean; remote?: { enabled?: boolean; maxConnectionsPerSource?: number; [key: string]: unknown } }
     writable?: boolean
   }
   subscribe(listener: () => void): () => void
@@ -72,6 +73,11 @@ export interface EnabledState {
 export interface RemoteEnabledState {
   status: 'loading' | 'ready' | 'unavailable'
   enabled: boolean
+}
+
+export interface RemoteConnectionLimitState {
+  status: 'loading' | 'ready' | 'unavailable'
+  value: number
 }
 
 /** Bound translation function shape used everywhere in this file. The
@@ -269,6 +275,11 @@ export function apply(ctx: Context): void {
     if (snap?.status === 'ready') return snap.value?.remote?.enabled === true
     return remoteEnabledStore.getSnapshot().enabled
   }
+  const lastConfirmedRemoteConnectionLimit = (): number => {
+    const snap = scope?.getSnapshot()
+    if (snap?.status === 'ready') return normalizeFunnelConnectionLimit(snap.value?.remote?.maxConnectionsPerSource)
+    return remoteConnectionLimitStore.getSnapshot().value
+  }
 
   const setDeepPilotEnabled = (value: boolean): void => {
     const previous = lastConfirmedEnabled()
@@ -285,13 +296,22 @@ export function apply(ctx: Context): void {
   }
 
   const remoteEnabledStore = createSnapshotStore<RemoteEnabledState>({ status: 'loading', enabled: false })
+  const remoteConnectionLimitStore = createSnapshotStore<RemoteConnectionLimitState>({
+    status: 'loading',
+    value: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE,
+  })
   const adoptRemoteEnabled = (): void => {
     if (scope === undefined) return
     const snap = scope.getSnapshot()
     if (snap.status === 'ready') {
       remoteEnabledStore.set({ status: 'ready', enabled: snap.value?.remote?.enabled === true })
+      remoteConnectionLimitStore.set({
+        status: 'ready',
+        value: normalizeFunnelConnectionLimit(snap.value?.remote?.maxConnectionsPerSource),
+      })
     } else if (snap.status === 'unavailable') {
       remoteEnabledStore.set({ status: 'unavailable', enabled: false })
+      remoteConnectionLimitStore.set({ status: 'unavailable', value: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE })
     }
   }
   if (scope !== undefined) {
@@ -309,6 +329,23 @@ export function apply(ctx: Context): void {
       const message = error instanceof Error ? error.message : String(error)
       console.error('[deeppilot] failed to persist remote.enabled=' + String(value) + ': ' + message)
     })
+  }
+
+  const setDeepPilotRemoteConnectionLimit = async (value: number): Promise<void> => {
+    const next = normalizeFunnelConnectionLimit(value)
+    if (next !== value) throw new RangeError('maxConnectionsPerSource must be an integer between 1 and 16')
+    if (scope === undefined) throw new Error('settings scope unavailable')
+    const previous = lastConfirmedRemoteConnectionLimit()
+    remoteConnectionLimitStore.set({ status: 'ready', value: next })
+    const currentRemote = scope.getSnapshot().value?.remote ?? {}
+    try {
+      await scope.set('remote', { ...currentRemote, maxConnectionsPerSource: next })
+    } catch (error) {
+      remoteConnectionLimitStore.set({ status: 'ready', value: previous })
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[deeppilot] failed to persist remote.maxConnectionsPerSource=' + String(next) + ': ' + message)
+      throw error
+    }
   }
 
   if (anyCtx.slots === undefined) {
@@ -333,6 +370,7 @@ export function apply(ctx: Context): void {
           deepPilotReport: store,
           deepPilotEnabled: enabledStore,
           deepPilotRemoteEnabled: remoteEnabledStore,
+          deepPilotRemoteConnectionLimit: remoteConnectionLimitStore,
         },
         refresh: () => { void controller.refresh() },
         revealPairingToken,
@@ -341,6 +379,7 @@ export function apply(ctx: Context): void {
         testPush: sendTestPush,
         setDeepPilotEnabled,
         setDeepPilotRemoteEnabled,
+        setDeepPilotRemoteConnectionLimit,
         // Bound translation function for the page. The page never imports
         // t() directly so it can be re-supplied if the host swaps the
         // locale face at runtime (a feature today; exercised in tests).

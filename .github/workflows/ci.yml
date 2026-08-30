@@ -18,6 +18,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
@@ -38,3 +39,8 @@ jobs:
       - name: Test helper
         working-directory: helper
         run: go test ./...
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+      - name: Scan reachable Go vulnerabilities
+        working-directory: helper
+        run: govulncheck ./...

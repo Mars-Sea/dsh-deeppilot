@@ -11,7 +11,9 @@ import {
   parseHelperEvent,
   RemoteSupervisor,
   restartDelayMs,
+  tunnelHelperArguments,
 } from '../src/remote-supervisor.ts'
+import { normalizeFunnelConnectionLimit } from '../src/funnel-policy.ts'
 
 test('remote hostname migrates every pre-DeepPilot default', () => {
   assert.equal(normalizeRemoteHostname(undefined), 'dsh-deeppilot')
@@ -21,6 +23,31 @@ test('remote hostname migrates every pre-DeepPilot default', () => {
   assert.equal(normalizeRemoteHostname('dsh-pocket'), 'dsh-deeppilot')
   assert.equal(normalizeRemoteHostname('HarnessPocket'), 'dsh-deeppilot')
   assert.equal(normalizeRemoteHostname('my-pocket'), 'my-pocket')
+})
+
+test('Funnel per-source connection limit defaults safely and accepts 1-16', () => {
+  assert.equal(normalizeFunnelConnectionLimit(undefined), 8)
+  assert.equal(normalizeFunnelConnectionLimit(0), 8)
+  assert.equal(normalizeFunnelConnectionLimit(17), 8)
+  assert.equal(normalizeFunnelConnectionLimit(1.5), 8)
+  assert.equal(normalizeFunnelConnectionLimit(1), 1)
+  assert.equal(normalizeFunnelConnectionLimit(12), 12)
+  assert.equal(normalizeFunnelConnectionLimit(16), 16)
+})
+
+test('remote supervisor forwards the configured connection limit to the helper', () => {
+  const args = tunnelHelperArguments('http://127.0.0.1:1234', '/tmp/state', {
+    hostname: 'DeepPilot',
+    funnelPort: 8443,
+    maxConnectionsPerSource: 12,
+  })
+  assert.deepEqual(args, [
+    '--origin', 'http://127.0.0.1:1234',
+    '--hostname', 'DeepPilot',
+    '--state-dir', '/tmp/state',
+    '--port', '8443',
+    '--max-connections-per-source', '12',
+  ])
 })
 
 test('remote helper IPC accepts only known structured phases', () => {

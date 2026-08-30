@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -36,6 +37,156 @@ var (
 	urlExpr = regexp.MustCompile(`https://[^\s]+`)
 )
 
+const clientIPHeader = "X-DeepPilot-Client-IP"
+
+type requestState struct {
+	requests     []time.Time
+	failures     []time.Time
+	blockedUntil time.Time
+	active       int
+	lastSeen     time.Time
+}
+
+type requestGate struct {
+	mu        sync.Mutex
+	clients   map[string]*requestState
+	global    []time.Time
+	maxState  int
+	maxActive int
+}
+
+func newRequestGate(maxActive int) *requestGate {
+	return &requestGate{clients: make(map[string]*requestState), maxState: 4096, maxActive: maxActive}
+}
+
+func (g *requestGate) admit(source string, upgraded bool, now time.Time) (func(), time.Duration, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	state := g.state(source, now)
+	if state == nil {
+		return func() {}, time.Minute, false
+	}
+	g.prune(state, now)
+	state.lastSeen = now
+	if state.blockedUntil.After(now) {
+		return func() {}, state.blockedUntil.Sub(now), false
+	}
+	if upgraded && state.active >= g.maxActive {
+		return func() {}, time.Minute, false
+	}
+	if len(state.requests) >= 60 {
+		return func() {}, state.requests[0].Add(time.Minute).Sub(now), false
+	}
+	g.global = recent(g.global, now.Add(-time.Minute))
+	if len(g.global) >= 600 {
+		return func() {}, g.global[0].Add(time.Minute).Sub(now), false
+	}
+	state.requests = append(state.requests, now)
+	g.global = append(g.global, now)
+	if upgraded {
+		state.active++
+	}
+	released := false
+	return func() {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		if released {
+			return
+		}
+		released = true
+		if upgraded && state.active > 0 {
+			state.active--
+		}
+	}, 0, true
+}
+
+func (g *requestGate) recordFailure(source string, now time.Time) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	state := g.state(source, now)
+	if state == nil {
+		return
+	}
+	g.prune(state, now)
+	state.failures = append(state.failures, now)
+	state.lastSeen = now
+	if len(state.failures) >= 5 {
+		state.blockedUntil = now.Add(15 * time.Minute)
+	}
+}
+
+func (g *requestGate) state(source string, now time.Time) *requestState {
+	if state := g.clients[source]; state != nil {
+		return state
+	}
+	if len(g.clients) >= g.maxState {
+		staleBefore := now.Add(-15 * time.Minute)
+		for key, state := range g.clients {
+			g.prune(state, now)
+			if state.active == 0 && !state.blockedUntil.After(now) && state.lastSeen.Before(staleBefore) {
+				delete(g.clients, key)
+			}
+		}
+	}
+	if len(g.clients) >= g.maxState {
+		return nil
+	}
+	state := &requestState{lastSeen: now}
+	g.clients[source] = state
+	return state
+}
+
+func (g *requestGate) prune(state *requestState, now time.Time) {
+	state.requests = recent(state.requests, now.Add(-time.Minute))
+	state.failures = recent(state.failures, now.Add(-10*time.Minute))
+	if !state.blockedUntil.After(now) {
+		state.blockedUntil = time.Time{}
+	}
+}
+
+func recent(values []time.Time, cutoff time.Time) []time.Time {
+	first := 0
+	for first < len(values) && !values[first].After(cutoff) {
+		first++
+	}
+	return values[first:]
+}
+
+func clientIP(remoteAddress string) string {
+	host, _, err := net.SplitHostPort(remoteAddress)
+	if err != nil {
+		host = remoteAddress
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return "unknown"
+	}
+	return ip.String()
+}
+
+type sourceContextKey struct{}
+
+func funnelSource(conn net.Conn) string {
+	for conn != nil {
+		if funneled, ok := conn.(*ipn.FunnelConn); ok && funneled.Src.Addr().IsValid() {
+			return funneled.Src.Addr().String()
+		}
+		wrapped, ok := conn.(interface{ NetConn() net.Conn })
+		if !ok || wrapped.NetConn() == conn {
+			break
+		}
+		conn = wrapped.NetConn()
+	}
+	return ""
+}
+
+func requestSource(r *http.Request) string {
+	if source, ok := r.Context().Value(sourceContextKey{}).(string); ok && source != "" {
+		return source
+	}
+	return clientIP(r.RemoteAddr)
+}
+
 func emit(value event) {
 	emitMu.Lock()
 	defer emitMu.Unlock()
@@ -47,6 +198,7 @@ func main() {
 	hostnameFlag := flag.String("hostname", "dsh-deeppilot", "tailnet node hostname")
 	stateDirFlag := flag.String("state-dir", "", "persistent tsnet state directory")
 	portFlag := flag.Int("port", 443, "Funnel port (443, 8443, or 10000)")
+	maxConnectionsFlag := flag.Int("max-connections-per-source", 8, "maximum concurrent Funnel connections per public source (1-16)")
 	flag.Parse()
 
 	origin, err := url.Parse(*originFlag)
@@ -59,8 +211,14 @@ func main() {
 	if *portFlag != 443 && *portFlag != 8443 && *portFlag != 10000 {
 		fail("port must be 443, 8443, or 10000")
 	}
+	if *maxConnectionsFlag < 1 || *maxConnectionsFlag > 16 {
+		fail("max-connections-per-source must be between 1 and 16")
+	}
 	if err := os.MkdirAll(filepath.Clean(*stateDirFlag), 0o700); err != nil {
 		fail("cannot create state directory: " + err.Error())
+	}
+	if err := os.Chmod(filepath.Clean(*stateDirFlag), 0o700); err != nil {
+		fail("cannot secure state directory: " + err.Error())
 	}
 
 	emit(event{Phase: "starting"})
@@ -133,6 +291,15 @@ func main() {
 	emit(event{Phase: "online", PublicURL: publicURL})
 
 	proxy := httputil.NewSingleHostReverseProxy(origin)
+	gate := newRequestGate(*maxConnectionsFlag)
+	proxy.ModifyResponse = func(response *http.Response) error {
+		if response.StatusCode == http.StatusUnauthorized {
+			if source, ok := response.Request.Context().Value(sourceContextKey{}).(string); ok {
+				gate.recordFailure(source, time.Now())
+			}
+		}
+		return nil
+	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, proxyErr error) {
 		http.Error(w, "DeepPilot bridge unavailable", http.StatusBadGateway)
 		fmt.Fprintln(os.Stderr, "origin proxy error:", proxyErr)
@@ -142,12 +309,36 @@ func main() {
 			http.NotFound(w, r)
 			return
 		}
+		source := requestSource(r)
+		upgraded := r.URL.Path == "/phone"
+		release, retryAfter, ok := gate.admit(source, upgraded, time.Now())
+		if !ok {
+			seconds := int(retryAfter.Round(time.Second) / time.Second)
+			if seconds < 1 {
+				seconds = 1
+			}
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", seconds))
+			http.Error(w, "authentication rate limited", http.StatusTooManyRequests)
+			return
+		}
+		defer release()
+		// Never forward a caller-supplied identity. Node trusts this header only
+		// over the helper's loopback connection.
+		r.Header.Del(clientIPHeader)
+		r.Header.Set(clientIPHeader, source)
+		r = r.WithContext(context.WithValue(r.Context(), sourceContextKey{}, source))
 		proxy.ServeHTTP(w, r)
 	})
 	httpServer := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       90 * time.Second,
+		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+			if source := funnelSource(conn); source != "" {
+				return context.WithValue(ctx, sourceContextKey{}, source)
+			}
+			return ctx
+		},
 	}
 	if err := httpServer.Serve(listener); err != nil && err != http.ErrServerClosed && ctx.Err() == nil {
 		fail("Funnel server failed: " + err.Error())

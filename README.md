@@ -60,10 +60,16 @@ Trusted-LAN `ws://` traffic is unencrypted, so use it only on a network you
 trust. Optional Funnel mode exposes only the authenticated DeepPilot connection
 and health endpoints, not the complete DSH Web UI.
 
+The DeepPilot settings page exposes **Connections per public source** for
+Funnel deployments. It defaults to `8`, accepts `1`–`16`, and briefly restarts
+the Funnel helper when changed, so connected remote clients reconnect once.
+
 Offline push is optional. Relay mode sends only the target APNs device token
 and a limited notification payload; full conversation history and live output
 do not pass through the relay. Read [PRIVACY.md](./PRIVACY.md) and
-[SECURITY.md](./SECURITY.md) before enabling remote access or push.
+[SECURITY.md](./SECURITY.md) before enabling remote access or push. The proposed
+per-device protocol-v2 upgrade is tracked separately in
+[docs/SECURITY_ROADMAP.md](./docs/SECURITY_ROADMAP.md).
 
 ## Screenshots
 

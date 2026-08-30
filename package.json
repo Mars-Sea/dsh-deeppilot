@@ -54,6 +54,8 @@
     "README.md",
     "README.zh-CN.md",
     "SECURITY.md",
+    "docs/SECURITY_ROADMAP.md",
+    "docs/SECURITY_ROADMAP.zh-CN.md",
     "PRIVACY.md",
     "COMPATIBILITY.md",
     "THIRD_PARTY_NOTICES.md"

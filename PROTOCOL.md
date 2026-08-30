@@ -20,7 +20,7 @@
 
 ## 2. 连接与鉴权
 
-1. 客户端连接 `wss://host/phone`。鉴权优先使用 HTTP `Authorization: Bearer TOKEN`；也可在未预鉴权的 WebSocket 建立后 5 秒内发送 `c2s.hello.auth` 并携带 `payload.token`。`?token=TOKEN` 仅为旧客户端兼容，不应写入新客户端 URL 或日志。
+1. 客户端连接 `wss://host/phone`。鉴权使用 HTTP `Authorization: Bearer TOKEN`；也可在未预鉴权的 WebSocket 建立后 5 秒内发送 `c2s.hello.auth` 并携带 `payload.token`。URL 查询参数不接受凭据，以免 token 泄露到代理、浏览器历史或访问日志。
 2. 鉴权失败：服务端以关闭码 **4401** 关闭。超时未鉴权：**4402**。`deviceId`
    缺失或非法时以 **4403** 关闭；客户端应把它视为本机身份资料错误，而不是 token 失效。
 3. 鉴权成功后服务端必须首先下发 `s2c.welcome`。welcome 之前客户端只允许发 hello 与 ping。
