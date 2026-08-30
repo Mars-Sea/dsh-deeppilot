@@ -1,15 +1,15 @@
-/**
- * Protocol-v1 compatibility identifier used by the TestFlight build currently
- * under review. This is wire data, not the plugin or product display name.
- */
-export const PAIRING_QR_TYPE = 'dsh-pocket-pairing'
-export const PAIRING_QR_VERSION = 1
+import type { PairingGrantSnapshot } from './report-wire.ts'
+
+export const PAIRING_QR_TYPE = 'deeppilot-pairing'
+export const PAIRING_QR_VERSION = 2
 
 export interface PairingQRPayload {
   v: typeof PAIRING_QR_VERSION
   type: typeof PAIRING_QR_TYPE
   host: string
-  token: string
+  code: string
+  expiresAt: number
+  audience: string
 }
 
 export interface PairingTarget {
@@ -55,20 +55,25 @@ export function selectPairingTarget(
   return { host: `${protocol}//${address}${port}`, kind: 'lan' }
 }
 
-/** Encode an out-of-band pairing payload without putting the token in a URL. */
-export function encodePairingQRPayload(host: string, token: string): string {
+/** Encode a short-lived, single-use pairing grant without URL credentials. */
+export function encodePairingQRPayload(host: string, grant: PairingGrantSnapshot): string {
   const normalizedHost = host.trim()
   const parsed = new URL(normalizedHost)
   const protocols = ['http:', 'https:', 'ws:', 'wss:']
   if (!protocols.includes(parsed.protocol) || parsed.hostname === '' || parsed.username !== '' || parsed.password !== '') {
     throw new TypeError('pairing QR requires a valid HTTP(S)/WS(S) host')
   }
-  if (token.trim().length < 32) throw new TypeError('pairing token is invalid')
+  if (grant.code.trim().length < 32 || !Number.isInteger(grant.expiresAt) || grant.expiresAt <= Date.now()) {
+    throw new TypeError('pairing grant is invalid or expired')
+  }
+  if (!grant.audience.startsWith('deeppilot:')) throw new TypeError('pairing audience is invalid')
   const payload: PairingQRPayload = {
     v: PAIRING_QR_VERSION,
     type: PAIRING_QR_TYPE,
     host: normalizedHost,
-    token: token.trim(),
+    code: grant.code.trim(),
+    expiresAt: grant.expiresAt,
+    audience: grant.audience,
   }
   return JSON.stringify(payload)
 }

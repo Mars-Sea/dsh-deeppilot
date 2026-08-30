@@ -1,4 +1,3 @@
-import { IncomingMessage } from "node:http";
 import z from "@deepseek-ai/schemastery";
 import { Context } from "@deepseek-ai/cordis";
 //#region src/protocol.d.ts
@@ -547,9 +546,7 @@ declare class HostBridge {
 interface Config {
   /** Master switch; when false the plugin activates and does nothing. */
   enabled?: boolean;
-  /** Pairing token file (0600); generated on first boot when missing. */
-  authTokenPath?: string;
-  /** Paired-device registry JSON path. */
+  /** Protocol-v2 device registry JSON path. */
   devicesPath?: string;
   /** Replay ring buffer bound (frames) per deployment. */
   historyBufferMax?: number;
@@ -591,7 +588,6 @@ interface Config {
 }
 declare const Config: z<Schemastery.ObjectS<{
   enabled: z<boolean, boolean>;
-  authTokenPath: z<string, string>;
   devicesPath: z<string, string>;
   historyBufferMax: z<number, number>;
   debug: z<boolean, boolean>;
@@ -631,7 +627,6 @@ declare const Config: z<Schemastery.ObjectS<{
   }>>;
 }>, Schemastery.ObjectT<{
   enabled: z<boolean, boolean>;
-  authTokenPath: z<string, string>;
   devicesPath: z<string, string>;
   historyBufferMax: z<number, number>;
   debug: z<boolean, boolean>;
@@ -671,10 +666,6 @@ declare const Config: z<Schemastery.ObjectS<{
   }>>;
 }>>;
 //#endregion
-//#region src/phone-http.d.ts
-/** Credentials are accepted only from the Authorization header. */
-declare function requestToken(req: Pick<IncomingMessage, 'url' | 'headers'>): string | null;
-//#endregion
 //#region src/push-policy.d.ts
 /** Prune only when the provider supplies an authoritative token-lifecycle verdict. */
 declare function shouldPrunePushToken(outcome: 'sent' | 'invalid-token' | 'failed', reason?: string): boolean;
@@ -699,15 +690,15 @@ declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 
  *
  * Data plane: an in-process HostBridge consumes apiProxy.events.mux()/host()
  * streams, mirrors session summaries, tracks pending approvals/questions,
- * and fans projected protocol-v1 pushes out to every connected device.
+ * and fans projected protocol-v2 pushes out to every connected device.
  *
  * Protocol: PROTOCOL.md is normative; src/protocol.ts and the private app's
- * Swift models mirror that v1 contract.
+ * Swift models mirror that v2 contract.
  */
 declare const name = "deeppilot";
 /** No eager service requirement: profiles without a web stack simply skip. */
 declare const inject: string[];
 declare function apply(ctx: Context, options: unknown): void;
 //#endregion
-export { Config, HostBridge, apply, inject, name, requestToken, shouldPrunePushToken, shouldReEnrollRelayToken };
+export { Config, HostBridge, apply, inject, name, shouldPrunePushToken, shouldReEnrollRelayToken };
 //# sourceMappingURL=index.d.ts.map

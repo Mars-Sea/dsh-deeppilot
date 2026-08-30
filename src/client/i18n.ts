@@ -68,7 +68,7 @@ const TABLES: LocaleTables = {
     // ---- meta / nav ----
     'nav': 'DeepPilot',
     'meta.title': 'DeepPilot',
-    'meta.intro': '把 iPhone 与这台电脑上的 DeepSeek Harness（DSH）连接起来（协议 v1）。',
+    'meta.intro': '把 iPhone 与这台电脑上的 DeepSeek Harness（DSH）连接起来（协议 v2）。',
     'meta.refresh': '刷新',
 
     // ---- master switch ----
@@ -82,6 +82,7 @@ const TABLES: LocaleTables = {
     'remote.on': '已配置：内嵌 Funnel 会自动启动并同步状态。',
     'remote.off': '关闭：仅保留局域网连接。',
     'remote.openAuth': '打开授权页面',
+    'remote.advancedSettings': '高级设置',
     'remote.limitTitle': '每个公网来源的连接上限',
     'remote.limitDescription': '默认 8，范围 1–16。应用后 Funnel 会重启，已有远程连接将短暂重连。',
     'remote.limitApply': '应用',
@@ -101,6 +102,9 @@ const TABLES: LocaleTables = {
 
     // ---- connection panel ----
     'panel.activeConnections': '当前连接',
+    'panel.identity': '设备身份认证',
+    'panel.identityReady': 'v2 已就绪',
+    'panel.identityNotReady': '不可用',
     'panel.token': '配对 Token',
     'panel.tokenReady': '已就绪',
     'panel.tokenNotReady': '未生成',
@@ -132,16 +136,20 @@ const TABLES: LocaleTables = {
     'pair.qrGenerating': '生成中…',
     'pair.qrAutoHidden': '配对二维码已自动隐藏',
     'pair.qrFailed': '二维码生成失败：',
+    'pair.codeLabel': '配对码（模拟器可手动输入）',
+    'pair.codeCopyDone': '配对码已复制',
+    'pair.codeCopyFailed': '配对码复制失败：',
     'pair.publicCopyDone': '公网地址已复制',
     'pair.publicCopyFailed': '复制失败：',
     // `{kind}`: public | lan
-    'pair.qrHint': '二维码包含{kind}地址和配对 Token，将在 60 秒后自动隐藏。',
+    'pair.qrHint': '二维码包含{kind}地址和一次性配对码；配对码 5 分钟后失效，二维码将在 60 秒后自动隐藏。',
 
     // ---- advanced info ----
     'advanced.summary': '高级信息',
     'advanced.protocolVersion': '协议版本',
     'advanced.serverVersion': '服务器版本',
     'advanced.tokenPath': 'Token 路径',
+    'advanced.identityPath': '设备注册表路径',
     'advanced.bufferMax': '重放缓冲上限',
     'advanced.frames': ' 帧',
 
@@ -166,16 +174,22 @@ const TABLES: LocaleTables = {
     'push.prefix.fail': '✗ ',
 
     // ---- devices table ----
-    'devices.title': '已配对设备',
+    'devices.title': '设备',
     'devices.col.name': '设备',
     'devices.col.appVersion': 'App 版本',
     'devices.col.push': '离线推送',
     'devices.col.lastSeen': '最近在线',
+    'devices.col.fingerprint': '密钥指纹',
+    'devices.col.actions': '操作',
+    'devices.revoke': '删除',
+    'devices.revokeConfirm': '确定删除设备“{name}”吗？该设备会立即断开，再次使用时需要重新配对。',
+    'devices.revoked': '设备已删除',
+    'devices.revokeFailed': '设备删除失败：',
     'devices.pushRegistered': '已注册（',
     'devices.pushNotRegistered': '未注册',
     'devices.pushEnvProduction': '生产',
     'devices.pushEnvDevelopment': '开发',
-    'devices.empty': '还没有设备配对过。在 iPhone 上的 DeepPilot App 中扫码或填入本机地址与 Token 即可配对。',
+    'devices.empty': '还没有 v2 设备。请在 iPhone 上扫描一次性配对二维码。',
 
     // ---- remote help ----
     'help.remoteTitle': '远程连接帮助',
@@ -199,9 +213,9 @@ const TABLES: LocaleTables = {
     'help.faq3': '已有公网地址但手机超时：等待几分钟后重试，同时确认这台电脑未休眠、DSH 正在运行，再重新扫描最新二维码。',
     'help.faq4': '没有公网地址：检查 Tailscale 授权是否完成，然后点击"刷新"或重启 DSH。',
     'help.securityTitle': '安全说明',
-    'help.security1': 'Funnel 公网地址可从互联网访问，但手机接口仍需要配对 Token。不要分享二维码、Token 或包含它们的截图。',
-    'help.security2': '怀疑 Token 泄露时，点击上方"更换"生成新 Token：旧 Token 立即失效，所有已连接设备会被断开并需要重新配对。',
-    'help.security3': '插件只通过 Funnel 转发 /phone 和 /phone/health，不会新增 3098 端口。',
+    'help.security1': 'Funnel 公网地址可从互联网访问，但连接必须使用已配对设备的 P-256 私钥签名；不要分享仍在有效期内的配对二维码。',
+    'help.security2': '丢失设备时可在设备列表中单独删除；该设备会立即断开，不影响其他手机。',
+    'help.security3': '插件只通过 Funnel 转发 /phone、/phone/pair 和 /phone/health，不会新增 3098 端口。',
     'help.security4': '局域网连接沿用 DSH 的 3080 端口；仅在可信网络中使用，不建议直接把 3080 暴露到公网。',
     'help.security5': '关闭远程连接开关会停止 Funnel，但不会影响可用的局域网连接。',
     'help.funnelDocs': 'Tailscale Funnel 官方文档',
@@ -219,8 +233,8 @@ const TABLES: LocaleTables = {
     'diag.missingRemoteEnabledHook': 'useDeepPilotRemoteEnabled hook 缺失',
     'diag.missingRemoteLimitHook': 'useDeepPilotRemoteConnectionLimit hook 缺失',
     'diag.missingRefresh': 'refresh 回调缺失',
-    'diag.missingReveal': 'revealPairingToken 回调缺失',
-    'diag.missingRotate': 'rotatePairingToken 回调缺失',
+    'diag.missingReveal': 'beginPairing 回调缺失',
+    'diag.missingRotate': 'revokeDevice 回调缺失',
     'diag.missingTestRelay': 'testRelay 回调缺失',
     'diag.missingTestPush': 'testPush 回调缺失',
     'diag.missingSetEnabled': 'setDeepPilotEnabled 回调缺失',
@@ -246,7 +260,7 @@ const TABLES: LocaleTables = {
     // ---- meta / nav ----
     'nav': 'DeepPilot',
     'meta.title': 'DeepPilot',
-    'meta.intro': 'Connect your iPhone to DeepSeek Harness (DSH) on this Mac (protocol v1).',
+    'meta.intro': 'Connect your iPhone to DeepSeek Harness (DSH) on this Mac (protocol v2).',
     'meta.refresh': 'Refresh',
 
     // ---- master switch ----
@@ -260,6 +274,7 @@ const TABLES: LocaleTables = {
     'remote.on': 'Configured: the embedded Funnel will start and sync state automatically.',
     'remote.off': 'Off: LAN connections only.',
     'remote.openAuth': 'Open authorization page',
+    'remote.advancedSettings': 'Advanced settings',
     'remote.limitTitle': 'Connections per public source',
     'remote.limitDescription': 'Default 8; range 1–16. Applying restarts Funnel and briefly reconnects existing remote clients.',
     'remote.limitApply': 'Apply',
@@ -279,6 +294,9 @@ const TABLES: LocaleTables = {
 
     // ---- connection panel ----
     'panel.activeConnections': 'Active connections',
+    'panel.identity': 'Device authentication',
+    'panel.identityReady': 'v2 ready',
+    'panel.identityNotReady': 'Unavailable',
     'panel.token': 'Pairing token',
     'panel.tokenReady': 'Ready',
     'panel.tokenNotReady': 'Not generated',
@@ -310,15 +328,19 @@ const TABLES: LocaleTables = {
     'pair.qrGenerating': 'Generating…',
     'pair.qrAutoHidden': 'Pairing QR auto-hidden',
     'pair.qrFailed': 'QR generation failed: ',
+    'pair.codeLabel': 'Pairing code (enter manually in Simulator)',
+    'pair.codeCopyDone': 'Pairing code copied',
+    'pair.codeCopyFailed': 'Failed to copy pairing code: ',
     'pair.publicCopyDone': 'Public URL copied',
     'pair.publicCopyFailed': 'Copy failed: ',
-    'pair.qrHint': 'The QR contains a {kind} address and the pairing token; it auto-hides after 60 seconds.',
+    'pair.qrHint': 'The QR contains a {kind} address and a single-use pairing code. The code expires after 5 minutes; the QR auto-hides after 60 seconds.',
 
     // ---- advanced info ----
     'advanced.summary': 'Advanced info',
     'advanced.protocolVersion': 'Protocol version',
     'advanced.serverVersion': 'Server version',
     'advanced.tokenPath': 'Token path',
+    'advanced.identityPath': 'Device registry path',
     'advanced.bufferMax': 'Replay buffer cap',
     'advanced.frames': ' frames',
 
@@ -343,16 +365,22 @@ const TABLES: LocaleTables = {
     'push.prefix.fail': '✗ ',
 
     // ---- devices table ----
-    'devices.title': 'Paired devices',
+    'devices.title': 'Devices',
     'devices.col.name': 'Device',
     'devices.col.appVersion': 'App version',
     'devices.col.push': 'Push',
     'devices.col.lastSeen': 'Last seen',
+    'devices.col.fingerprint': 'Key fingerprint',
+    'devices.col.actions': 'Actions',
+    'devices.revoke': 'Delete',
+    'devices.revokeConfirm': 'Delete “{name}”? It will disconnect immediately and must pair again before reconnecting.',
+    'devices.revoked': 'Device deleted',
+    'devices.revokeFailed': 'Failed to delete device: ',
     'devices.pushRegistered': 'Registered (',
     'devices.pushNotRegistered': 'Not registered',
     'devices.pushEnvProduction': 'Production',
     'devices.pushEnvDevelopment': 'Development',
-    'devices.empty': 'No devices paired yet. Scan the QR code or enter the host address + token in DeepPilot on iPhone to pair.',
+    'devices.empty': 'No v2 devices yet. Scan a single-use pairing QR code in DeepPilot on iPhone.',
 
     // ---- remote help ----
     'help.remoteTitle': 'Remote connection help',
@@ -376,9 +404,9 @@ const TABLES: LocaleTables = {
     'help.faq3': 'Public URL exists but the phone times out: wait a few minutes, confirm the Mac is awake and DSH is running, then re-scan the latest QR code.',
     'help.faq4': 'No public URL: check that Tailscale authorization completed, then click "Refresh" or restart DSH.',
     'help.securityTitle': 'Security notes',
-    'help.security1': 'A Funnel public URL is reachable from the public Internet, but the phone interface still needs the pairing token. Do not share the QR code, the token, or any screenshot that contains them.',
-    'help.security2': 'If you suspect the token leaked, click "Rotate" above to mint a new one. The old token stops working immediately and every paired device must re-pair.',
-    'help.security3': 'The plugin only forwards /phone and /phone/health through Funnel; no new port 3098 is opened.',
+    'help.security1': 'A Funnel URL is public, but every connection requires a signature from a paired device P-256 private key. Do not share a pairing QR while it is valid.',
+    'help.security2': 'If a device is lost, delete only that device from the list. It disconnects immediately; other phones stay paired.',
+    'help.security3': 'The plugin only forwards /phone, /phone/pair, and /phone/health through Funnel; no new port 3098 is opened.',
     'help.security4': 'LAN connections reuse DSH\'s existing 3080 port. Use them only on trusted networks; do not expose 3080 directly to the public Internet.',
     'help.security5': 'Disabling the remote switch stops Funnel but does not affect any LAN connection you already have.',
     'help.funnelDocs': 'Tailscale Funnel docs',
@@ -396,8 +424,8 @@ const TABLES: LocaleTables = {
     'diag.missingRemoteEnabledHook': 'useDeepPilotRemoteEnabled hook missing',
     'diag.missingRemoteLimitHook': 'useDeepPilotRemoteConnectionLimit hook missing',
     'diag.missingRefresh': 'refresh callback missing',
-    'diag.missingReveal': 'revealPairingToken callback missing',
-    'diag.missingRotate': 'rotatePairingToken callback missing',
+    'diag.missingReveal': 'beginPairing callback missing',
+    'diag.missingRotate': 'revokeDevice callback missing',
     'diag.missingTestRelay': 'testRelay callback missing',
     'diag.missingTestPush': 'testPush callback missing',
     'diag.missingSetEnabled': 'setDeepPilotEnabled callback missing',

@@ -13,8 +13,14 @@ import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-sett
 import { applyReportRemote } from './report-remote.ts'
 import { runRelayProbe } from './relay-test.ts'
 import type { PushTestResult } from './report-wire.ts'
-import { DeviceStore, bridgeDataDir, ensurePrivateBridgeDataDir, expandHome, loadOrCreateToken, migrateLegacyBridgeDataDir, tokenMatches, writeNewToken } from './token.ts'
+import { DeviceStore, MAX_DEVICES, bridgeDataDir, ensurePrivateBridgeDataDir, expandHome, migrateLegacyBridgeDataDir } from './token.ts'
 import type { ApnsEnvironment } from './token.ts'
+import {
+  PairingCodeManager,
+  deviceIdForPublicKey,
+  loadOrCreateHostAudience,
+  normalizeDeviceScopes,
+} from './device-auth.ts'
 import { ApnsClient } from './apns.ts'
 import { RelayClient } from './relay-client.ts'
 import type { PushNotification } from './protocol.ts'
@@ -29,9 +35,10 @@ import { localLANIPv4Addresses } from './local-address.ts'
 import { UpdateChecker, type UpdateInfo } from './update-check.ts'
 import { Config, DEFAULT_RELAY_URL, normalizeOptions } from './config.ts'
 import type { Config as PluginConfig } from './config.ts'
-import { rejectUpgrade, requestClientIdentity, requestToken } from './phone-http.ts'
+import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import { shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
+import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
 
 /**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
@@ -41,17 +48,16 @@ import { shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts
  *
  * Data plane: an in-process HostBridge consumes apiProxy.events.mux()/host()
  * streams, mirrors session summaries, tracks pending approvals/questions,
- * and fans projected protocol-v1 pushes out to every connected device.
+ * and fans projected protocol-v2 pushes out to every connected device.
  *
  * Protocol: PROTOCOL.md is normative; src/protocol.ts and the private app's
- * Swift models mirror that v1 contract.
+ * Swift models mirror that v2 contract.
  */
 
 export const name = 'deeppilot'
 
 export { HostBridge } from './host-bridge.ts'
 export { Config } from './config.ts'
-export { requestToken } from './phone-http.ts'
 export { shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
 
 /** No eager service requirement: profiles without a web stack simply skip. */
@@ -162,8 +168,6 @@ export function apply(ctx: Context, options: unknown): void {
 
   // Resolved asynchronously; route handlers await readiness. Never rejects:
   // a storage failure degrades the bridge instead of killing the host.
-  // The token lives in a mutable cell so rotation can swap the secret (and
-  // invalidate the old one) without restarting the host.
   const dataDir = bridgeDataDir()
 
   // ---------- zero-touch push enrollment (distributed builds) ----------
@@ -219,9 +223,9 @@ export function apply(ctx: Context, options: unknown): void {
     const url = (currentConfig().push?.relayUrl ?? '').trim() || DEFAULT_RELAY_URL
     await ensureRelayEnrolled(url)
   }
-  const auth: { token: string | null; tokenPath: string; devices: DeviceStore | null } = {
-    token: null,
-    tokenPath: cfg.authTokenPath ?? join(dataDir, 'auth-token'),
+  const pairingCodes = new PairingCodeManager()
+  const auth: { audience: string | null; devices: DeviceStore | null } = {
+    audience: null,
     devices: null,
   }
   const ready = (async () => {
@@ -233,15 +237,14 @@ export function apply(ctx: Context, options: unknown): void {
         log('legacy plugin-state migration skipped: ' + String(error))
       }
       await ensurePrivateBridgeDataDir()
-      auth.tokenPath = cfg.authTokenPath ?? join(dataDir, 'auth-token')
-      auth.token = await loadOrCreateToken(auth.tokenPath)
-      auth.devices = await DeviceStore.load(cfg.devicesPath ?? join(dataDir, 'devices.json'))
+      auth.audience = await loadOrCreateHostAudience(join(dataDir, 'host-id'))
+      auth.devices = await DeviceStore.load(cfg.devicesPath ?? join(dataDir, 'devices-v2.json'))
       {
         // Startup visibility: makes "registrations vanished after restart"
         // instantly diagnosable (0 push rows ⇒ the file itself lost data).
         const rows = auth.devices.list()
         const registered = rows.filter((row) => row.apns !== undefined).length
-        log(`device registry loaded from ${expandHome(cfg.devicesPath ?? join(dataDir, 'devices.json'))}: ${rows.length} device(s), ${registered} push registration(s)`)
+        log(`device registry loaded from ${expandHome(cfg.devicesPath ?? join(dataDir, 'devices-v2.json'))}: ${rows.length} device(s), ${registered} push registration(s)`)
       }
       // Restore zero-touch push enrollment state (best effort).
       try {
@@ -254,51 +257,17 @@ export function apply(ctx: Context, options: unknown): void {
         // first boot: no enrollment yet
       }
     } catch (error) {
-      // A malformed auth-token is the only failure that warrants a louder
-      // signal than the generic "bridge degraded" line: every paired phone
-      // is about to be 401'd, and the .corrupt sidecar is the only artifact
-      // an operator has to figure out why.
       const message = String(error)
-      if (message.includes('pairing token is malformed at')) {
-        console.warn('[deeppilot] ' + message)
-      }
       log('auth material unavailable, bridge degraded: ' + message)
-      return { token: null, devices: null }
+      return { audience: null, devices: null }
     }
-    return { token: auth.token, devices: auth.devices }
+    return { audience: auth.audience, devices: auth.devices }
   })()
 
-  /**
-   * Replace the pairing secret: persist a fresh token, clear the paired-device
-   * registry, and drop every live phone socket. Handshake-time auth means an
-   * already-open socket would otherwise outlive its token; terminating forces
-   * each device to re-pair with the new secret. The old token is invalid the
-   * moment the file is rewritten.
-   *
-   * Serialized through rotateTail so two overlapping invocations can never
-   * return a token that a later write already invalidated.
-   */
-  const doRotate = async (): Promise<string> => {
-    const { devices } = await ready
-    if (auth.token === null || devices === null) {
-      throw new Error('pairing token unavailable')
-    }
-    auth.token = await writeNewToken(auth.tokenPath)
-    devices.clear()
-    let dropped = 0
-    for (const connection of connections) {
-      connection.terminate()
-      dropped += 1
-    }
-    connections.clear()
-    log(`pairing token rotated; ${dropped} live phone connection(s) dropped`)
-    return auth.token
-  }
-  let rotateTail: Promise<unknown> = Promise.resolve()
-  const rotatePairingToken = (): Promise<string> => {
-    const next = rotateTail.then(doRotate)
-    rotateTail = next.catch(() => {})
-    return next
+  const beginPairing = async (): Promise<{ code: string; expiresAt: number; audience: string }> => {
+    await ready
+    if (auth.audience === null || auth.devices === null) throw new Error('device authentication unavailable')
+    return { ...pairingCodes.issue(), audience: auth.audience }
   }
 
   /**
@@ -662,19 +631,28 @@ export function apply(ctx: Context, options: unknown): void {
 
   // Typert Remote for the web settings page (deeppilot/report).
   applyReportRemote(ctx, async () => {
-    let tokenReady = false
-    let devices: Array<{ deviceId: string; deviceName: string; appVersion: string; firstSeenTs: number; lastSeenTs: number; apns?: { environment: 'development' | 'production'; updatedAt: number } }> = []
+    let pairingReady = false
+    let devices: Array<{
+      deviceId: string; deviceName: string; appVersion: string; firstSeenTs: number; lastSeenTs: number
+      fingerprint: string; scopes: ReturnType<typeof normalizeDeviceScopes>; revokedAt?: number
+      apns?: { environment: 'development' | 'production'; updatedAt: number }
+    }> = []
     try {
       await ready
-      tokenReady = auth.token !== null
+      pairingReady = auth.audience !== null && auth.devices !== null
       // Strip the raw APNs token at the source; the report carries only the
       // registration fact (environment + freshness).
-      devices = (auth.devices?.list() ?? []).map(({ deviceId, deviceName, appVersion, firstSeenTs, lastSeenTs, apns }) => ({
+      devices = (auth.devices?.list() ?? [])
+        .filter((device) => device.publicKey !== undefined && device.fingerprint !== undefined)
+        .map(({ deviceId, deviceName, appVersion, firstSeenTs, lastSeenTs, fingerprint, scopes, revokedAt, apns }) => ({
         deviceId,
         deviceName,
         appVersion,
         firstSeenTs,
         lastSeenTs,
+        fingerprint: fingerprint!,
+        scopes: normalizeDeviceScopes(scopes),
+        ...(revokedAt !== undefined ? { revokedAt } : {}),
         ...(apns ? { apns: { environment: apns.environment, updatedAt: apns.updatedAt } } : {}),
       }))
     } catch {
@@ -682,14 +660,14 @@ export function apply(ctx: Context, options: unknown): void {
     }
     const update = updateInfo()
     return {
-      protocolVersion: 1,
+      protocolVersion: 2,
       serverVersion: SERVER_VERSION,
       pluginVersion: update.currentVersion,
       ...(update.available ? { updateAvailable: true } : {}),
       ...(update.releaseUrl !== null ? { releaseUrl: update.releaseUrl } : {}),
       enabled: currentConfig().enabled === true,
-      tokenPath: expandHome(currentConfig().authTokenPath ?? join(bridgeDataDir(), 'auth-token')),
-      tokenReady,
+      identityPath: expandHome(currentConfig().devicesPath ?? join(bridgeDataDir(), 'devices-v2.json')),
+      pairingReady,
       activeConnections: connections.size,
       historyBufferMax: currentConfig().historyBufferMax ?? 2000,
       debug: currentConfig().debug === true,
@@ -697,11 +675,34 @@ export function apply(ctx: Context, options: unknown): void {
       remote: remoteStatus(),
       devices,
     }
+  }, beginPairing, async (deviceId) => {
+    const { devices } = await ready
+    if (!devices) throw new Error('device registry unavailable')
+    const revoked = devices.revoke(deviceId, Date.now())
+    if (revoked) {
+      for (const connection of [...connections]) {
+        if (connection.connectedDeviceId !== deviceId) continue
+        connection.terminate()
+        connections.delete(connection)
+      }
+      log(`device revoked id=${auditLabel(deviceId)}`)
+    }
+    return revoked
+  }, async (deviceId, scopes) => {
+    const { devices } = await ready
+    if (!devices) throw new Error('device registry unavailable')
+    const updated = devices.setScopes(deviceId, scopes)
+    if (updated === null) throw new Error('active device not found')
+    // Scope changes take effect on the next signed connection; disconnect the
+    // current socket so stale in-memory authority cannot survive the update.
+    for (const connection of [...connections]) {
+      if (connection.connectedDeviceId !== deviceId) continue
+      connection.terminate()
+      connections.delete(connection)
+    }
+    log(`device scopes updated id=${auditLabel(deviceId)} scopes=${updated.join(',')}`)
+    return updated
   }, async () => {
-    await ready
-    if (auth.token === null) throw new Error('pairing token unavailable')
-    return auth.token
-  }, rotatePairingToken, async () => {
       const push = currentConfig().push ?? {}
       const configured = push.provider ?? 'none'
       const effective = configured === 'none' && enrollmentCell.autoRelay === true ? 'relay' : configured
@@ -746,6 +747,85 @@ export function apply(ctx: Context, options: unknown): void {
   let pendingUpgrades = 0
   const authRateLimiter = new AuthRateLimiter()
 
+  const readJSONBody = async (req: IncomingMessage, maxBytes = 16 * 1024): Promise<unknown> => {
+    const chunks: Buffer[] = []
+    let size = 0
+    for await (const chunk of req) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      size += buffer.length
+      if (size > maxBytes) throw new Error('request body too large')
+      chunks.push(buffer)
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
+  }
+
+  const handlePair = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    res.setHeader('Content-Type', 'application/json')
+    if (!enabledNow()) {
+      res.statusCode = 503
+      res.end(JSON.stringify({ ok: false, error: 'bridge disabled' }))
+      return
+    }
+    if (req.method !== 'POST') {
+      res.statusCode = 405
+      res.setHeader('Allow', 'POST')
+      res.end(JSON.stringify({ ok: false, error: 'POST required' }))
+      return
+    }
+    const source = requestClientIdentity(req)
+    const admission = authRateLimiter.admit(source)
+    if (!admission.ok) {
+      res.statusCode = 429
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil(admission.retryAfterMs / 1_000))))
+      res.end(JSON.stringify({ ok: false, error: 'pairing rate limited' }))
+      return
+    }
+    try {
+      const { devices, audience } = await ready
+      if (!devices || !audience) throw new Error('device authentication unavailable')
+      const raw = await readJSONBody(req) as Record<string, unknown>
+      if (raw === null || typeof raw !== 'object' || raw.v !== 2) throw new TypeError('protocol v2 required')
+      const code = typeof raw.code === 'string' ? raw.code : ''
+      const publicKey = typeof raw.publicKey === 'string' ? raw.publicKey : ''
+      const deviceName = sanitizeDeviceField(raw.deviceName, MAX_DEVICE_NAME_CHARS) || 'unknown'
+      const appVersion = sanitizeDeviceField(raw.appVersion, MAX_APP_VERSION_CHARS) || 'unknown'
+      const deviceId = deviceIdForPublicKey(publicKey)
+      if (devices.list().length >= MAX_DEVICES && devices.authorized(deviceId) === undefined) {
+        res.statusCode = 409
+        res.end(JSON.stringify({ ok: false, error: 'device registry is full' }))
+        return
+      }
+      if (!pairingCodes.consume(code)) {
+        const failure = authRateLimiter.recordFailure(source)
+        res.statusCode = failure.blocked ? 429 : 401
+        if (failure.retryAfterMs > 0) res.setHeader('Retry-After', String(Math.max(1, Math.ceil(failure.retryAfterMs / 1_000))))
+        res.end(JSON.stringify({ ok: false, error: failure.blocked ? 'pairing rate limited' : 'pairing code invalid or expired' }))
+        return
+      }
+      const record = devices.register({
+        publicKey,
+        deviceName,
+        appVersion,
+        scopes: normalizeDeviceScopes(raw.scopes),
+      }, Date.now())
+      authRateLimiter.recordSuccess(source)
+      log(`device paired id=${auditLabel(record.deviceId)} source=${auditLabel(source)}`)
+      res.statusCode = 201
+      res.end(JSON.stringify({
+        ok: true,
+        v: 2,
+        deviceId: record.deviceId,
+        audience,
+        scopes: record.scopes ?? [],
+      }))
+    } catch (error) {
+      res.statusCode = error instanceof SyntaxError || error instanceof TypeError ? 400 : 503
+      res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'pairing failed' }))
+    } finally {
+      admission.release()
+    }
+  }
+
   const handleUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
     void (async () => {
       try {
@@ -759,27 +839,15 @@ export function apply(ctx: Context, options: unknown): void {
         }
         pendingUpgrades += 1
         try {
-        const { devices } = await ready
-        const token = auth.token
-        if (!token || !devices) {
+        const { devices, audience } = await ready
+        if (!audience || !devices) {
           rejectUpgrade(socket, 503, 'bridge degraded')
           return
         }
         const source = requestClientIdentity(req)
-        const presentedToken = requestToken(req)
-        const transportAuthenticated = tokenMatches(presentedToken, token)
-        const admission = transportAuthenticated
-          ? { ok: true, retryAfterMs: 0, release: () => {} }
-          : authRateLimiter.admit(source)
+        const admission = authRateLimiter.admit(source)
         if (!admission.ok) {
           rejectUpgrade(socket, 429, 'authentication rate limited', admission.retryAfterMs / 1_000)
-          return
-        }
-        if (presentedToken !== null && !transportAuthenticated) {
-          const failure = authRateLimiter.recordFailure(source)
-          admission.release()
-          if (failure.newlyBlocked) log(`authentication source blocked source=${auditLabel(source)}`)
-          rejectUpgrade(socket, failure.blocked ? 429 : 401, failure.blocked ? 'authentication rate limited' : 'invalid token', failure.retryAfterMs / 1_000)
           return
         }
         const bridge = state.bridge
@@ -788,17 +856,9 @@ export function apply(ctx: Context, options: unknown): void {
           rejectUpgrade(socket, 503, 'bridge not ready')
           return
         }
-        // Rotation may have swapped the secret while this handshake was in
-        // flight; a connection validated against the previous token must not
-        // survive it.
-        if (auth.token !== token) {
-          admission.release()
-          rejectUpgrade(socket, 401, 'invalid token')
-          return
-        }
         try {
           wss.handleUpgrade(req, socket, head, (ws) => {
-            if (auth.token !== token || state.bridge !== bridge) {
+            if (auth.audience !== audience || state.bridge !== bridge) {
               admission.release()
               ws.close(1012, 'bridge changed')
               return
@@ -808,8 +868,7 @@ export function apply(ctx: Context, options: unknown): void {
                 bridge,
                 devices,
                 serverVersion: SERVER_VERSION,
-                expectedToken: token,
-                transportAuthenticated,
+                audience,
                 log,
                 debug: currentConfig().debug === true,
                 onClosed: (closed) => connections.delete(closed),
@@ -851,36 +910,17 @@ export function apply(ctx: Context, options: unknown): void {
   const handleHealth = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
       await ready
-      const token = auth.token
       res.setHeader('Content-Type', 'application/json')
-      if (!token) {
+      if (!auth.audience || !auth.devices) {
         res.statusCode = 503
         res.end(JSON.stringify({ ok: false, degraded: true }))
         return
       }
-      const source = requestClientIdentity(req)
-      if (!tokenMatches(requestToken(req), token)) {
-        const admission = authRateLimiter.admit(source)
-        if (!admission.ok) {
-          res.statusCode = 429
-          res.setHeader('Retry-After', String(Math.max(1, Math.ceil(admission.retryAfterMs / 1_000))))
-          res.end(JSON.stringify({ ok: false }))
-          return
-        }
-        const failure = authRateLimiter.recordFailure(source)
-        admission.release()
-        if (failure.newlyBlocked) log(`authentication source blocked source=${auditLabel(source)}`)
-        res.statusCode = failure.blocked ? 429 : 401
-        if (failure.blocked) res.setHeader('Retry-After', String(Math.max(1, Math.ceil(failure.retryAfterMs / 1_000))))
-        res.end(JSON.stringify({ ok: false }))
-        return
-      }
-      authRateLimiter.recordSuccess(source)
       res.statusCode = 200
       res.end(JSON.stringify({
         ok: true,
         enabled: enabledNow(),
-        protocolVersion: 1,
+        protocolVersion: 2,
         serverVersion: SERVER_VERSION,
         dataPlane: Boolean(state.bridge),
       }))
@@ -950,6 +990,16 @@ export function apply(ctx: Context, options: unknown): void {
         'deeppilot: /phone/health',
       )
 
+      webCtx.effect(
+        () =>
+          web.register({
+            kind: 'exact',
+            path: '/phone/pair',
+            handler: handlePair,
+          }),
+        'deeppilot: /phone/pair',
+      )
+
       const sweep = setInterval(() => {
         const now = Date.now()
         for (const connection of connections) {
@@ -971,6 +1021,8 @@ export function apply(ctx: Context, options: unknown): void {
         try { path = new URL(req.url ?? '/', 'http://phone.local').pathname } catch { /* reject below */ }
         if (path === '/phone/health') {
           void handleHealth(req, res)
+        } else if (path === '/phone/pair') {
+          void handlePair(req, res)
         } else {
           res.statusCode = 404
           res.end('not found')

@@ -2,10 +2,16 @@ import type { WebSocket } from 'ws'
 import {
   PROTOCOL_VERSION,
 } from './protocol.ts'
-import type { Envelope, HelloAuthPayload } from './protocol.ts'
+import type { AuthProofPayload, Envelope } from './protocol.ts'
 import type { BridgeSink, HostBridge } from './host-bridge.ts'
 import type { DeviceStore, ApnsEnvironment } from './token.ts'
 import { isValidApnsToken } from './token.ts'
+import {
+  createAuthChallenge,
+  verifyAuthProof,
+  type AuthChallenge,
+  type DeviceScope,
+} from './device-auth.ts'
 import {
   AUTH_TIMEOUT_MS,
   ERROR_CODES,
@@ -18,19 +24,18 @@ import {
   MAX_PROMPT_IMAGES,
   MAX_PROMPT_TEXT_CHARS,
   PRE_AUTH_FRAME_BYTES,
-  helloTokenAccepted,
   managementErrorCode,
   pendingResponseErrorCode,
   pendingResponseMessage,
   sanitizeDeviceField,
   sanitizeImageName,
+  requiredScope,
 } from './connection-policy.ts'
 
 export {
   AUTH_TIMEOUT_MS,
   MAX_OUTBOUND_BUFFER_BYTES,
   PRE_AUTH_FRAME_BYTES,
-  helloTokenAccepted,
 } from './connection-policy.ts'
 
 
@@ -38,16 +43,14 @@ export interface ConnectionStateDeps {
   bridge: HostBridge
   devices: DeviceStore
   serverVersion: string
-  /** Pairing secret used when the HTTP upgrade was not already authenticated. */
-  expectedToken: string
-  /** True when the Authorization header passed at upgrade. */
-  transportAuthenticated?: boolean
+  /** Stable Host identity included in every signed challenge. */
+  audience: string
   debug?: boolean
   log: (message: string) => void
   /** Called once when the socket closes (cleanly or not). */
   onClosed?: (connection: BridgeConnection) => void
   /** Releases an unauthenticated connection slot and updates failure state. */
-  onAuthenticationSettled?: (ok: boolean, reason: 'success' | 'invalid-token' | 'timeout' | 'closed') => void
+  onAuthenticationSettled?: (ok: boolean, reason: 'success' | 'invalid-proof' | 'timeout' | 'closed') => void
   /** Emits a privacy-preserving audit event after a valid hello. */
   onDeviceAuthenticated?: (deviceId: string) => void
   /**
@@ -62,8 +65,8 @@ export interface ConnectionStateDeps {
 
 /**
  * One connected phone. Implements BridgeSink so the HostBridge can push
- * projected frames and replays. Bearer credentials may authenticate the
- * HTTP upgrade; otherwise the first hello frame is verified here.
+ * projected frames and replays. Every socket starts anonymous, receives one
+ * server challenge, and must prove possession of a registered P-256 key.
  */
 export class BridgeConnection implements BridgeSink {
   private authenticated = false
@@ -83,11 +86,14 @@ export class BridgeConnection implements BridgeSink {
   }>>()
   /** Sanitized device identity from hello; needed for push registration. */
   private deviceId: string | undefined
+  private scopes = new Set<DeviceScope>()
+  private readonly authChallenge: AuthChallenge
 
   constructor(
     private readonly ws: WebSocket,
     private readonly deps: ConnectionStateDeps,
   ) {
+    this.authChallenge = createAuthChallenge(deps.audience)
     ws.on('message', (data) => {
       void this.onMessage(String(data))
     })
@@ -104,6 +110,8 @@ export class BridgeConnection implements BridgeSink {
         this.close(4402, 'auth timeout')
       }
     }, AUTH_TIMEOUT_MS)
+    this.helloTimer.unref()
+    this.send('s2c.auth.challenge', this.authChallenge)
   }
 
   /** Hard-drop the socket (server-side stale sweep). */
@@ -181,7 +189,7 @@ export class BridgeConnection implements BridgeSink {
     if (this.authenticated) this.deps.bridge.removeSink(this)
   }
 
-  private settleAuthentication(ok: boolean, reason: 'success' | 'invalid-token' | 'timeout' | 'closed'): void {
+  private settleAuthentication(ok: boolean, reason: 'success' | 'invalid-proof' | 'timeout' | 'closed'): void {
     if (this.authenticationSettled) return
     this.authenticationSettled = true
     this.deps.onAuthenticationSettled?.(ok, reason)
@@ -253,11 +261,16 @@ export class BridgeConnection implements BridgeSink {
         this.send('s2c.pong', { serverTime: Date.now() }, env.id)
         return
       }
-      if (env.type === 'c2s.hello.auth') {
-        await this.hello(env)
+      if (env.type === 'c2s.auth.prove') {
+        await this.prove(env)
         return
       }
       this.fail(env.id, 'E_PROTOCOL', 'authenticate first')
+      return
+    }
+    const required = requiredScope(env.type)
+    if (required !== undefined && !this.scopes.has(required)) {
+      this.fail(env.id, 'E_FORBIDDEN', `scope ${required} required`)
       return
     }
     switch (env.type) {
@@ -524,7 +537,7 @@ export class BridgeConnection implements BridgeSink {
         if (!p?.requestId || (p.decision !== 'allow' && p.decision !== 'deny')) {
           return this.fail(env.id, 'E_PROTOCOL', 'requestId and decision required')
         }
-        // PROTOCOL v1: the optional deny reason must reach the host so the
+        // The optional deny reason must reach the host so the
         // model learns why its tool call was refused.
         const outcome = await this.deps.bridge.respondApproval(
           p.requestId,
@@ -589,17 +602,8 @@ export class BridgeConnection implements BridgeSink {
     }
   }
 
-  private async hello(env: Envelope): Promise<void> {
-    const p = (env.payload ?? {}) as Partial<HelloAuthPayload>
-    if (!helloTokenAccepted(this.deps.transportAuthenticated, p.token, this.deps.expectedToken)) {
-      this.fail(env.id, 'E_AUTH', 'token missing or invalid')
-      this.settleAuthentication(false, 'invalid-token')
-      this.close(4401, 'invalid token')
-      return
-    }
-    // The secret is valid even if the following identity payload is malformed.
-    // Release the anonymous slot and clear source failure history immediately.
-    this.settleAuthentication(true, 'success')
+  private async prove(env: Envelope): Promise<void> {
+    const p = (env.payload ?? {}) as Partial<AuthProofPayload>
     if (!p.deviceId) {
       this.fail(env.id, 'E_PROTOCOL', 'deviceId required')
       this.close(4403, 'deviceId required')
@@ -613,20 +617,46 @@ export class BridgeConnection implements BridgeSink {
     }
     const deviceName = sanitizeDeviceField(p.deviceName, MAX_DEVICE_NAME_CHARS) || 'unknown'
     const appVersion = sanitizeDeviceField(p.appVersion, MAX_APP_VERSION_CHARS) || 'unknown'
-    this.authenticated = true
-    this.deviceId = deviceId
-    if (this.helloTimer !== undefined) clearTimeout(this.helloTimer)
-    this.deps.devices.touch({ deviceId, deviceName, appVersion }, Date.now())
-    this.deps.onDeviceAuthenticated?.(deviceId)
-
-    const cursor = typeof p.resumeCursor === 'number' && p.resumeCursor >= 0
+    const challenge = this.authChallenge
+    const record = this.deps.devices.authorized(deviceId)
+    const resumeCursor = typeof p.resumeCursor === 'number' && Number.isInteger(p.resumeCursor) && p.resumeCursor >= 0
       ? p.resumeCursor
       : undefined
+    const challengeMatches = p.nonce === challenge.nonce &&
+      p.audience === challenge.audience &&
+      p.issuedAt === challenge.issuedAt &&
+      p.expiresAt === challenge.expiresAt &&
+      Date.now() <= challenge.expiresAt
+    const proofValid = record?.publicKey !== undefined && typeof p.signature === 'string' && challengeMatches &&
+      verifyAuthProof(record.publicKey, {
+        deviceId,
+        deviceName,
+        appVersion,
+        resumeCursor,
+        ...challenge,
+      }, p.signature)
+    if (!proofValid || record === undefined) {
+      this.fail(env.id, 'E_AUTH', 'device proof missing or invalid')
+      this.settleAuthentication(false, 'invalid-proof')
+      this.close(4401, 'invalid device proof')
+      return
+    }
+    this.settleAuthentication(true, 'success')
+    this.authenticated = true
+    this.deviceId = deviceId
+    this.scopes = new Set(record.scopes ?? [])
+    if (this.helloTimer !== undefined) clearTimeout(this.helloTimer)
+    this.deps.devices.markAuthenticated(deviceId, deviceName, appVersion, Date.now())
+    this.deps.onDeviceAuthenticated?.(deviceId)
+
+    const cursor = resumeCursor
     const canResume = cursor !== undefined && this.deps.bridge.canResumeFrom(cursor)
     // Welcome strictly precedes any replayed pushes.
     this.send('s2c.welcome', {
       protocolVersion: PROTOCOL_VERSION,
       serverVersion: this.deps.serverVersion,
+      deviceId,
+      scopes: [...this.scopes],
       capabilities: this.deps.bridge.capabilities,
       cursor: this.deps.bridge.currentCursor(),
       resumed: canResume,

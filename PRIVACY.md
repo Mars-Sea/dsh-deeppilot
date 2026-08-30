@@ -1,68 +1,36 @@
 # Privacy and data flow
 
-DeepPilot is designed around a direct connection to the DSH Host controlled by
-the user. The plugin does not upload complete conversations to a DeepPilot
-application server.
+DeepPilot connects directly to the DSH Host controlled by the user. The plugin does not upload complete conversations to a DeepPilot application server.
 
 ## Data stored on the Mac
 
 By default, runtime state is stored under `$DSH_HOME/deeppilot/`:
 
-- `auth-token`: the pairing bearer token, mode `0600`;
-- `devices.json`: paired-device identifiers, names, app versions, last-seen
-  timestamps, notification preferences, and APNs registrations;
-- `tailscale/`: local state for the optional embedded `tsnet` node.
+- `host-id`: a random, non-secret stable audience identifier;
+- `devices-v2.json`: paired public keys, fingerprints, scopes, device metadata, revocation/last-seen timestamps, notification preferences, and APNs registrations;
+- `tailscale/`: local state for the optional embedded tsnet node.
 
-The canonical directory is repaired to owner-only mode `0700` at startup.
+The directory is owner-only mode `0700`. The Mac never receives or stores iPhone private signing keys. Pairing codes exist only in plugin memory for up to five minutes and are not written to disk.
 
-The pairing token and full APNs tokens are not rendered in routine logs. The
-settings report exposes only token readiness and masked/fingerprint values
-needed for diagnostics.
+The settings report exposes public-key fingerprints, scopes, revocation state, and masked notification diagnostics. It does not expose full APNs tokens, pairing codes, or message bodies.
 
 ## Direct session connection
 
-Projects, session lists, conversation history, prompts, streaming events,
-approvals, questions, and model changes travel over the authenticated
-connection between the iPhone and the user's DSH Host.
+Projects, history, prompts, streaming events, approvals, questions, and model changes travel over the authenticated connection between the iPhone and the user's DSH Host.
 
-- In LAN mode this is direct HTTP/WebSocket traffic and is not encrypted by the
-  plugin. Use a trusted network.
-- In Funnel mode the phone uses HTTPS/WSS through Tailscale Funnel. The helper
-  forwards only `/phone` and `/phone/health` to the local DSH origin.
+- LAN mode is direct HTTP/WebSocket traffic and is not encrypted by the plugin. Use a trusted network.
+- Funnel mode uses HTTPS/WSS. The helper forwards only `/phone`, `/phone/pair`, and `/phone/health`.
 
 ## Optional offline push
 
-Offline push is optional.
-
-### Direct APNs mode
-
-When `provider: apns` is configured, the user's Mac sends the APNs device token
-and notification payload directly to Apple. The user supplies and controls the
-Apple provider credentials.
-
-### DeepPilot relay mode
-
-When `provider: relay` is active, the plugin sends the following over HTTPS to
-the configured relay:
+Direct APNs mode sends the device token and notification payload to Apple using user-controlled credentials. Relay mode sends over HTTPS:
 
 - a per-bridge relay authorization token;
-- target APNs device token and sandbox/production environment;
-- notification identifier, category, session identifier, title, and a short,
-  truncated notification body.
+- target APNs device token and environment;
+- notification identifier, category, session identifier, title, and a short, truncated body.
 
-The body may contain a short assistant reply, session title, approval summary,
-or question text. The relay does not receive complete history, attachments,
-live token streams, prompts that are unrelated to the notification, the local
-pairing token, or the Tailscale node state.
-
-Apple receives the normal APNs alert payload in both modes. Users who do not
-want this disclosure can disable offline push; live WebSocket operation remains
-available.
+The relay does not receive complete history, attachments, live token streams, unrelated prompts, pairing codes, device keys, the device registry, or Tailscale state. Disabling offline push removes this path.
 
 ## Logs
 
-Routine logs contain lifecycle state, delivery outcomes, and masked token
-prefixes. Authentication events use process-local salted hashes rather than
-raw device identifiers or source addresses. These values cannot be correlated
-across restarts. Logs are designed not to contain pairing tokens or message
-bodies. Frame-level diagnostics are emitted only when `debug` is enabled.
+Routine logs contain lifecycle state, delivery outcomes, and process-local salted hashes for source/device identifiers. Logs are designed not to contain pairing codes, key material, APNs tokens, or message bodies. Frame diagnostics appear only with `debug`.

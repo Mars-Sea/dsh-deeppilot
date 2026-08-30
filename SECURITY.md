@@ -2,74 +2,41 @@
 
 ## Supported releases
 
-Until the first stable release, only the latest tagged public-beta release is
-supported. DSH itself is a developer preview, so reports must include the exact
-DSH version, plugin commit or tag, operating system, architecture, and whether
-LAN or Funnel mode was used.
+Until the first stable release, only the latest tagged public-beta release is supported. Reports must include the exact DSH version, plugin commit or tag, operating system, architecture, and whether LAN or Funnel mode was used.
 
 ## Reporting a vulnerability
 
-Do not open a public issue containing pairing tokens, APNs device tokens,
-provider keys, relay credentials, private hostnames, conversation content, or
-an unpatched exploit. Use GitHub's private vulnerability reporting for
-`Mars-Sea/dsh-deeppilot` when available. If that channel is unavailable, open a
-minimal public issue requesting a private contact channel without including
-the sensitive details.
+Do not open a public issue containing pairing codes, APNs device tokens, provider keys, relay credentials, private hostnames, conversation content, or an unpatched exploit. Use GitHub private vulnerability reporting for `Mars-Sea/dsh-deeppilot` when available. Otherwise open a minimal issue asking for a private contact channel without sensitive details.
 
-## Trust boundaries
+## Protocol-v2 trust boundaries
 
-- `/phone` and `/phone/health` require the pairing bearer token.
-- Clients authenticate with the `Authorization: Bearer` header or the first
-  WebSocket frame. Query-string credentials are rejected because URLs are
-  commonly retained by proxies, browser history, and access logs.
-- The token is stored with mode `0600` on the Mac and in iOS Keychain.
-- The canonical `~/.dsh/deeppilot` data directory is repaired to mode `0700`
-  at startup. Custom token paths remain the operator's responsibility.
-- Pairing QR codes contain the bearer secret. Treat screenshots as leaked
-  credentials and rotate the token from the DeepPilot settings page.
-- LAN `ws://` is unencrypted. Use it only on a trusted network.
-- The optional Funnel helper publishes only `/phone` and `/phone/health`, not
-  the complete DSH Web UI.
-- Debug logs may include status and masked identifiers, but must never include
-  pairing tokens or message bodies.
+- `/phone/pair` accepts only a short-lived, single-use pairing code and a P-256 public key. The code expires after five minutes and is invalidated after one successful registration.
+- `/phone` upgrades anonymously, then sends a fresh 30-second challenge bound to the stable Host audience. The client proves possession of its registered P-256 private key with ECDSA/SHA-256.
+- The iOS app uses a non-exportable Secure Enclave key on physical devices. The Mac stores only public keys and metadata.
+- `GET /phone/health` is intentionally unauthenticated and returns only minimal readiness/version facts.
+- Protocol v1, shared Bearer tokens, query credentials, and `c2s.hello.auth` are not accepted. There is no remote downgrade switch.
+- The server enforces explicit protocol scopes, while the normal settings UI grants the default scope set and exposes only the global connection switch plus per-device deletion. Deleting a device disconnects it immediately.
+- The canonical `$DSH_HOME/deeppilot` directory is repaired to mode `0700`. `host-id` and `devices-v2.json` are owner-only.
+- LAN `ws://` is unencrypted. Use it only on a trusted network. Public access should use Funnel HTTPS/WSS.
+- The Funnel helper publishes only `/phone`, `/phone/pair`, and `/phone/health`, never the complete DSH Web UI.
+- Logs must never include pairing codes, key material, APNs tokens, or message bodies.
 
 ## Online attack controls
 
-- The public Funnel helper allows at most 60 requests per source per minute and
-  600 requests globally per minute. Concurrent WebSockets per public source are
-  configurable from 1 to 16 in the plugin settings and default to 8. Its
-  source-state table is bounded.
-- The Node bridge independently allows at most 12 anonymous authentication
-  attempts per source per minute, 120 globally per minute, and two concurrent
-  unauthenticated WebSockets per source.
-- Five authentication failures within ten minutes block that source for 15
-  minutes. Successful authentication clears its failure history. A blocked
-  request receives HTTP `429` with `Retry-After`.
-- Funnel supplies the public source address over the private loopback hop. The
-  bridge ignores a caller-supplied forwarding header on non-loopback sockets.
-- Authentication audit logs use process-local salted hashes for source and
-  device identifiers. They are useful for correlating one runtime, not for
-  reconstructing stable user or network identities.
+- The Funnel helper allows at most 60 requests per source per minute and 600 globally. Concurrent WebSockets per public source are configurable from 1 to 16 and default to 8.
+- The Node bridge independently allows at most 12 anonymous authentication or pairing attempts per source per minute, 120 globally, and two concurrent unauthenticated WebSockets per source.
+- Five failures within ten minutes block that source for 15 minutes. A blocked request receives HTTP 429 with `Retry-After`.
+- The bridge ignores caller-supplied forwarding headers on non-loopback sockets.
+- Audit logs use process-local salted hashes, preventing stable source/device correlation across restarts.
 
-These controls reduce opportunistic brute force and resource exhaustion; they
-do not make a leaked bearer token safe. Rotate the token immediately after a
-QR screenshot leak, suspected machine compromise, or unexplained successful
-device registration. Rotation invalidates all existing clients.
-
-The shared bearer grants the connected client the complete protocol-v1 bridge
-authority, including prompts and approval responses. Per-device revocation and
-least-privilege scopes require protocol v2 and are tracked in
-[`docs/SECURITY_ROADMAP.md`](docs/SECURITY_ROADMAP.md).
+If a QR code is exposed before expiry, invalidate it or issue a new one. If a paired device is lost or suspected compromised, delete that device from the settings list; other devices remain valid.
 
 ## Release integrity
 
-The public beta includes a prebuilt macOS Apple-silicon helper. Verify it from
-the repository root with:
+Verify the public-beta helper from the repository root with:
 
 ```bash
 cd bin && shasum -a 256 -c SHA256SUMS
 ```
 
-Developer ID signing and notarization are release gates for broad end-user
-distribution. Until those gates are complete, the helper is a public-beta
-artifact and not a production-readiness claim.
+Developer ID signing and notarization remain release gates for broad end-user distribution.

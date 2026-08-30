@@ -1,7 +1,13 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
+import {
+  deviceIdForPublicKey,
+  fingerprintForPublicKey,
+  normalizeDeviceScopes,
+  type DeviceScope,
+} from './device-auth.ts'
 
 /** Expand a leading ~ using the process home directory. */
 export function expandHome(p: string): string {
@@ -52,81 +58,6 @@ export async function migrateLegacyBridgeDataDir(): Promise<string | null> {
   }
 }
 
-/**
- * Load the pairing token from disk or generate and persist a fresh one.
- * The file is written 0600; the token never appears in logs.
- */
-export async function loadOrCreateToken(tokenPath: string): Promise<string> {
-  const full = expandHome(tokenPath)
-  try {
-    const existing = (await readFile(full, 'utf8')).trim()
-    if (existing.length >= 32) return existing
-    // Existing-but-truncated auth material is evidence of storage corruption,
-    // not a first launch. Preserve the broken file under a .corrupt sidecar
-    // (best effort) and fail loud: replacing it here silently invalidates
-    // every paired phone and destroys the only clue explaining the
-    // disconnect, while a missing sidecar makes the cause of "all devices
-    // 401'd after restart" untriagable.
-    await preserveCorruptSidecar(full)
-    throw new Error(`pairing token is malformed at ${full} (length=${existing.length}); original preserved as ${full}.corrupt`)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-  }
-  const token = randomBytes(32).toString('base64url')
-  await mkdir(dirname(full), { recursive: true })
-  await writeFile(full, token + '\n', { mode: 0o600 })
-  return token
-}
-
-/**
- * Copy a malformed auth-token file to `<path>.corrupt` so a future operator
- * can inspect what was on disk at the moment of corruption. Best-effort:
- * a copy failure (permissions, full disk, ...) must not block the loud
- * throw that actually surfaces the issue.
- */
-async function preserveCorruptSidecar(full: string): Promise<void> {
-  try {
-    const original = await readFile(full)
-    const sidecar = `${full}.corrupt`
-    // Overwrite any previous sidecar; the most recent failure is the one
-    // operators care about, and stack-keeping risks leaking real secrets
-    // long after a token has been rotated.
-    await writeFile(sidecar, original, { mode: 0o600 })
-  } catch {
-    // best-effort: see function comment
-  }
-}
-
-/**
- * Generate a fresh pairing token and replace the stored one, invalidating
- * every copy of the old secret. The write goes to a same-directory temp file
- * renamed over the target so a crash can never leave a truncated token file.
- */
-export async function writeNewToken(tokenPath: string): Promise<string> {
-  const full = expandHome(tokenPath)
-  const token = randomBytes(32).toString('base64url')
-  await mkdir(dirname(full), { recursive: true })
-  const temp = `${full}.${randomBytes(6).toString('hex')}.tmp`
-  await writeFile(temp, token + '\n', { mode: 0o600 })
-  await rename(temp, full)
-  return token
-}
-
-/** Constant-time token comparison; both sides are high-entropy secrets. */
-export function tokenMatches(presented: string | null | undefined, expected: string): boolean {
-  if (!presented) return false
-  const b = Buffer.from(expected)
-  // Reject wrong byte lengths before allocating a Buffer sized by an
-  // unauthenticated peer; still burn the fixed-size comparison below.
-  if (Buffer.byteLength(presented, 'utf8') !== b.length) {
-    // Burn a same-length comparison so wrong-length probes keep flat timing.
-    timingSafeEqual(b, b)
-    return false
-  }
-  const a = Buffer.from(presented)
-  return timingSafeEqual(a, b)
-}
-
 export type ApnsEnvironment = 'development' | 'production'
 
 /** Per-device APNs registration (F-9 离线推送). The raw token never leaves the registry file. */
@@ -143,6 +74,12 @@ export interface DeviceRecord {
   deviceId: string
   deviceName: string
   appVersion: string
+  /** Uncompressed P-256 X9.63 public key, base64url encoded. */
+  publicKey?: string
+  /** SHA-256 fingerprint of publicKey, hex encoded for local display. */
+  fingerprint?: string
+  scopes?: DeviceScope[]
+  revokedAt?: number
   firstSeenTs: number
   lastSeenTs: number
   apns?: DeviceApnsInfo
@@ -192,36 +129,67 @@ export class DeviceStore {
     return store
   }
 
-  touch(record: Omit<DeviceRecord, 'firstSeenTs' | 'lastSeenTs'>, now: number): void {
-    const existing = this.devices.get(record.deviceId)
-    if (existing) {
-      existing.lastSeenTs = now
-      existing.deviceName = record.deviceName || existing.deviceName
-      existing.appVersion = record.appVersion || existing.appVersion
-    } else {
-      if (this.devices.size >= MAX_DEVICES) {
-        // Evict the least-recently-seen device to make room for the newcomer.
-        let oldestId: string | undefined
-        let oldestTs = Number.POSITIVE_INFINITY
-        for (const [id, value] of this.devices) {
-          if (value.lastSeenTs < oldestTs) {
-            oldestTs = value.lastSeenTs
-            oldestId = id
-          }
-        }
-        if (oldestId !== undefined) this.devices.delete(oldestId)
-      }
-      this.devices.set(record.deviceId, {
-        ...record,
-        firstSeenTs: now,
-        lastSeenTs: now,
-      })
+  /** Register one public key after a valid, single-use pairing grant. */
+  register(
+    record: { publicKey: string; deviceName: string; appVersion: string; scopes?: unknown },
+    now: number,
+  ): DeviceRecord {
+    const deviceId = deviceIdForPublicKey(record.publicKey)
+    const existing = this.devices.get(deviceId)
+    if (!existing && this.devices.size >= MAX_DEVICES) {
+      throw new Error('device registry is full')
     }
+    const next: DeviceRecord = {
+      deviceId,
+      deviceName: record.deviceName,
+      appVersion: record.appVersion,
+      publicKey: record.publicKey,
+      fingerprint: fingerprintForPublicKey(record.publicKey),
+      scopes: normalizeDeviceScopes(record.scopes),
+      firstSeenTs: existing?.firstSeenTs ?? now,
+      lastSeenTs: now,
+      ...(existing?.apns ? { apns: existing.apns } : {}),
+    }
+    this.devices.set(deviceId, next)
+    void this.flush()
+    return structuredClone(next)
+  }
+
+  /** Return an active cryptographic identity. */
+  authorized(deviceId: string): DeviceRecord | undefined {
+    const record = this.devices.get(deviceId)
+    if (!record?.publicKey || record.revokedAt !== undefined) return undefined
+    return record
+  }
+
+  markAuthenticated(deviceId: string, deviceName: string, appVersion: string, now: number): void {
+    const record = this.authorized(deviceId)
+    if (!record) return
+    record.deviceName = deviceName || record.deviceName
+    record.appVersion = appVersion || record.appVersion
+    record.lastSeenTs = now
     void this.flush()
   }
 
+  revoke(deviceId: string, now: number): boolean {
+    const record = this.devices.get(deviceId)
+    if (!record || record.revokedAt !== undefined) return false
+    record.revokedAt = now
+    delete record.apns
+    void this.flush()
+    return true
+  }
+
+  setScopes(deviceId: string, scopes: unknown): DeviceScope[] | null {
+    const record = this.authorized(deviceId)
+    if (!record) return null
+    record.scopes = normalizeDeviceScopes(scopes)
+    void this.flush()
+    return [...record.scopes]
+  }
+
   list(): DeviceRecord[] {
-    return [...this.devices.values()]
+    return [...this.devices.values()].map((record) => structuredClone(record))
   }
 
   /**
@@ -238,14 +206,8 @@ export class DeviceStore {
   ): void {
     const normalized = token.toLowerCase()
     if (!isValidApnsToken(normalized)) return
-    let record = this.devices.get(deviceId)
-    if (!record) {
-      // A live authenticated socket always has a row (hello touches it), but
-      // a rotation could clear the registry mid-session; self-heal instead of
-      // dropping the registration.
-      record = { deviceId, deviceName: 'unknown', appVersion: 'unknown', firstSeenTs: now, lastSeenTs: now }
-      this.devices.set(deviceId, record)
-    }
+    const record = this.authorized(deviceId)
+    if (!record) return
     const next: DeviceApnsInfo = { token: normalized, environment, updatedAt: now }
     if (categories && typeof categories === 'object') {
       const clean: Record<string, boolean> = {}
@@ -275,16 +237,6 @@ export class DeviceStore {
     void this.flush()
   }
 
-  /**
-   * Drop every paired-device record. Used by token rotation: devices paired
-   * under the old token can no longer authenticate, so keeping their rows
-   * would paint a misleading "still paired" picture.
-   */
-  clear(): void {
-    this.devices.clear()
-    void this.flush()
-  }
-
   /** Serialized so concurrent touches can never interleave half-written JSON. */
   private flush(): Promise<void> {
     const next = this.flushTail.then(() => this.writeFile())
@@ -302,7 +254,7 @@ export class DeviceStore {
   private async writeFile(): Promise<void> {
     const full = expandHome(this.filePath)
     const body = JSON.stringify(
-      { version: 1, devices: this.list() },
+      { version: 2, devices: this.list() },
       null,
       2,
     )

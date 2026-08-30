@@ -29,6 +29,10 @@ const CSS = [
   '.pbb-actionDanger:not(:disabled){color:#fff;background:var(--dsw-alias-label-error);border-color:var(--dsw-alias-label-error)}',
   '.pbb-qrPanel{display:flex;flex-direction:column;align-items:center;gap:9px;padding:12px 0 4px}',
   '.pbb-qrImage{width:240px;height:240px;max-width:100%;background:#fff;border-radius:10px;padding:8px;box-sizing:border-box}',
+  '.pbb-pairCodeBlock{width:min(100%,420px);display:flex;flex-direction:column;gap:5px}',
+  '.pbb-pairCodeLabel{font-size:11px;color:var(--dsw-alias-label-tertiary);text-align:center}',
+  '.pbb-pairCodeRow{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap}',
+  '.pbb-pairCode{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;line-height:1.4;letter-spacing:.04em;color:var(--dsw-alias-label-primary);word-break:break-all;text-align:center;user-select:all}',
   '.pbb-qrHint{max-width:420px;text-align:center;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-tertiary);margin:0}',
   // master-switch row
   '.pbb-switchRow{padding:12px 0;display:flex;align-items:center;gap:12px}',
@@ -48,6 +52,7 @@ const CSS = [
   '.pbb-switchOn::after{transform:translateX(16px);background:#fff}',
   '.pbb-switch:disabled{opacity:.5;cursor:default}',
   '.pbb-limitRow{border-top:1px solid var(--dsw-alias-border-l2);padding:12px 0;display:flex;align-items:center;gap:12px}',
+  '.pbb-limitNested{border-top:0;padding:0}',
   '.pbb-limitControl{display:flex;align-items:center;gap:8px;flex:none}',
   '.pbb-numberInput{width:72px;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;padding:5px 8px}',
   '.pbb-numberInput:focus{outline:2px solid var(--dsw-alias-state-success-primary,#22a06b);outline-offset:1px}',

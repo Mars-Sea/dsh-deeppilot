@@ -10,6 +10,13 @@
  */
 
 import type { InvocationDescriptor, TypertRemoteContribution, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
+import { DEVICE_SCOPES, normalizeDeviceScopes, type DeviceScope } from './device-auth.ts'
+
+export interface PairingGrantSnapshot {
+  code: string
+  expiresAt: number
+  audience: string
+}
 
 /** One paired device row in the report. */
 export interface ReportDevice {
@@ -18,6 +25,9 @@ export interface ReportDevice {
   appVersion: string
   firstSeenTs: number
   lastSeenTs: number
+  fingerprint: string
+  scopes: DeviceScope[]
+  revokedAt?: number
   /** Present once the device registered an APNs token (token itself never leaves the host). */
   apns?: { environment: 'development' | 'production'; updatedAt: number }
 }
@@ -74,10 +84,10 @@ export interface DeepPilotReport {
   releaseUrl?: string
   /** Whether the master bridge switch is on. */
   enabled: boolean
-  /** Absolute token file path (never the token itself). */
-  tokenPath: string
-  /** Whether the token file exists and is readable. */
-  tokenReady: boolean
+  /** Absolute protocol-v2 identity registry path. */
+  identityPath: string
+  /** Whether host identity and the device registry are ready. */
+  pairingReady: boolean
   /** Currently connected phone sockets. */
   activeConnections: number
   historyBufferMax: number
@@ -101,15 +111,9 @@ export const REPORT_REMOTE_PACKAGE = 'dsh-deeppilot'
 /** Canonical `<namespace>/<method>` endpoint of the report Remote. */
 export const REPORT_ENDPOINT = 'deeppilot/report'
 
-/** Explicit, user-triggered endpoint for revealing the pairing secret. */
-export const REVEAL_TOKEN_ENDPOINT = 'deeppilot/revealToken'
-
-/**
- * Explicit, user-triggered endpoint that replaces the pairing secret. The old
- * token stops working immediately; the fresh one is returned so the page can
- * show/QR it right away.
- */
-export const ROTATE_TOKEN_ENDPOINT = 'deeppilot/rotateToken'
+export const BEGIN_PAIRING_ENDPOINT = 'deeppilot/beginPairing'
+export const REVOKE_DEVICE_ENDPOINT = 'deeppilot/revokeDevice'
+export const SET_DEVICE_SCOPES_ENDPOINT = 'deeppilot/setDeviceScopes'
 
 function reject(field: string): never {
   throw new TypeError(`deeppilot/report result: invalid ${field}`)
@@ -163,6 +167,9 @@ function parseDevice(value: unknown): ReportDevice {
     appVersion: str(s, 'appVersion', 'device.appVersion'),
     firstSeenTs: int(s, 'firstSeenTs', 'device.firstSeenTs'),
     lastSeenTs: int(s, 'lastSeenTs', 'device.lastSeenTs'),
+    fingerprint: str(s, 'fingerprint', 'device.fingerprint'),
+    scopes: normalizeDeviceScopes(s.scopes),
+    ...(s.revokedAt !== undefined ? { revokedAt: int(s, 'revokedAt', 'device.revokedAt') } : {}),
     ...(apns ? { apns } : {}),
   }
 }
@@ -277,8 +284,8 @@ function parseReport(value: unknown): DeepPilotReport {
     ...(typeof releaseUrl === 'string' && releaseUrl.length > 0
       ? { releaseUrl } : {}),
     enabled: bool(s, 'enabled', 'enabled'),
-    tokenPath: str(s, 'tokenPath', 'tokenPath'),
-    tokenReady: bool(s, 'tokenReady', 'tokenReady'),
+    identityPath: str(s, 'identityPath', 'identityPath'),
+    pairingReady: bool(s, 'pairingReady', 'pairingReady'),
     activeConnections: int(s, 'activeConnections', 'activeConnections'),
     historyBufferMax: int(s, 'historyBufferMax', 'historyBufferMax'),
     debug: bool(s, 'debug', 'debug'),
@@ -294,11 +301,38 @@ export const relayTestSchema: TypertSchema<RelayTestResult> = { parse: parseRela
 
 export const pushTestSchema: TypertSchema<PushTestResult> = { parse: parsePushTestResult }
 
-export const pairingTokenSchema: TypertSchema<string> = {
-  parse(value: unknown): string {
-    if (typeof value !== 'string' || value.length < 32) {
-      throw new TypeError('deeppilot/revealToken result: invalid token')
+export const pairingGrantSchema: TypertSchema<PairingGrantSnapshot> = {
+  parse(value: unknown): PairingGrantSnapshot {
+    const s = rec(value, 'pairing grant')
+    const code = str(s, 'code', 'pairingGrant.code')
+    if (code.length < 32) reject('pairingGrant.code')
+    return {
+      code,
+      expiresAt: int(s, 'expiresAt', 'pairingGrant.expiresAt'),
+      audience: str(s, 'audience', 'pairingGrant.audience'),
     }
+  },
+}
+
+const deviceIdSchema: TypertSchema<string> = {
+  parse(value: unknown): string {
+    if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value)) reject('deviceId')
+    return value
+  },
+}
+
+const scopesSchema: TypertSchema<DeviceScope[]> = {
+  parse(value: unknown): DeviceScope[] {
+    if (!Array.isArray(value) || value.some((scope) => typeof scope !== 'string' || !DEVICE_SCOPES.includes(scope as DeviceScope))) {
+      reject('scopes')
+    }
+    return normalizeDeviceScopes(value)
+  },
+}
+
+const booleanSchema: TypertSchema<boolean> = {
+  parse(value: unknown): boolean {
+    if (typeof value !== 'boolean') reject('boolean')
     return value
   },
 }
@@ -331,31 +365,59 @@ export const REPORT_DESCRIPTOR: InvocationDescriptor = {
   },
 }
 
-export const REVEAL_TOKEN_DESCRIPTOR: InvocationDescriptor = {
-  id: `${REPORT_REMOTE_PACKAGE}#${REVEAL_TOKEN_ENDPOINT}`,
+export const BEGIN_PAIRING_DESCRIPTOR: InvocationDescriptor = {
+  id: `${REPORT_REMOTE_PACKAGE}#${BEGIN_PAIRING_ENDPOINT}`,
   service: 'deeppilotReport',
   namespace: 'deeppilot',
-  method: 'revealToken',
+  method: 'beginPairing',
   invocation: { kind: 'direct' },
   parameters: [],
   result: {
     mode: 'strict',
-    typeSymbol: `${REPORT_REMOTE_PACKAGE}#PairingToken`,
-    schema: pairingTokenSchema,
+    typeSymbol: `${REPORT_REMOTE_PACKAGE}#PairingGrantSnapshot`,
+    schema: pairingGrantSchema,
   },
 }
 
-export const ROTATE_TOKEN_DESCRIPTOR: InvocationDescriptor = {
-  id: `${REPORT_REMOTE_PACKAGE}#${ROTATE_TOKEN_ENDPOINT}`,
+export const REVOKE_DEVICE_DESCRIPTOR: InvocationDescriptor = {
+  id: `${REPORT_REMOTE_PACKAGE}#${REVOKE_DEVICE_ENDPOINT}`,
   service: 'deeppilotReport',
   namespace: 'deeppilot',
-  method: 'rotateToken',
+  method: 'revokeDevice',
   invocation: { kind: 'direct' },
-  parameters: [],
+  parameters: [{
+    name: 'deviceId',
+    wire: 'deviceId',
+    source: 'json',
+    codec: { mode: 'strict', typeSymbol: `${REPORT_REMOTE_PACKAGE}#DeviceId`, schema: deviceIdSchema },
+  }],
   result: {
     mode: 'strict',
-    typeSymbol: `${REPORT_REMOTE_PACKAGE}#PairingToken`,
-    schema: pairingTokenSchema,
+    typeSymbol: `${REPORT_REMOTE_PACKAGE}#Boolean`,
+    schema: booleanSchema,
+  },
+}
+
+export const SET_DEVICE_SCOPES_DESCRIPTOR: InvocationDescriptor = {
+  id: `${REPORT_REMOTE_PACKAGE}#${SET_DEVICE_SCOPES_ENDPOINT}`,
+  service: 'deeppilotReport',
+  namespace: 'deeppilot',
+  method: 'setDeviceScopes',
+  invocation: { kind: 'direct' },
+  parameters: [
+    {
+      name: 'deviceId', wire: 'deviceId', source: 'json',
+      codec: { mode: 'strict', typeSymbol: `${REPORT_REMOTE_PACKAGE}#DeviceId`, schema: deviceIdSchema },
+    },
+    {
+      name: 'scopes', wire: 'scopes', source: 'json',
+      codec: { mode: 'strict', typeSymbol: `${REPORT_REMOTE_PACKAGE}#DeviceScopes`, schema: scopesSchema },
+    },
+  ],
+  result: {
+    mode: 'strict',
+    typeSymbol: `${REPORT_REMOTE_PACKAGE}#DeviceScopes`,
+    schema: scopesSchema,
   },
 }
 
@@ -389,8 +451,9 @@ export const TEST_PUSH_DESCRIPTOR: InvocationDescriptor = {
 
 const INVOCATION_DESCRIPTORS = [
   REPORT_DESCRIPTOR,
-  REVEAL_TOKEN_DESCRIPTOR,
-  ROTATE_TOKEN_DESCRIPTOR,
+  BEGIN_PAIRING_DESCRIPTOR,
+  REVOKE_DEVICE_DESCRIPTOR,
+  SET_DEVICE_SCOPES_DESCRIPTOR,
   TEST_RELAY_DESCRIPTOR,
   TEST_PUSH_DESCRIPTOR,
 ]

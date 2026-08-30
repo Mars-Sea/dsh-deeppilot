@@ -1,4 +1,5 @@
-import type { DeepPilotReport, PushTestResult, RelayTestResult } from '../report-wire.ts'
+import type { DeviceScope } from '../device-auth.ts'
+import type { DeepPilotReport, PairingGrantSnapshot, PushTestResult, RelayTestResult } from '../report-wire.ts'
 import { REPORT_REMOTE_CONTRIBUTION } from '../report-wire.ts'
 
 export type RemoteResult<T> =
@@ -7,9 +8,9 @@ export type RemoteResult<T> =
 
 export interface ReportRemote {
   report(): Promise<RemoteResult<DeepPilotReport>>
-  revealToken(): Promise<RemoteResult<string>>
-  /** Replaces the pairing secret; resolves with the fresh token. */
-  rotateToken(): Promise<RemoteResult<string>>
+  beginPairing(): Promise<RemoteResult<PairingGrantSnapshot>>
+  revokeDevice(deviceId: string): Promise<RemoteResult<boolean>>
+  setDeviceScopes(deviceId: string, scopes: DeviceScope[]): Promise<RemoteResult<DeviceScope[]>>
   /** Optional so an older host never breaks a newer client (and vice versa). */
   testRelay?(): Promise<RemoteResult<RelayTestResult>>
   /** Forces one real push delivery to every registered device. */

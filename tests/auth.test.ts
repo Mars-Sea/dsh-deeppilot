@@ -3,21 +3,20 @@ import test from 'node:test'
 import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { helloTokenAccepted } from '../src/connection.ts'
-import { Config, requestToken } from '../src/index.ts'
+import { sign } from 'node:crypto'
+import { Config } from '../src/index.ts'
 import { bridgeDataDir, ensurePrivateBridgeDataDir, migrateLegacyBridgeDataDir } from '../src/token.ts'
 import { requestClientIdentity } from '../src/phone-http.ts'
+import { PairingCodeManager, canonicalAuthChallenge, deviceIdForPublicKey, verifyAuthProof } from '../src/device-auth.ts'
+import { createTestIdentity } from './auth-fixture.ts'
 
-const expected = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFG'
-
-test('HTTP authentication accepts Bearer and rejects URL credentials', () => {
-  assert.equal(requestToken({ url: '/phone', headers: { authorization: `Bearer ${expected}` } }), expected)
-  assert.equal(requestToken({ url: `/phone?token=${expected}`, headers: {} }), null)
-  assert.equal(requestToken({ url: '/phone', headers: {} }), null)
-  assert.equal(requestToken({
-    url: '/phone?token=legacy',
-    headers: { authorization: `Bearer ${expected}` },
-  }), expected)
+test('single-use pairing grants expire and cannot be replayed', () => {
+  const manager = new PairingCodeManager()
+  const grant = manager.issue(1_000)
+  assert.equal(manager.consume(grant.code, 1_001), true)
+  assert.equal(manager.consume(grant.code, 1_002), false)
+  const expired = manager.issue(2_000)
+  assert.equal(manager.consume(expired.code, expired.expiresAt + 1), false)
 })
 
 test('forwarded client identity is trusted only from the loopback helper', () => {
@@ -33,11 +32,35 @@ test('forwarded client identity is trusted only from the loopback helper', () =>
   assert.equal(requestClientIdentity(direct as never), '192.0.2.4')
 })
 
-test('hello authentication requires the token only for an untrusted upgrade', () => {
-  assert.equal(helloTokenAccepted(true, undefined, expected), true)
-  assert.equal(helloTokenAccepted(false, expected, expected), true)
-  assert.equal(helloTokenAccepted(false, 'wrong', expected), false)
-  assert.equal(helloTokenAccepted(undefined, undefined, expected), false)
+test('P-256 challenge proof binds every canonical authentication field', () => {
+  const identity = createTestIdentity()
+  const fields = {
+    deviceId: identity.deviceId,
+    deviceName: 'iPhone',
+    appVersion: '2.0',
+    nonce: 'n'.repeat(32),
+    audience: 'deeppilot:test',
+    issuedAt: 1000,
+    expiresAt: 31_000,
+  }
+  const signature = sign('sha256', canonicalAuthChallenge(fields), identity.privateKey).toString('base64url')
+  assert.equal(verifyAuthProof(identity.publicKey, fields, signature), true)
+  assert.equal(verifyAuthProof(identity.publicKey, { ...fields, audience: 'deeppilot:other' }, signature), false)
+  assert.equal(deviceIdForPublicKey(identity.publicKey), identity.deviceId)
+  assert.equal(
+    canonicalAuthChallenge({ ...fields, deviceId: 'device', deviceName: 'Mars iPhone', resumeCursor: 42 }).toString(),
+    [
+      'deeppilot-auth-v2',
+      'device-id:ZGV2aWNl',
+      `nonce:${'n'.repeat(32)}`,
+      'audience:ZGVlcHBpbG90OnRlc3Q',
+      'issued-at:1000',
+      'expires-at:31000',
+      'device-name:TWFycyBpUGhvbmU',
+      'app-version:Mi4w',
+      'resume-cursor:42',
+    ].join('\n'),
+  )
 })
 
 test('configuration rejects unsupported providers and Funnel ports', () => {
@@ -70,14 +93,14 @@ test('legacy plugin state migrates without overwriting canonical data', async ()
     process.env.DSH_HOME = root
     const legacy = join(root, 'pocket-bridge')
     await mkdir(legacy)
-    await writeFile(join(legacy, 'auth-token'), expected)
+    await writeFile(join(legacy, 'tailscale-state'), 'state')
     assert.equal(await migrateLegacyBridgeDataDir(), legacy)
-    assert.equal(await readFile(join(root, 'deeppilot', 'auth-token'), 'utf8'), expected)
+    assert.equal(await readFile(join(root, 'deeppilot', 'tailscale-state'), 'utf8'), 'state')
 
     await mkdir(legacy)
-    await writeFile(join(legacy, 'devices.json'), 'legacy')
+    await writeFile(join(legacy, 'other-state'), 'legacy')
     assert.equal(await migrateLegacyBridgeDataDir(), null)
-    await assert.rejects(() => readFile(join(root, 'deeppilot', 'devices.json'), 'utf8'))
+    await assert.rejects(() => readFile(join(root, 'deeppilot', 'other-state'), 'utf8'))
   } finally {
     if (previous === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previous

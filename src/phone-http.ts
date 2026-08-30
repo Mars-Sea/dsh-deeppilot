@@ -12,13 +12,11 @@ export function rejectUpgrade(socket: Duplex, status: number, reason: string, re
     500: 'Internal Server Error',
     503: 'Service Unavailable',
   }
-  const authenticate = status === 401 ? 'WWW-Authenticate: Bearer realm="deeppilot"\r\n' : ''
   const retryAfter = status === 429 && retryAfterSeconds !== undefined
     ? `Retry-After: ${Math.max(1, Math.ceil(retryAfterSeconds))}\r\n`
     : ''
   socket.end(
     'HTTP/1.1 ' + status + ' ' + (statusText[status] ?? 'Error') + '\r\n' +
-    authenticate +
     retryAfter +
     'Content-Type: application/json\r\n' +
     'Content-Length: ' + Buffer.byteLength(body) + '\r\n' +
@@ -26,16 +24,6 @@ export function rejectUpgrade(socket: Duplex, status: number, reason: string, re
     '\r\n' +
     body,
   )
-}
-
-/** Credentials are accepted only from the Authorization header. */
-export function requestToken(req: Pick<IncomingMessage, 'url' | 'headers'>): string | null {
-  const authorization = req.headers.authorization
-  if (typeof authorization === 'string') {
-    const match = /^Bearer\s+(.+)$/i.exec(authorization.trim())
-    if (match?.[1]) return match[1]
-  }
-  return null
 }
 
 function normalizedAddress(value: string | undefined): string | null {

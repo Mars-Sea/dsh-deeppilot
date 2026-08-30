@@ -8,12 +8,12 @@ const reportRemote: ReportRemote = {
     return {
       ok: true,
       value: {
-        protocolVersion: 1,
+        protocolVersion: 2,
         pluginVersion: '0.3.0',
         serverVersion: '0.1.0',
         enabled: true,
-        tokenPath: '/tmp/auth-token',
-        tokenReady: true,
+        identityPath: '/tmp/devices-v2.json',
+        pairingReady: true,
         activeConnections: 0,
         historyBufferMax: 2000,
         debug: false,
@@ -27,11 +27,14 @@ const reportRemote: ReportRemote = {
       },
     }
   },
-  async revealToken() {
-    return { ok: true, value: 'a'.repeat(43) }
+  async beginPairing() {
+    return { ok: true, value: { code: 'a'.repeat(43), expiresAt: Date.now() + 60_000, audience: 'deeppilot:test' } }
   },
-  async rotateToken() {
-    return { ok: true, value: 'b'.repeat(43) }
+  async revokeDevice() {
+    return { ok: true, value: true }
+  },
+  async setDeviceScopes(_deviceId, scopes) {
+    return { ok: true, value: scopes }
   },
 }
 

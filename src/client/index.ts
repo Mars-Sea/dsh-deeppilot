@@ -17,7 +17,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import type { DeepPilotReport } from '../report-wire.ts'
+import type { DeepPilotReport, PairingGrantSnapshot } from '../report-wire.ts'
 import { mountReportRemote } from './report-mount.ts'
 import type { ClientRemoteLike, ReportRemote } from './report-mount.ts'
 import { registerLocale as registerDeepPilotLocale, t } from './i18n.ts'
@@ -191,15 +191,22 @@ export function apply(ctx: Context): void {
     }
   }, 'dsh-deeppilot: report remote mount')
 
-  const revealPairingToken = async (): Promise<string> => {
+  const beginPairing = async (): Promise<PairingGrantSnapshot> => {
     if (namespace === undefined) {
       throw new Error(mountError !== undefined
         ? t(ctx, 'diag.mountFailedShort') + mountError
         : t(ctx, 'diag.remoteUnmounted'))
     }
-    const result = await namespace.revealToken()
-    if (!result.ok) throw new Error(result.error.message ?? t(ctx, 'panel.tokenRevealFailed'))
+    const result = await namespace.beginPairing()
+    if (!result.ok) throw new Error(result.error.message ?? t(ctx, 'pair.qrFailed'))
     return result.value
+  }
+
+  const revokeDevice = async (deviceId: string): Promise<void> => {
+    if (namespace === undefined) throw new Error(t(ctx, 'diag.remoteUnmounted'))
+    const result = await namespace.revokeDevice(deviceId)
+    if (!result.ok || result.value !== true) throw new Error(result.ok ? t(ctx, 'devices.revokeFailed') : (result.error.message ?? t(ctx, 'devices.revokeFailed')))
+    await controller.refresh()
   }
 
   const sendTestPush = async (): Promise<PushTestResult> => {
@@ -227,19 +234,6 @@ export function apply(ctx: Context): void {
     }
     const result = await namespace.testRelay()
     if (!result.ok) throw new Error(result.error.message ?? t(ctx, 'push.relayBad'))
-    return result.value
-  }
-
-  // Rotation is a destructive, explicit action: the old token stops working
-  // immediately and every paired device must re-pair with the fresh secret.
-  const rotatePairingToken = async (): Promise<string> => {
-    if (namespace === undefined) {
-      throw new Error(mountError !== undefined
-        ? t(ctx, 'diag.mountFailedShort') + mountError
-        : t(ctx, 'diag.remoteUnmounted'))
-    }
-    const result = await namespace.rotateToken()
-    if (!result.ok) throw new Error(result.error.message ?? t(ctx, 'panel.tokenRotateFailed'))
     return result.value
   }
 
@@ -373,8 +367,8 @@ export function apply(ctx: Context): void {
           deepPilotRemoteConnectionLimit: remoteConnectionLimitStore,
         },
         refresh: () => { void controller.refresh() },
-        revealPairingToken,
-        rotatePairingToken,
+        beginPairing,
+        revokeDevice,
         testRelay: testRelayConnection,
         testPush: sendTestPush,
         setDeepPilotEnabled,

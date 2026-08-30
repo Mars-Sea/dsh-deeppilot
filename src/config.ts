@@ -9,9 +9,7 @@ import { bridgeDataDir } from './token.ts'
 export interface Config {
   /** Master switch; when false the plugin activates and does nothing. */
   enabled?: boolean
-  /** Pairing token file (0600); generated on first boot when missing. */
-  authTokenPath?: string
-  /** Paired-device registry JSON path. */
+  /** Protocol-v2 device registry JSON path. */
   devicesPath?: string
   /** Replay ring buffer bound (frames) per deployment. */
   historyBufferMax?: number
@@ -57,8 +55,7 @@ export const DEFAULT_RELAY_URL = 'https://pilot.hailab.dev'
 
 export const Config = z.object({
   enabled: z.boolean().default(true),
-  authTokenPath: z.string().default(join(bridgeDataDir(), 'auth-token')),
-  devicesPath: z.string().default(join(bridgeDataDir(), 'devices.json')),
+  devicesPath: z.string().default(join(bridgeDataDir(), 'devices-v2.json')),
   historyBufferMax: z.natural().min(100).default(2000),
   debug: z.boolean().default(false),
   remote: z.object({

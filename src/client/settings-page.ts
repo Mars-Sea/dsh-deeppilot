@@ -1,6 +1,6 @@
 import { createElement as h, useEffect, useState } from 'react'
 import * as QRCode from 'qrcode/lib/browser.js'
-import type { DeepPilotReport, PushTestResult, RelayTestResult } from '../report-wire.ts'
+import type { DeepPilotReport, PairingGrantSnapshot, PushTestResult, RelayTestResult } from '../report-wire.ts'
 import { encodePairingQRPayload, selectPairingTarget } from '../pairing-qr.ts'
 import { translateWith as t } from './i18n.ts'
 import type { EnabledState, PageState, RemoteConnectionLimitState, RemoteEnabledState } from './index.ts'
@@ -13,7 +13,7 @@ async function writeClipboard(t: T, value: string): Promise<void> {
     await navigator.clipboard.writeText(value)
     return
   } catch {
-    // Some embedded browsers expire user activation while revealToken is in
+    // Some embedded browsers expire user activation while a remote call is in
     // flight. Keep a synchronous fallback scoped to a short-lived textarea.
   }
   const textarea = document.createElement('textarea')
@@ -43,14 +43,11 @@ const REMOTE_PHASE_META: Record<DeepPilotReport['remote']['phase'], { dot: strin
 
 /** Slot component: hooks come from the slot renderer, named use<Key>. */
 export function DeepPilotSettingsPage(props: Record<string, any>): any {
-  const [revealedToken, setRevealedToken] = useState<string | null>(null)
-  const [tokenBusy, setTokenBusy] = useState(false)
-  const [tokenMessage, setTokenMessage] = useState('')
-  const [rotateArmed, setRotateArmed] = useState(false)
-  const [remoteMessage, setRemoteMessage] = useState('')
+  const [addressMessage, setAddressMessage] = useState('')
   const [remoteLimitDraft, setRemoteLimitDraft] = useState(String(DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE))
   const [remoteLimitMessage, setRemoteLimitMessage] = useState('')
   const [qrDataURL, setQRDataURL] = useState<string | null>(null)
+  const [pairingGrant, setPairingGrant] = useState<PairingGrantSnapshot | null>(null)
   const [qrBusy, setQRBusy] = useState(false)
   const [qrMessage, setQRMessage] = useState('')
   const [relayTestBusy, setRelayTestBusy] = useState(false)
@@ -59,6 +56,8 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   const [pushTestBusy, setPushTestBusy] = useState(false)
   const [pushTestResult, setPushTestResult] = useState<PushTestResult | null>(null)
   const [pushTestError, setPushTestError] = useState('')
+  const [deviceBusy, setDeviceBusy] = useState<string | null>(null)
+  const [deviceMessage, setDeviceMessage] = useState('')
 
   useEffect(() => {
     if (typeof props.refresh !== 'function') return
@@ -102,32 +101,10 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   }
 
   useEffect(() => {
-    if (revealedToken === null) return
-    const timer = globalThis.setTimeout(() => {
-      setRevealedToken(null)
-      setTokenMessage(t(props.t, 'panel.tokenAutoHidden'))
-    }, 30_000)
+    if (!addressMessage) return
+    const timer = globalThis.setTimeout(() => setAddressMessage(''), 2_500)
     return () => globalThis.clearTimeout(timer)
-  }, [revealedToken])
-
-  useEffect(() => {
-    if (!tokenMessage) return
-    const timer = globalThis.setTimeout(() => setTokenMessage(''), 4_000)
-    return () => globalThis.clearTimeout(timer)
-  }, [tokenMessage])
-
-  // The armed rotate button disarms itself so a stray click never rotates.
-  useEffect(() => {
-    if (!rotateArmed) return
-    const timer = globalThis.setTimeout(() => setRotateArmed(false), 5_000)
-    return () => globalThis.clearTimeout(timer)
-  }, [rotateArmed])
-
-  useEffect(() => {
-    if (!remoteMessage) return
-    const timer = globalThis.setTimeout(() => setRemoteMessage(''), 2_500)
-    return () => globalThis.clearTimeout(timer)
-  }, [remoteMessage])
+  }, [addressMessage])
 
   useEffect(() => {
     if (!remoteLimitMessage) return
@@ -139,6 +116,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
     if (qrDataURL === null) return
     const timer = globalThis.setTimeout(() => {
       setQRDataURL(null)
+      setPairingGrant(null)
       setQRMessage(t(props.t, 'pair.qrAutoHidden'))
     }, 60_000)
     return () => globalThis.clearTimeout(timer)
@@ -181,8 +159,8 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
       diag.push(t(props.t, 'diag.missingEnabledHook'))
     }
     if (typeof props.refresh !== 'function') diag.push(t(props.t, 'diag.missingRefresh'))
-    if (typeof props.revealPairingToken !== 'function') diag.push(t(props.t, 'diag.missingReveal'))
-    if (typeof props.rotatePairingToken !== 'function') diag.push(t(props.t, 'diag.missingRotate'))
+    if (typeof props.beginPairing !== 'function') diag.push(t(props.t, 'diag.missingReveal'))
+    if (typeof props.revokeDevice !== 'function') diag.push(t(props.t, 'diag.missingRotate'))
     if (typeof props.testRelay !== 'function') diag.push(t(props.t, 'diag.missingTestRelay'))
     if (typeof props.testPush !== 'function') diag.push(t(props.t, 'diag.missingTestPush'))
     if (typeof props.setDeepPilotEnabled !== 'function') diag.push(t(props.t, 'diag.missingSetEnabled'))
@@ -236,84 +214,54 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
 
   useEffect(() => {
     setQRDataURL(null)
+    setPairingGrant(null)
   }, [pairingTarget?.host])
 
-  const toggleToken = (): void => {
-    if (revealedToken !== null) {
-      setRevealedToken(null)
-      setTokenMessage('')
-      return
-    }
-    if (typeof props.revealPairingToken !== 'function') return
-    setTokenBusy(true)
-    setTokenMessage('')
-    void props.revealPairingToken().then((token: string) => {
-      setRevealedToken(token)
-    }, (error: unknown) => {
-      setTokenMessage(t(props.t, 'panel.tokenRevealFailed') + (error instanceof Error ? error.message : String(error)))
-    }).finally(() => setTokenBusy(false))
-  }
-
-  const copyToken = (): void => {
-    if (typeof props.revealPairingToken !== 'function') return
-    setTokenBusy(true)
-    setTokenMessage('')
-    const tokenPromise = revealedToken !== null
-      ? Promise.resolve(revealedToken)
-      : props.revealPairingToken() as Promise<string>
-    void tokenPromise
-      .then((value: string) => writeClipboard(props.t as T, value))
-      .then(() => setTokenMessage(t(props.t, 'panel.tokenCopied')), (error: unknown) => {
-        setTokenMessage(t(props.t, 'pair.publicCopyFailed') + (error instanceof Error ? error.message : String(error)))
-      })
-      .finally(() => setTokenBusy(false))
-  }
-
-  const rotateToken = (): void => {
-    if (typeof props.rotatePairingToken !== 'function') return
-    if (!rotateArmed) {
-      setRotateArmed(true)
-      setRevealedToken(null)
-      setQRDataURL(null)
-      setTokenMessage(t(props.t, 'panel.tokenRotateWarning'))
-      return
-    }
-    setRotateArmed(false)
-    setTokenBusy(true)
-    setTokenMessage('')
-    void (props.rotatePairingToken() as Promise<string>)
-      .then((token: string) => {
-        setRevealedToken(token)
-        setTokenMessage(t(props.t, 'panel.tokenRotated'))
-      }, (error: unknown) => {
-        setTokenMessage(t(props.t, 'panel.tokenRotateFailed') + (error instanceof Error ? error.message : String(error)))
-      })
-      .finally(() => setTokenBusy(false))
-  }
-
   const copyRemoteURL = (url: string): void => {
-    setRemoteMessage('')
+    setAddressMessage('')
     void writeClipboard(props.t as T, url).then(() => {
-      setRemoteMessage(t(props.t, 'pair.publicCopyDone'))
+      setAddressMessage(t(props.t, 'pair.publicCopyDone'))
     }, (error: unknown) => {
-      setRemoteMessage(t(props.t, 'pair.publicCopyFailed') + (error instanceof Error ? error.message : String(error)))
+      setAddressMessage(t(props.t, 'pair.publicCopyFailed') + (error instanceof Error ? error.message : String(error)))
     })
   }
 
   const showPairingQR = (): void => {
-    if (typeof props.revealPairingToken !== 'function' || pairingTarget === null) return
+    if (typeof props.beginPairing !== 'function' || pairingTarget === null) return
     setQRBusy(true)
     setQRMessage('')
     setQRDataURL(null)
-    void (props.revealPairingToken() as Promise<string>)
-      .then((pairingToken: string) => QRCode.toString(
-        encodePairingQRPayload(pairingTarget.host, pairingToken),
-        { type: 'svg', errorCorrectionLevel: 'M', margin: 2, width: 512 },
-      ))
-      .then((svg: string) => setQRDataURL('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)), (error: unknown) => {
+    setPairingGrant(null)
+    void (props.beginPairing() as Promise<PairingGrantSnapshot>)
+      .then(async (grant: PairingGrantSnapshot) => ({
+        grant,
+        svg: await QRCode.toString(
+          encodePairingQRPayload(pairingTarget.host, grant),
+          { type: 'svg', errorCorrectionLevel: 'M', margin: 2, width: 512 },
+        ),
+      }))
+      .then(({ grant, svg }) => {
+        setPairingGrant(grant)
+        setQRDataURL('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg))
+      }, (error: unknown) => {
         setQRMessage(t(props.t, 'pair.qrFailed') + (error instanceof Error ? error.message : String(error)))
       })
       .finally(() => setQRBusy(false))
+  }
+
+  const hidePairingQR = (): void => {
+    setQRDataURL(null)
+    setPairingGrant(null)
+  }
+
+  const copyPairingCode = (): void => {
+    if (pairingGrant === null) return
+    setQRMessage('')
+    void writeClipboard(props.t as T, pairingGrant.code).then(() => {
+      setQRMessage(t(props.t, 'pair.codeCopyDone'))
+    }, (error: unknown) => {
+      setQRMessage(t(props.t, 'pair.codeCopyFailed') + (error instanceof Error ? error.message : String(error)))
+    })
   }
 
   // Primary facts stay visible; technical details collapse into t(props.t, 'advanced.summary').
@@ -325,33 +273,11 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
         h('div', { className: 'pbb-row' },
           h('span', { className: 'pbb-label' }, t(props.t, 'panel.activeConnections')),
           h('span', { className: 'pbb-value' }, String(report.activeConnections)))),
-      h('div', { className: 'pbb-field', key: 'token' },
-        h('div', { className: 'pbb-row pbb-tokenRow' },
-          h('span', { className: 'pbb-label' }, t(props.t, 'panel.token')),
-          h('code', { className: 'pbb-token ' + (report.tokenReady ? 'pbb-ok' : 'pbb-bad') },
-            report.tokenReady ? (revealedToken ?? '••••••••••••') : t(props.t, 'panel.tokenNotReady')),
-          report.tokenReady
-            ? h('span', { className: 'pbb-tokenActions' },
-                h('button', {
-                  type: 'button',
-                  className: 'pbb-action',
-                  disabled: tokenBusy,
-                  onClick: toggleToken,
-                }, tokenBusy ? t(props.t, 'panel.tokenAction.showing') : (revealedToken === null ? t(props.t, 'panel.tokenAction.show') : t(props.t, 'panel.tokenAction.hide'))),
-                h('button', {
-                  type: 'button',
-                  className: 'pbb-action',
-                  disabled: tokenBusy,
-                  onClick: copyToken,
-                }, t(props.t, 'panel.tokenAction.copy')),
-                h('button', {
-                  type: 'button',
-                  className: 'pbb-action' + (rotateArmed ? ' pbb-actionDanger' : ''),
-                  disabled: tokenBusy,
-                  onClick: rotateToken,
-                }, rotateArmed ? t(props.t, 'panel.tokenAction.rotateConfirm') : (tokenBusy ? t(props.t, 'panel.tokenAction.rotating') : t(props.t, 'panel.tokenAction.rotate'))))
-            : null),
-        tokenMessage ? h('p', { className: 'pbb-diag' }, tokenMessage) : null),
+      h('div', { className: 'pbb-field', key: 'identity' },
+        h('div', { className: 'pbb-row' },
+          h('span', { className: 'pbb-label' }, t(props.t, 'panel.identity')),
+          h('code', { className: 'pbb-token ' + (report.pairingReady ? 'pbb-ok' : 'pbb-bad') },
+            report.pairingReady ? t(props.t, 'panel.identityReady') : t(props.t, 'panel.identityNotReady')))),
     )
     advancedRows.push(
       h('div', { className: 'pbb-field', key: 'proto' },
@@ -364,8 +290,8 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
           h('span', { className: 'pbb-value' }, report.serverVersion))),
       h('div', { className: 'pbb-field', key: 'path' },
         h('div', { className: 'pbb-row' },
-          h('span', { className: 'pbb-label' }, t(props.t, 'advanced.tokenPath')),
-          h('span', { className: 'pbb-value' }, report.tokenPath))),
+          h('span', { className: 'pbb-label' }, t(props.t, 'advanced.identityPath')),
+          h('span', { className: 'pbb-value' }, report.identityPath))),
       h('div', { className: 'pbb-field', key: 'buffer' },
         h('div', { className: 'pbb-row' },
           h('span', { className: 'pbb-label' }, t(props.t, 'advanced.bufferMax')),
@@ -373,18 +299,32 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
     )
   }
 
-  const deviceTable = report !== null && report.devices.length > 0
+  const revokeDevice = (deviceId: string, name: string): void => {
+    if (typeof props.revokeDevice !== 'function') return
+    if (typeof window !== 'undefined' && !window.confirm(t(props.t, 'devices.revokeConfirm', { name }))) return
+    setDeviceBusy(deviceId)
+    setDeviceMessage('')
+    void props.revokeDevice(deviceId).then(() => {
+      setDeviceMessage(t(props.t, 'devices.revoked'))
+    }, (error: unknown) => {
+      setDeviceMessage(t(props.t, 'devices.revokeFailed') + (error instanceof Error ? error.message : String(error)))
+    }).finally(() => setDeviceBusy(null))
+  }
+
+  const visibleDevices = report?.devices.filter((device) => device.revokedAt === undefined) ?? []
+  const deviceTable = visibleDevices.length > 0
     ? h('table', { className: 'pbb-table' },
         h('thead', null, h('tr', null,
-          h('th', null, t(props.t, 'devices.col.name')), h('th', null, t(props.t, 'devices.col.appVersion')), h('th', null, t(props.t, 'devices.col.push')), h('th', null, t(props.t, 'devices.col.lastSeen')))),
-        h('tbody', null, report.devices.map((d) =>
+          h('th', null, t(props.t, 'devices.col.name')), h('th', null, t(props.t, 'devices.col.fingerprint')), h('th', null, t(props.t, 'devices.col.lastSeen')), h('th', null, t(props.t, 'devices.col.actions')))),
+        h('tbody', null, visibleDevices.map((d) =>
           h('tr', { key: d.deviceId },
-            h('td', null, d.deviceName),
-            h('td', null, d.appVersion),
-            h('td', null, d.apns
-              ? t(props.t, 'devices.pushRegistered') + (d.apns.environment === 'production' ? t(props.t, 'devices.pushEnvProduction') : t(props.t, 'devices.pushEnvDevelopment')) + '）'
-              : t(props.t, 'devices.pushNotRegistered')),
-            h('td', null, new Date(d.lastSeenTs).toLocaleString())))))
+            h('td', null, d.deviceName, h('div', { className: 'pbb-diag' }, d.appVersion)),
+            h('td', null, h('code', { className: 'pbb-token' }, d.fingerprint.slice(0, 12))),
+            h('td', null, new Date(d.lastSeenTs).toLocaleString()),
+            h('td', null, h('button', {
+              type: 'button', className: 'pbb-action pbb-actionDanger', disabled: deviceBusy === d.deviceId,
+              onClick: () => revokeDevice(d.deviceId, d.deviceName),
+            }, t(props.t, 'devices.revoke')))))))
     : h('p', { className: 'pbb-empty' }, t(props.t, 'devices.empty'))
 
   const switchTitle = t(props.t, 'master.title')
@@ -444,7 +384,6 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
           report !== null && report.remote.message && (report.remote.phase === 'error' || report.remote.phase === 'unavailable')
             ? h('p', { className: 'pbb-diag pbb-diagBad' }, report.remote.message)
             : null,
-          remoteMessage ? h('p', { className: 'pbb-diag' }, remoteMessage) : null,
         ),
         h('button', {
           type: 'button',
@@ -460,42 +399,47 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
           },
         }),
       ),
-      h('div', { className: 'pbb-limitRow' },
-        h('div', { className: 'pbb-switchText' },
-          h('label', { className: 'pbb-switchTitle', htmlFor: 'deeppilot-funnel-source-limit' }, t(props.t, 'remote.limitTitle')),
-          h('span', { className: 'pbb-switchDesc' }, t(props.t, 'remote.limitDescription')),
-          !remoteLimitValid
-            ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'remote.limitInvalid'))
-            : remoteLimitMessage
-              ? h('p', { className: 'pbb-diag' + (remoteLimitMessage.startsWith(t(props.t, 'remote.limitFailed')) ? ' pbb-diagBad' : '') }, remoteLimitMessage)
-              : null,
-        ),
-        h('div', { className: 'pbb-limitControl' },
-          h('input', {
-            id: 'deeppilot-funnel-source-limit',
-            className: 'pbb-numberInput',
-            type: 'number',
-            min: 1,
-            max: MAX_FUNNEL_CONNECTIONS_PER_SOURCE,
-            step: 1,
-            inputMode: 'numeric',
-            value: remoteLimitDraft,
-            disabled: !remoteConnectionLimitReady,
-            'aria-label': t(props.t, 'remote.limitTitle'),
-            onChange: (event: { currentTarget: { value: string } }) => setRemoteLimitDraft(event.currentTarget.value),
-            onKeyDown: (event: { key: string; preventDefault: () => void }) => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                applyRemoteLimit()
-              }
-            },
-          }),
-          h('button', {
-            type: 'button',
-            className: 'pbb-action',
-            disabled: !remoteConnectionLimitReady || !remoteLimitValid || parsedRemoteLimit === remoteConnectionLimit,
-            onClick: applyRemoteLimit,
-          }, t(props.t, 'remote.limitApply')),
+      h('details', { className: 'pbb-help' },
+        h('summary', null, t(props.t, 'remote.advancedSettings')),
+        h('div', { className: 'pbb-helpBody' },
+          h('div', { className: 'pbb-limitRow pbb-limitNested' },
+            h('div', { className: 'pbb-switchText' },
+              h('label', { className: 'pbb-switchTitle', htmlFor: 'deeppilot-funnel-source-limit' }, t(props.t, 'remote.limitTitle')),
+              h('span', { className: 'pbb-switchDesc' }, t(props.t, 'remote.limitDescription')),
+              !remoteLimitValid
+                ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'remote.limitInvalid'))
+                : remoteLimitMessage
+                  ? h('p', { className: 'pbb-diag' + (remoteLimitMessage.startsWith(t(props.t, 'remote.limitFailed')) ? ' pbb-diagBad' : '') }, remoteLimitMessage)
+                  : null,
+            ),
+            h('div', { className: 'pbb-limitControl' },
+              h('input', {
+                id: 'deeppilot-funnel-source-limit',
+                className: 'pbb-numberInput',
+                type: 'number',
+                min: 1,
+                max: MAX_FUNNEL_CONNECTIONS_PER_SOURCE,
+                step: 1,
+                inputMode: 'numeric',
+                value: remoteLimitDraft,
+                disabled: !remoteConnectionLimitReady,
+                'aria-label': t(props.t, 'remote.limitTitle'),
+                onChange: (event: { currentTarget: { value: string } }) => setRemoteLimitDraft(event.currentTarget.value),
+                onKeyDown: (event: { key: string; preventDefault: () => void }) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    applyRemoteLimit()
+                  }
+                },
+              }),
+              h('button', {
+                type: 'button',
+                className: 'pbb-action',
+                disabled: !remoteConnectionLimitReady || !remoteLimitValid || parsedRemoteLimit === remoteConnectionLimit,
+                onClick: applyRemoteLimit,
+              }, t(props.t, 'remote.limitApply')),
+            ),
+          ),
         ),
       ),
       h('details', { className: 'pbb-help' },
@@ -562,22 +506,31 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
                 h('button', {
                   type: 'button',
                   className: 'pbb-action',
-                  disabled: qrBusy || !report.tokenReady,
+                  disabled: qrBusy || !report.pairingReady,
                   onClick: () => {
                     if (qrDataURL === null) showPairingQR()
-                    else setQRDataURL(null)
+                    else hidePairingQR()
                   },
                 }, qrBusy ? t(props.t, 'pair.qrGenerating') : (qrDataURL === null ? t(props.t, 'pair.qrShow') : t(props.t, 'pair.qrHide'))))),
         pairingTarget === null
           ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'pair.noAddressHelp'))
           : null,
         qrMessage ? h('p', { className: 'pbb-diag' }, qrMessage) : null,
-        pairingTarget === null || qrDataURL === null ? null : h('div', { className: 'pbb-qrPanel' },
+        pairingTarget === null || qrDataURL === null || pairingGrant === null ? null : h('div', { className: 'pbb-qrPanel' },
           h('img', {
             className: 'pbb-qrImage',
             src: qrDataURL,
             alt: t(props.t, 'pair.qrAlt'),
           }),
+          h('div', { className: 'pbb-pairCodeBlock' },
+            h('span', { className: 'pbb-pairCodeLabel' }, t(props.t, 'pair.codeLabel')),
+            h('div', { className: 'pbb-pairCodeRow' },
+              h('code', { className: 'pbb-pairCode' }, pairingGrant.code),
+              h('button', {
+                type: 'button',
+                className: 'pbb-action',
+                onClick: copyPairingCode,
+              }, t(props.t, 'panel.tokenAction.copy')))),
           h('div', { className: 'pbb-row' },
             h('code', { className: 'pbb-token' }, pairingTarget.host),
             h('button', {
@@ -585,6 +538,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
               className: 'pbb-action',
               onClick: () => copyRemoteURL(pairingTarget.host),
             }, t(props.t, 'panel.tokenAction.copy'))),
+          addressMessage ? h('p', { className: 'pbb-diag' }, addressMessage) : null,
           h('p', { className: 'pbb-qrHint' },
             t(props.t, 'pair.qrHint', {
               kind: pairingTarget.kind === 'public' ? t(props.t, 'pair.kind.public') : t(props.t, 'pair.kind.lan'),
@@ -658,8 +612,9 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
       h('div', { className: 'pbb-field' },
         h('div', { className: 'pbb-row' },
           h('span', { className: 'pbb-label' }, t(props.t, 'devices.title')),
-          h('span', { className: 'pbb-badge' }, String(report !== null ? report.devices.length : 0)),
+          h('span', { className: 'pbb-badge' }, String(visibleDevices.length)),
         ),
+        deviceMessage ? h('p', { className: 'pbb-diag' }, deviceMessage) : null,
         deviceTable,
       ),
     ),

@@ -305,7 +305,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "origin proxy error:", proxyErr)
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/phone" && r.URL.Path != "/phone/health" {
+		if r.URL.Path != "/phone" && r.URL.Path != "/phone/health" && r.URL.Path != "/phone/pair" {
 			http.NotFound(w, r)
 			return
 		}

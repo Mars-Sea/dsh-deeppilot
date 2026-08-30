@@ -7,10 +7,10 @@ import { BridgeConnection, AUTH_TIMEOUT_MS, MAX_OUTBOUND_BUFFER_BYTES, PRE_AUTH_
 import { HostBridge } from '../src/host-bridge.ts'
 import type { ApiProxyLike } from '../src/host-bridge.ts'
 import { DeviceStore } from '../src/token.ts'
+import type { DeviceScope } from '../src/device-auth.ts'
+import { authenticateTestSocket, createTestIdentity, registerTestIdentity, type TestIdentity } from './auth-fixture.ts'
 
 // ---------- fakes ----------
-
-const TOKEN = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFG'
 
 class FakeWebSocket {
   static OPEN = 1
@@ -80,17 +80,22 @@ interface Harness {
   store: DeviceStore
   logs: string[]
   closed: Promise<void>
+  identity: TestIdentity
+  authenticate: (overrides?: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string }) => void
 }
 
 async function makeConnection(opts: {
-  transportAuthenticated?: boolean
   proxyOverrides?: Partial<ApiProxyLike>
-  onAuthenticationSettled?: (ok: boolean, reason: 'success' | 'invalid-token' | 'timeout' | 'closed') => void
+  scopes?: DeviceScope[]
+  onAuthenticationSettled?: (ok: boolean, reason: 'success' | 'invalid-proof' | 'timeout' | 'closed') => void
 } = {}): Promise<Harness> {
   const bridge = new HostBridge(makeProxy(opts.proxyOverrides), 100)
   // Each harness gets its own registry file so tests never share state.
   const dir = await mkdtemp(join(tmpdir(), 'pbb-conn-'))
   const store = await DeviceStore.load(join(dir, 'devices.json'))
+  const identity = createTestIdentity()
+  registerTestIdentity(store, identity)
+  if (opts.scopes) store.setScopes(identity.deviceId, opts.scopes)
   const ws = new FakeWebSocket()
   const logs: string[] = []
   let resolveClosed!: () => void
@@ -99,8 +104,7 @@ async function makeConnection(opts: {
     bridge,
     devices: store,
     serverVersion: 'test',
-    expectedToken: TOKEN,
-    ...(opts.transportAuthenticated ? { transportAuthenticated: true } : {}),
+    audience: 'deeppilot:test-audience',
     log: (m) => logs.push(m),
     ...(opts.onAuthenticationSettled ? { onAuthenticationSettled: opts.onAuthenticationSettled } : {}),
     onClosed: () => {
@@ -110,7 +114,10 @@ async function makeConnection(opts: {
       })().catch(() => {}).finally(resolveClosed)
     },
   })
-  return { ws, connection, bridge, store, logs, closed }
+  return {
+    ws, connection, bridge, store, logs, closed, identity,
+    authenticate: (overrides) => authenticateTestSocket(ws, identity, overrides),
+  }
 }
 
 const lastFrame = (ws: FakeWebSocket) => ws.sent[ws.sent.length - 1]
@@ -120,53 +127,48 @@ const lastFrame = (ws: FakeWebSocket) => ws.sent[ws.sent.length - 1]
 test('unauthenticated ping is answered; other frames demand authentication first', async () => {
   const { ws } = await makeConnection()
 
-  ws.receive({ v: 1, type: 'c2s.ping', id: 'p1' })
+  ws.receive({ v: 2, type: 'c2s.ping', id: 'p1' })
   assert.equal(lastFrame(ws).type, 's2c.pong')
   assert.equal(lastFrame(ws).id, 'p1')
 
-  ws.receive({ v: 1, type: 'c2s.sessions.list', id: 'l1' })
+  ws.receive({ v: 2, type: 'c2s.sessions.list', id: 'l1' })
   assert.equal(lastFrame(ws).type, 's2c.error')
   assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL')
 
   assert.deepEqual(ws.closes, [], 'no socket close before the auth deadline')
 })
 
-test('hello with a wrong token fails closed without revealing which part was wrong', async () => {
-  const { ws, store } = await makeConnection()
+test('invalid device proof fails closed without registering another identity', async () => {
+  const { ws, store, authenticate } = await makeConnection()
 
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { token: 'w'.repeat(43), deviceId: 'd1' } })
+  authenticate({ signature: Buffer.alloc(70).toString('base64url') })
 
   assert.equal(lastFrame(ws).type, 's2c.error')
   assert.equal(lastFrame(ws).payload.code, 'E_AUTH')
-  assert.deepEqual(ws.closes, [{ code: 4401, reason: 'invalid token' }])
-  assert.deepEqual(store.list(), [], 'failed pairing must not register a device')
+  assert.deepEqual(ws.closes, [{ code: 4401, reason: 'invalid device proof' }])
+  assert.equal(store.list().length, 1, 'failed proof must not register another device')
 })
 
-test('authentication settlement fires once for a failed hello and synchronous close', async () => {
+test('authentication settlement fires once for a failed proof and synchronous close', async () => {
   const settled: Array<{ ok: boolean; reason: string }> = []
-  const { ws } = await makeConnection({
+  const { authenticate } = await makeConnection({
     onAuthenticationSettled: (ok, reason) => settled.push({ ok, reason }),
   })
 
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { token: 'wrong', deviceId: 'd1' } })
+  authenticate({ signature: Buffer.alloc(70).toString('base64url') })
 
-  assert.deepEqual(settled, [{ ok: false, reason: 'invalid-token' }])
+  assert.deepEqual(settled, [{ ok: false, reason: 'invalid-proof' }])
 })
 
-// ---------- hello / device identity ----------
+// ---------- proof / device identity ----------
 
-test('hello registers a sanitized device and sends welcome with capabilities', async () => {
-  const { ws, store } = await makeConnection()
+test('valid device proof refreshes identity and sends welcome with capabilities', async () => {
+  const { ws, store, identity, authenticate } = await makeConnection()
 
-  ws.receive({
-    v: 1,
-    type: 'c2s.hello.auth',
-    id: 'h1',
-    payload: { token: TOKEN, deviceId: 'device-1', deviceName: 'iPhone', appVersion: '0.1.0' },
-  })
+  authenticate({ deviceName: 'iPhone', appVersion: '0.1.0' })
 
   assert.equal(lastFrame(ws).type, 's2c.welcome')
-  assert.equal(lastFrame(ws).payload.protocolVersion, 1)
+  assert.equal(lastFrame(ws).payload.protocolVersion, 2)
   assert.equal(typeof lastFrame(ws).payload.cursor, 'number')
   assert.ok(lastFrame(ws).payload.capabilities.replay === true)
   assert.ok(lastFrame(ws).payload.capabilities.pendingSnapshot === true)
@@ -174,28 +176,21 @@ test('hello registers a sanitized device and sends welcome with capabilities', a
 
   const rows = store.list()
   assert.equal(rows.length, 1)
-  assert.equal(rows[0].deviceId, 'device-1')
+  assert.equal(rows[0].deviceId, identity.deviceId)
 })
 
 test('oversized or control-bearing device fields are clamped and stripped', async () => {
-  const { ws, store, logs } = await makeConnection()
+  const { store, logs, authenticate } = await makeConnection()
 
-  ws.receive({
-    v: 1,
-    type: 'c2s.hello.auth',
-    id: 'h1',
-    payload: {
-      token: TOKEN,
-      deviceId: 'd'.repeat(500) + '\nevil-log-line',
-      deviceName: '[deeppilot] pwned\n' + 'n'.repeat(300),
-      appVersion: 'v'.repeat(200),
-    },
+  authenticate({
+    deviceName: '[deeppilot] pwned\n' + 'n'.repeat(300),
+    appVersion: 'v'.repeat(200),
   })
 
   const rows = store.list()
   assert.equal(rows.length, 1, 'one logical device despite oversized fields')
   const row = rows[0]
-  assert.ok(row.deviceId.length <= 128 && !row.deviceId.includes('\n'), 'id clamped, no newline')
+  assert.equal(row.deviceId.length, 43, 'device id is a key fingerprint')
   assert.ok(row.deviceName.length <= 64 && !row.deviceName.includes('\n'), 'name clamped, no newline')
   assert.ok(row.appVersion.length <= 32, 'version clamped')
   for (const line of logs) {
@@ -203,7 +198,7 @@ test('oversized or control-bearing device fields are clamped and stripped', asyn
   }
 })
 
-test('hello timeout drops an unauthenticated socket at the deadline', async (t) => {
+test('auth timeout drops an unauthenticated socket at the deadline', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const { ws } = await makeConnection()
 
@@ -215,12 +210,11 @@ test('hello timeout drops an unauthenticated socket at the deadline', async (t) 
   assert.equal(ws.closes.length, 1)
 })
 
-test('a successful hello cancels the auth deadline', async (t) => {
+test('a successful proof cancels the auth deadline', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  const { ws } = await makeConnection({ transportAuthenticated: true })
+  const { ws, authenticate } = await makeConnection()
 
-  // transportAuthenticated short-circuits the token check in hello.
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'device-2' } })
+  authenticate()
   assert.equal(lastFrame(ws).type, 's2c.welcome')
 
   t.mock.timers.tick(AUTH_TIMEOUT_MS * 10)
@@ -229,9 +223,34 @@ test('a successful hello cancels the auth deadline', async (t) => {
 
 // ---------- authenticated frames ----------
 
+test('revoked devices cannot authenticate even with a valid signature', async () => {
+  const { ws, store, identity, authenticate } = await makeConnection()
+  assert.equal(store.revoke(identity.deviceId, Date.now()), true)
+  authenticate()
+  assert.equal(lastFrame(ws).payload.code, 'E_AUTH')
+  assert.deepEqual(ws.closes, [{ code: 4401, reason: 'invalid device proof' }])
+})
+
+test('device scopes reject unauthorized operations without closing the socket', async () => {
+  const { ws, authenticate } = await makeConnection({ scopes: ['sessions.read'] })
+  authenticate()
+  ws.sent.length = 0
+
+  ws.receive({
+    v: 2,
+    type: 'c2s.session.sendPrompt',
+    id: 'send-1',
+    payload: { sessionId: 's1', text: 'hello' },
+  })
+
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).payload.code, 'E_FORBIDDEN')
+  assert.deepEqual(ws.closes, [])
+})
+
 test('pending.list returns the complete answerable approval and question snapshot', async () => {
-  const { ws, bridge } = await makeConnection({ transportAuthenticated: true })
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate()
   ;(bridge as any).onMuxFrame({
     type: 'approval/requested', rpcId: 'rpc-a', sessionId: 's1',
     approvalId: 'apr-1', toolName: 'bash', reason: 'install dependency',
@@ -242,7 +261,7 @@ test('pending.list returns the complete answerable approval and question snapsho
   })
   ws.sent.length = 0
 
-  ws.receive({ v: 1, type: 'c2s.pending.list', id: 'pending-1', payload: {} })
+  ws.receive({ v: 2, type: 'c2s.pending.list', id: 'pending-1', payload: {} })
 
   const frame = lastFrame(ws)
   assert.equal(frame.type, 's2c.pending.snapshot')
@@ -253,12 +272,12 @@ test('pending.list returns the complete answerable approval and question snapsho
 })
 
 test('answering an unknown question still reads "question not pending"', async () => {
-  const { ws } = await makeConnection({ transportAuthenticated: true })
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  const { ws, authenticate } = await makeConnection()
+  authenticate()
   ws.sent.length = 0
 
   ws.receive({
-    v: 1,
+    v: 2,
     type: 'c2s.question.respond',
     id: 'q-none',
     payload: { requestId: 'q-ghost', answers: [{ id: 'x', selected: [] }] },
@@ -275,13 +294,12 @@ test('host-rejected question answers surface E_PROTOCOL, and the entry stays ret
   // The host refuses the batch (e.g. a label it never offered); the phone must
   // NOT see the misleading "question not pending" for this case.
   let accept = false
-  const { ws, bridge } = await makeConnection({
-    transportAuthenticated: true,
+  const { ws, bridge, authenticate } = await makeConnection({
     proxyOverrides: {
       respond: async () => ({ accepted: accept, ...(accept ? {} : { reason: 'bad-response' }) }),
     },
   })
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  authenticate()
   ;(bridge as any).onMuxFrame({
     type: 'question/requested', rpcId: 'rpc-rej', sessionId: 's1',
     questions: [{ id: 'mode', question: 'A or B?', options: [{ label: 'A' }, { label: 'B' }] }],
@@ -290,7 +308,7 @@ test('host-rejected question answers surface E_PROTOCOL, and the entry stays ret
   ws.sent.length = 0
 
   ws.receive({
-    v: 1,
+    v: 2,
     type: 'c2s.question.respond',
     id: 'q-rej',
     payload: { requestId: 'q-rpc-rej', answers: [{ id: 'mode', selected: ['Z'] }] },
@@ -303,7 +321,7 @@ test('host-rejected question answers surface E_PROTOCOL, and the entry stays ret
   // The rejected answer restores the pending question, so a corrected retry succeeds.
   accept = true
   ws.receive({
-    v: 1,
+    v: 2,
     type: 'c2s.question.respond',
     id: 'q-ok',
     payload: { requestId: 'q-rpc-rej', answers: [{ id: 'mode', selected: ['A'] }] },
@@ -314,12 +332,12 @@ test('host-rejected question answers surface E_PROTOCOL, and the entry stays ret
 })
 
 test('prompt text beyond the cap is rejected before reaching the host', async () => {
-  const { ws } = await makeConnection({ transportAuthenticated: true })
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  const { ws, authenticate } = await makeConnection()
+  authenticate()
   ws.sent.length = 0
 
   ws.receive({
-    v: 1,
+    v: 2,
     type: 'c2s.session.sendPrompt',
     id: 'm1',
     payload: { sessionId: 's1', text: 'x'.repeat(256 * 1024 + 1) },
@@ -330,12 +348,12 @@ test('prompt text beyond the cap is rejected before reaching the host', async ()
 })
 
 test('an ordinary prompt passes validation and is acknowledged', async () => {
-  const { ws } = await makeConnection({ transportAuthenticated: true })
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  const { ws, authenticate } = await makeConnection()
+  authenticate()
   ws.sent.length = 0
 
   ws.receive({
-    v: 1,
+    v: 2,
     type: 'c2s.session.sendPrompt',
     id: 'm2',
     payload: { sessionId: 's1', text: '帮我看看这段代码' },
@@ -347,18 +365,18 @@ test('an ordinary prompt passes validation and is acknowledged', async () => {
 })
 
 test('attachment read-back validates the payload and relays host image data', async () => {
-  const { ws } = await makeConnection({ transportAuthenticated: true })
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  const { ws, authenticate } = await makeConnection()
+  authenticate()
   ws.sent.length = 0
 
-  ws.receive({ v: 1, type: 'c2s.session.attachment', id: 'a1', payload: {} })
+  ws.receive({ v: 2, type: 'c2s.session.attachment', id: 'a1', payload: {} })
   await new Promise((resolve) => setTimeout(resolve, 10))
   assert.equal(lastFrame(ws).type, 's2c.error')
   assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL')
   assert.equal(lastFrame(ws).id, 'a1')
 
   ws.receive({
-    v: 1,
+    v: 2,
     type: 'c2s.session.attachment',
     id: 'a2',
     payload: { sessionId: 's1', attachmentId: 'att-9' },
@@ -378,8 +396,7 @@ test('protocol version mismatch closes with 4500 after an error frame', async ()
 })
 
 test('prompt failures surface the host error kind, not a blanket E_BUSY', async () => {
-  const { ws } = await makeConnection({
-    transportAuthenticated: true,
+  const { ws, authenticate } = await makeConnection({
     proxyOverrides: {
       sessions: {
         list: async () => ({ result: { ok: true, value: { items: [] } } }),
@@ -389,11 +406,11 @@ test('prompt failures surface the host error kind, not a blanket E_BUSY', async 
       },
     },
   })
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  authenticate()
   ws.sent.length = 0
 
   ws.receive({
-    v: 1,
+    v: 2,
     type: 'c2s.session.sendPrompt',
     id: 'm1',
     payload: { sessionId: 'missing', text: '在吗' },
@@ -404,8 +421,7 @@ test('prompt failures surface the host error kind, not a blanket E_BUSY', async 
 })
 
 test('a failed session.open rolls back its viewer registration', async () => {
-  const { ws, bridge } = await makeConnection({
-    transportAuthenticated: true,
+  const { ws, bridge, authenticate } = await makeConnection({
     proxyOverrides: {
       sessions: {
         list: async () => ({ result: { ok: true, value: { items: [] } } }),
@@ -415,10 +431,10 @@ test('a failed session.open rolls back its viewer registration', async () => {
       },
     },
   })
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  authenticate()
   ws.sent.length = 0
 
-  ws.receive({ v: 1, type: 'c2s.session.open', id: 'o1', payload: { sessionId: 'missing-session' } })
+  ws.receive({ v: 2, type: 'c2s.session.open', id: 'o1', payload: { sessionId: 'missing-session' } })
   await new Promise((resolve) => setTimeout(resolve, 10))
   assert.equal(lastFrame(ws).payload.code, 'E_NOT_FOUND')
 
@@ -436,8 +452,7 @@ test('session.open sends tail before realtime events produced during history loo
   let releaseHistory!: () => void
   const started = new Promise<void>((resolve) => { historyStarted = resolve })
   const gate = new Promise<void>((resolve) => { releaseHistory = resolve })
-  const { ws, bridge } = await makeConnection({
-    transportAuthenticated: true,
+  const { ws, bridge, authenticate } = await makeConnection({
     proxyOverrides: {
       sessions: {
         list: async () => ({ result: { ok: true, value: { items: [] } } }),
@@ -451,10 +466,10 @@ test('session.open sends tail before realtime events produced during history loo
       },
     },
   })
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  authenticate()
   ws.sent.length = 0
 
-  ws.receive({ v: 1, type: 'c2s.session.open', id: 'o1', payload: { sessionId: 's1' } })
+  ws.receive({ v: 2, type: 'c2s.session.open', id: 'o1', payload: { sessionId: 's1' } })
   await started
   ;(bridge as any).onMuxFrame({
     type: 'session/event',
@@ -478,8 +493,7 @@ test('session.open sends tail before realtime events produced during history loo
 })
 
 test('session.history correlates the page with the request id', async () => {
-  const { ws } = await makeConnection({
-    transportAuthenticated: true,
+  const { ws, authenticate } = await makeConnection({
     proxyOverrides: {
       sessions: {
         list: async () => ({ result: { ok: true, value: { items: [] } } }),
@@ -497,11 +511,11 @@ test('session.history correlates the page with the request id', async () => {
       },
     },
   })
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  authenticate()
   ws.sent.length = 0
 
   ws.receive({
-    v: 1,
+    v: 2,
     type: 'c2s.session.history',
     id: 'history-1',
     payload: { sessionId: 's1', beforeSeq: 10, limit: 100 },
@@ -514,26 +528,26 @@ test('session.history correlates the page with the request id', async () => {
 })
 
 test('idle timeout uses the protocol 1001 close code', async () => {
-  const { ws, connection } = await makeConnection({ transportAuthenticated: true })
+  const { ws, connection } = await makeConnection()
   connection.closeIdle()
   assert.deepEqual(ws.closes, [{ code: 1001, reason: 'idle timeout' }])
   assert.equal(ws.terminated, false)
 })
 
 test('server shutdown announces E_INTERNAL before closing with 1001', async () => {
-  const { ws, connection } = await makeConnection({ transportAuthenticated: true })
+  const { ws, connection } = await makeConnection()
   connection.closeForServerStop()
-  assert.equal(ws.sent[0]?.type, 's2c.error')
-  assert.equal(ws.sent[0]?.payload.code, 'E_INTERNAL')
-  assert.equal(ws.sent[0]?.payload.message, 'server stopping')
+  assert.equal(lastFrame(ws)?.type, 's2c.error')
+  assert.equal(lastFrame(ws)?.payload.code, 'E_INTERNAL')
+  assert.equal(lastFrame(ws)?.payload.message, 'server stopping')
   assert.deepEqual(ws.closes, [{ code: 1001, reason: 'server stopping' }])
 })
 
 test('a persistently backpressured client is shed before buffering more data', async () => {
-  const { ws, closed } = await makeConnection({ transportAuthenticated: true })
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  const { ws, closed, authenticate } = await makeConnection()
+  authenticate()
   ws.bufferedAmount = MAX_OUTBOUND_BUFFER_BYTES + 1
-  ws.receive({ v: 1, type: 'c2s.ping', id: 'p1' })
+  ws.receive({ v: 2, type: 'c2s.ping', id: 'p1' })
   assert.deepEqual(ws.closes, [{ code: 1013, reason: 'client too slow' }])
   await closed
 })
@@ -571,11 +585,11 @@ test('authenticated sessions keep the full 64 MiB frame budget for image prompts
   // by sending a normal hello + a fat prompt text the post-auth path will
   // accept (it will bounce on the protocol's own prompt-text cap of 256 KiB
   // but never on the pre-auth length guard).
-  const { ws } = await makeConnection({ transportAuthenticated: true })
-  ws.receive({ v: 1, type: 'c2s.hello.auth', id: 'h1', payload: { deviceId: 'd' } })
+  const { ws, authenticate } = await makeConnection()
+  authenticate()
   ws.sent.length = 0
   ws.receive({
-    v: 1,
+    v: 2,
     type: 'c2s.session.sendPrompt',
     id: 'm1',
     payload: { sessionId: 's1', text: 'x'.repeat(256 * 1024 + 1) },

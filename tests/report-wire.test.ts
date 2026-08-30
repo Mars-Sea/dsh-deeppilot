@@ -8,12 +8,12 @@ import {
 // A minimal but well-formed report, used as the seed for every variant below.
 function validReport(extra: Record<string, unknown> = {}) {
   return {
-    protocolVersion: 1,
+    protocolVersion: 2,
     serverVersion: '0.3.0',
     pluginVersion: '0.3.0',
     enabled: true,
-    tokenPath: '/tmp/auth-token',
-    tokenReady: true,
+    identityPath: '/tmp/devices-v2.json',
+    pairingReady: true,
     activeConnections: 0,
     historyBufferMax: 2000,
     debug: false,
@@ -30,7 +30,7 @@ function validReport(extra: Record<string, unknown> = {}) {
 
 test('reportSchema accepts a healthy report', () => {
   const parsed = reportSchema.parse(validReport())
-  assert.equal(parsed.protocolVersion, 1)
+  assert.equal(parsed.protocolVersion, 2)
   assert.equal(parsed.activeConnections, 0)
 })
 

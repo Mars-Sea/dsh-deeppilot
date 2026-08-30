@@ -20,7 +20,8 @@ Host on your own Mac and does not replace or modify the DSH Web UI.
 
 - Browse projects, sessions, history, and live agent output from iPhone.
 - Send prompts, switch models, create sessions, and answer approvals/questions.
-- Pair through a QR code with the secret stored on the Mac and in iOS Keychain.
+- Pair with a five-minute single-use code and a per-device P-256 key; physical
+  iPhones keep the private key in Secure Enclave.
 - Connect over a trusted LAN or the optional embedded Tailscale Funnel.
 - Receive live notifications and optional APNs notifications while offline.
 - Self-update hint: the settings page footer shows the installed plugin
@@ -39,7 +40,8 @@ dsh web
 ```
 
 After DSH restarts, open **Settings → DeepPilot**, enable the connection, show
-the pairing QR code, and scan it in the DeepPilot app.
+the pairing QR code, and scan it in the DeepPilot app. The same panel also
+shows a copyable pairing code for Simulator or manual entry.
 
 Package: [npmjs.com/package/dsh-deeppilot](https://www.npmjs.com/package/dsh-deeppilot)
 
@@ -57,18 +59,19 @@ DeepPilot state under `$DSH_HOME/deeppilot/`.
 
 Conversation traffic travels directly between the iPhone and your DSH Host.
 Trusted-LAN `ws://` traffic is unencrypted, so use it only on a network you
-trust. Optional Funnel mode exposes only the authenticated DeepPilot connection
-and health endpoints, not the complete DSH Web UI.
+trust. Optional Funnel mode exposes only the DeepPilot connection, one-time
+pairing, and health endpoints, not the complete DSH Web UI.
 
-The DeepPilot settings page exposes **Connections per public source** for
-Funnel deployments. It defaults to `8`, accepts `1`–`16`, and briefly restarts
-the Funnel helper when changed, so connected remote clients reconnect once.
+The DeepPilot settings page exposes **Connections per public source** under
+the collapsed **Advanced settings** section. It defaults to `8`, accepts
+`1`–`16`, and briefly restarts the Funnel helper when changed, so connected
+remote clients reconnect once.
 
 Offline push is optional. Relay mode sends only the target APNs device token
 and a limited notification payload; full conversation history and live output
 do not pass through the relay. Read [PRIVACY.md](./PRIVACY.md) and
-[SECURITY.md](./SECURITY.md) before enabling remote access or push. The proposed
-per-device protocol-v2 upgrade is tracked separately in
+[SECURITY.md](./SECURITY.md) before enabling remote access or push. Protocol-v2
+implementation status and remaining release validation are tracked in
 [docs/SECURITY_ROADMAP.md](./docs/SECURITY_ROADMAP.md).
 
 ## Screenshots
@@ -86,8 +89,9 @@ reporting an issue.
 ## Protocol
 
 [PROTOCOL.md](./PROTOCOL.md) is the normative DeepPilot bridge protocol. Any
-wire change must update that document and `src/protocol.ts` together, preserve
-protocol-v1 compatibility, and be coordinated with the private iOS client.
+wire change must update that document and `src/protocol.ts` together and be
+coordinated with the private iOS client. Protocol v2 is the only supported wire
+version; upgrades from v1 require re-pairing.
 
 ## Development
 

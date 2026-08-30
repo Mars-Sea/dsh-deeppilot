@@ -2,22 +2,26 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { encodePairingQRPayload, selectPairingTarget } from '../src/pairing-qr.ts'
 
-test('pairing QR uses a versioned JSON payload and keeps token out of the URL', () => {
-  const token = 'x'.repeat(43)
-  const encoded = encodePairingQRPayload('https://phone.example.ts.net', token)
+const grant = () => ({ code: 'x'.repeat(43), expiresAt: Date.now() + 60_000, audience: 'deeppilot:test' })
+
+test('pairing QR uses a versioned JSON payload and keeps credentials out of the URL', () => {
+  const pairing = grant()
+  const encoded = encodePairingQRPayload('https://phone.example.ts.net', pairing)
   assert.deepEqual(JSON.parse(encoded), {
-    v: 1,
-    type: 'dsh-pocket-pairing',
+    v: 2,
+    type: 'deeppilot-pairing',
     host: 'https://phone.example.ts.net',
-    token,
+    code: pairing.code,
+    expiresAt: pairing.expiresAt,
+    audience: pairing.audience,
   })
-  assert.equal(encoded.includes('?token='), false)
+  assert.equal(encoded.includes('?code='), false)
 })
 
 test('pairing QR supports LAN HTTP but rejects malformed or credentialed hosts', () => {
-  assert.doesNotThrow(() => encodePairingQRPayload('http://192.168.1.149:3080', 'x'.repeat(43)))
-  assert.throws(() => encodePairingQRPayload('not a URL', 'x'.repeat(43)))
-  assert.throws(() => encodePairingQRPayload('https://user:pass@phone.example', 'x'.repeat(43)))
+  assert.doesNotThrow(() => encodePairingQRPayload('http://192.168.1.149:3080', grant()))
+  assert.throws(() => encodePairingQRPayload('not a URL', grant()))
+  assert.throws(() => encodePairingQRPayload('https://user:pass@phone.example', grant()))
 })
 
 test('pairing target prefers Funnel and falls back from loopback to a private Host address', () => {

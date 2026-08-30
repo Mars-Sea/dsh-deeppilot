@@ -11,10 +11,9 @@ import { BridgeConnection } from '../src/connection.ts'
 import { HostBridge } from '../src/host-bridge.ts'
 import type { ApiProxyLike, MuxFrameLike, PushOutlet } from '../src/host-bridge.ts'
 import { DeviceStore } from '../src/token.ts'
+import { authenticateTestSocket, createTestIdentity, registerTestIdentity } from './auth-fixture.ts'
 
 // ---------- shared fakes ----------
-
-const TOKEN = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFG'
 
 class FakeWebSocket {
   static OPEN = 1
@@ -97,6 +96,8 @@ async function makeHarness(opts: { withOutlet?: boolean; flipOnEnroll?: boolean 
   let outletReady = opts.withOutlet !== false && opts.flipOnEnroll !== true
   const dir = await mkdtemp(join(tmpdir(), 'pbb-push-'))
   const store = await DeviceStore.load(join(dir, 'devices.json'))
+  const identity = createTestIdentity()
+  registerTestIdentity(store, identity)
   const { proxy, getFeed } = makeFeedableProxy()
   const bridge = new HostBridge(proxy, 100)
   const fanOutCalls: PushNotification[] = []
@@ -112,7 +113,7 @@ async function makeHarness(opts: { withOutlet?: boolean; flipOnEnroll?: boolean 
     bridge,
     devices: store,
     serverVersion: 'test',
-    expectedToken: TOKEN,
+    audience: 'deeppilot:test-audience',
     log: (m) => logs.push(m),
     onPushEnrollKey: async (key) => {
       enrollKeys.push(key)
@@ -123,12 +124,7 @@ async function makeHarness(opts: { withOutlet?: boolean; flipOnEnroll?: boolean 
     },
     onClosed: () => { void rm(dir, { recursive: true, force: true }) },
   })
-  ws.receive({
-    v: 1,
-    type: 'c2s.hello.auth',
-    id: 'h1',
-    payload: { token: TOKEN, deviceId: 'device-1', deviceName: 'iPhone', appVersion: '0.1.0' },
-  })
+  authenticateTestSocket(ws, identity, { deviceName: 'iPhone', appVersion: '0.1.0' })
   // hello dispatches asynchronously, so snapshot the welcome frame (and any
   // early deltas) before wiping the buffer for per-test assertions.
   const welcomeFrame = [...ws.sent].reverse().find((frame) => frame.type === 's2c.welcome')
@@ -236,9 +232,11 @@ test('push tokens persist per device, are idempotent, and can be pruned', async 
     const path = join(dir, 'devices.json')
     const store = await DeviceStore.load(path)
     const now = Date.now()
-    store.touch({ deviceId: 'd1', deviceName: 'iPhone', appVersion: '0.1.0' }, now)
+    const identity = createTestIdentity()
+    registerTestIdentity(store, identity)
+    const deviceId = identity.deviceId
 
-    store.setPushToken('d1', DEVICE_TOKEN_HEX.toUpperCase(), 'development', { 'turn.completed': false }, now)
+    store.setPushToken(deviceId, DEVICE_TOKEN_HEX.toUpperCase(), 'development', { 'turn.completed': false }, now)
     await store.drain()
 
     const reloaded = await DeviceStore.load(path)
@@ -247,18 +245,18 @@ test('push tokens persist per device, are idempotent, and can be pruned', async 
     assert.equal(row.apns?.environment, 'development')
     assert.deepEqual(row.apns?.categories, { 'turn.completed': false })
 
-    reloaded.setPushToken('d1', DEVICE_TOKEN_HEX, 'development', { 'turn.completed': false }, now + 5)
+    reloaded.setPushToken(deviceId, DEVICE_TOKEN_HEX, 'development', { 'turn.completed': false }, now + 5)
     await reloaded.drain()
     const after = JSON.parse(await readFile(path, 'utf8'))
     assert.equal(after.devices[0].apns.updatedAt, now, 'unchanged registration does not rewrite updatedAt')
 
-    reloaded.clearPushToken('d1')
+    reloaded.clearPushToken(deviceId)
     await reloaded.drain()
     const pruned = (await DeviceStore.load(path)).list()[0]
     assert.equal(pruned.apns, undefined, 'pruned registration disappears after reload')
 
     const junkStore = await DeviceStore.load(path)
-    junkStore.setPushToken('d1', 'zzzz-not-hex', 'development', undefined, now + 10)
+    junkStore.setPushToken(deviceId, 'zzzz-not-hex', 'development', undefined, now + 10)
     assert.equal(junkStore.list()[0].apns, undefined, 'non-hex junk never enters the registry')
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -275,7 +273,7 @@ test('push.register stores the token and answers ack', async () => {
     assert.equal(h.capabilitiesAtHello.push, true)
 
     h.ws.receive({
-      v: 1,
+      v: 2,
       type: 'c2s.push.register',
       id: 'pu1',
       payload: { deviceToken: DEVICE_TOKEN_HEX, environment: 'production', categories: { 'session.error': false } },
@@ -302,7 +300,7 @@ test('push.register rejects malformed tokens and unsupported bridges', async () 
   try {
     assert.equal(withoutOutlet.welcomeFrame?.payload.capabilities.push, false, 'no outlet, no capability')
     withoutOutlet.ws.receive({
-      v: 1,
+      v: 2,
       type: 'c2s.push.register',
       id: 'pu1',
       payload: { deviceToken: DEVICE_TOKEN_HEX, environment: 'development' },
@@ -312,7 +310,7 @@ test('push.register rejects malformed tokens and unsupported bridges', async () 
     await withoutOutlet.store.drain()
 
     withoutOutlet.ws.receive({
-      v: 1,
+      v: 2,
       type: 'c2s.push.register',
       id: 'pu2',
       payload: { deviceToken: 'xyz', environment: 'development' },
@@ -401,7 +399,7 @@ test('an app-presented enrollKey reaches the bridge before the capability gate',
     // yet — this is what flips relay mode on.
     assert.deepEqual(withoutOutlet.enrollKeys, [])
     withoutOutlet.ws.receive({
-      v: 1,
+      v: 2,
       type: 'c2s.push.register',
       id: 'pu1',
       payload: { deviceToken: DEVICE_TOKEN_HEX, environment: 'development', enrollKey: 'distribute-me-2026' },
@@ -410,7 +408,7 @@ test('an app-presented enrollKey reaches the bridge before the capability gate',
 
     // Short junk keys are ignored rather than forwarded.
     withoutOutlet.ws.receive({
-      v: 1,
+      v: 2,
       type: 'c2s.push.register',
       id: 'pu2',
       payload: { deviceToken: DEVICE_TOKEN_HEX, environment: 'development', enrollKey: 'short' },
@@ -429,7 +427,7 @@ test('first register bootstraps relay mode: awaited enrollment yields ack(enable
   try {
     assert.equal(h.welcomeFrame?.payload.capabilities.push, false, 'starts unconfigured')
     h.ws.receive({
-      v: 1,
+      v: 2,
       type: 'c2s.push.register',
       id: 'pu1',
       payload: { deviceToken: DEVICE_TOKEN_HEX, environment: 'production', enrollKey: 'distribute-me-2026' },

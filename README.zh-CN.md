@@ -19,7 +19,8 @@
 
 - 在 iPhone 查看项目、会话、历史记录和 Agent 实时输出；
 - 发送提示词、切换模型、创建会话，并处理审批与提问；
-- 扫描二维码配对，密钥保存在 Mac 与 iOS Keychain；
+- 使用 5 分钟有效的单次配对码与设备级 P-256 密钥；iPhone 真机私钥保存在
+  Secure Enclave；
 - 使用可信局域网，或可选的内嵌 Tailscale Funnel 远程连接；
 - 接收在线通知，以及可选的离线 APNs 推送；
 - 更新提示：设置页底部显示当前插件版本，并在有新版本时附加一个指向
@@ -37,7 +38,7 @@ dsh web
 ```
 
 DSH 重启后，打开 **设置 → DeepPilot**，启用连接并显示配对二维码，然后在
-DeepPilot App 中扫码。
+DeepPilot App 中扫码。同一面板也会显示可复制的配对码，供模拟器或手动输入使用。
 
 npm 包：[npmjs.com/package/dsh-deeppilot](https://www.npmjs.com/package/dsh-deeppilot)
 
@@ -54,16 +55,16 @@ dsh plugin --profile web remove dsh-deeppilot
 
 完整会话流量由 iPhone 直接连接用户自己的 DSH Host。可信局域网中的 `ws://`
 是明文流量，只应在可信网络使用。可选 Funnel 模式只暴露经过认证的 DeepPilot
-连接与健康检查端点，不会暴露完整 DSH Web UI。
+连接、单次配对与健康检查端点，不会暴露完整 DSH Web UI。
 
-DeepPilot 设置页提供“每个公网来源的连接上限”，默认 `8`，可设置为 `1`–`16`。
-修改后 Funnel helper 会短暂重启，已连接的远程客户端会自动重连一次。
+DeepPilot 设置页在默认折叠的“高级设置”中提供“每个公网来源的连接上限”，默认
+`8`，可设置为 `1`–`16`。修改后 Funnel helper 会短暂重启，已连接的远程客户端
+会自动重连一次。
 
 离线推送是可选功能。中继模式只发送目标 APNs 设备 Token 和有限的通知内容；
 完整会话历史与实时输出不会经过中继。启用远程访问或推送前，请阅读
-[PRIVACY.md](./PRIVACY.md) 与 [SECURITY.md](./SECURITY.md)。设备级协议 v2
-升级方案单独记录在 [docs/SECURITY_ROADMAP.zh-CN.md](./docs/SECURITY_ROADMAP.zh-CN.md)，
-它目前是路线图，不代表已实现能力。
+[PRIVACY.md](./PRIVACY.md) 与 [SECURITY.md](./SECURITY.md)。协议 v2 的实现状态与
+剩余发布验证记录在 [docs/SECURITY_ROADMAP.zh-CN.md](./docs/SECURITY_ROADMAP.zh-CN.md)。
 
 ## App 截图
 
@@ -79,8 +80,8 @@ DeepPilot 设置页提供“每个公网来源的连接上限”，默认 `8`，
 ## 协议
 
 [PROTOCOL.md](./PROTOCOL.md) 是 DeepPilot 桥接协议的规范性文档。任何 wire
-变更都必须同步更新该文档与 `src/protocol.ts`，保持协议 v1 向后兼容，并与
-私有 iOS 客户端协调。
+变更都必须同步更新该文档与 `src/protocol.ts`，并与私有 iOS 客户端协调。
+协议 v2 是唯一支持的 wire version；从 v1 升级必须重新配对。
 
 ## 开发
 

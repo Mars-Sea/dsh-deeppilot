@@ -1,18 +1,14 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
-import type { DeepPilotReport, PushTestResult, RelayTestResult } from './report-wire.ts'
+import type { DeviceScope } from './device-auth.ts'
+import type { DeepPilotReport, PairingGrantSnapshot, PushTestResult, RelayTestResult } from './report-wire.ts'
 
 /** Async snapshot source wired by the plugin entry. */
 export type ReportSnapshot = () => Promise<DeepPilotReport>
 
-/** Reads the pairing secret only for an explicit reveal action. */
-export type PairingTokenSnapshot = () => Promise<string>
-
-/**
- * Replaces the pairing secret for an explicit rotation action: persists the
- * new token, invalidates the old one, and drops live phone connections.
- */
-export type PairingTokenRotator = () => Promise<string>
+export type PairingStarter = () => Promise<PairingGrantSnapshot>
+export type DeviceRevoker = (deviceId: string) => Promise<boolean>
+export type DeviceScopeUpdater = (deviceId: string, scopes: DeviceScope[]) => Promise<DeviceScope[]>
 
 /** Runs the relay connectivity self-test (health + enrollment round-trip). */
 export type RelayTester = () => Promise<RelayTestResult>
@@ -27,8 +23,9 @@ export type PushTester = () => Promise<PushTestResult>
  */
 export class DeepPilotReportService extends TypertRemoteService {
   private readonly snapshot: ReportSnapshot
-  private readonly pairingToken: PairingTokenSnapshot
-  private readonly rotatePairingToken: PairingTokenRotator
+  private readonly pairingStarter: PairingStarter
+  private readonly deviceRevoker: DeviceRevoker
+  private readonly deviceScopeUpdater: DeviceScopeUpdater
 
   private readonly relayTester: RelayTester
   private readonly pushTester: PushTester
@@ -36,15 +33,17 @@ export class DeepPilotReportService extends TypertRemoteService {
   constructor(
     ctx: Context,
     snapshot: ReportSnapshot,
-    pairingToken: PairingTokenSnapshot,
-    rotatePairingToken: PairingTokenRotator,
+    pairingStarter: PairingStarter,
+    deviceRevoker: DeviceRevoker,
+    deviceScopeUpdater: DeviceScopeUpdater,
     relayTester: RelayTester,
     pushTester: PushTester,
   ) {
     super(ctx, 'deeppilotReport', { namespace: 'deeppilot' })
     this.snapshot = snapshot
-    this.pairingToken = pairingToken
-    this.rotatePairingToken = rotatePairingToken
+    this.pairingStarter = pairingStarter
+    this.deviceRevoker = deviceRevoker
+    this.deviceScopeUpdater = deviceScopeUpdater
     this.relayTester = relayTester
     this.pushTester = pushTester
   }
@@ -53,12 +52,16 @@ export class DeepPilotReportService extends TypertRemoteService {
     return this.snapshot()
   }
 
-  async revealToken(): Promise<string> {
-    return this.pairingToken()
+  async beginPairing(): Promise<PairingGrantSnapshot> {
+    return this.pairingStarter()
   }
 
-  async rotateToken(): Promise<string> {
-    return this.rotatePairingToken()
+  async revokeDevice(deviceId: string): Promise<boolean> {
+    return this.deviceRevoker(deviceId)
+  }
+
+  async setDeviceScopes(deviceId: string, scopes: DeviceScope[]): Promise<DeviceScope[]> {
+    return this.deviceScopeUpdater(deviceId, scopes)
   }
 
   async testRelay(): Promise<RelayTestResult> {

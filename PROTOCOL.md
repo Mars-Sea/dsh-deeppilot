@@ -1,12 +1,13 @@
-# DeepPilot Bridge Protocol — v1
+# DeepPilot Bridge Protocol — v2
 
-状态：v1 冻结基线（M1）。所有帧均为 WebSocket **文本帧**，UTF-8 编码的 JSON。v1 通过 sendPrompt 的可选 base64 图片字段向后兼容图片输入；二进制帧仍保留。
+状态：v2 唯一支持基线。所有帧均为 WebSocket **文本帧**，UTF-8 编码的 JSON。
+v2 不接受 v1 Bearer Token、`c2s.hello.auth` 或任何降级握手；升级后设备必须重新配对。
 
 ## 1. 信封（Envelope）
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "type": "c2s.session.open",
   "id": "b3c1d9e0-…",
   "ts": 1756000000000,
@@ -14,35 +15,129 @@
 }
 ```
 
-- `v` 必须等于 1；不匹配时服务端回一帧 `s2c.error(E_UNSUPPORTED)` 后以 4500 关闭。
+- `v` 必须等于 2；不匹配时服务端回一帧 `s2c.error(E_UNSUPPORTED)` 后以 4500 关闭。
 - 命名：客户端请求 `c2s.*`，服务端响应与推送 `s2c.*`。
 - 未知 type：服务端回 `E_PROTOCOL` 错误帧，不断连。
 
 ## 2. 连接与鉴权
 
-1. 客户端连接 `wss://host/phone`。鉴权使用 HTTP `Authorization: Bearer TOKEN`；也可在未预鉴权的 WebSocket 建立后 5 秒内发送 `c2s.hello.auth` 并携带 `payload.token`。URL 查询参数不接受凭据，以免 token 泄露到代理、浏览器历史或访问日志。
-2. 鉴权失败：服务端以关闭码 **4401** 关闭。超时未鉴权：**4402**。`deviceId`
-   缺失或非法时以 **4403** 关闭；客户端应把它视为本机身份资料错误，而不是 token 失效。
-3. 鉴权成功后服务端必须首先下发 `s2c.welcome`。welcome 之前客户端只允许发 hello 与 ping。
+### 2.1 一次性配对
 
-### c2s.hello.auth
+设置页在用户主动操作后生成 24 字节随机配对码，base64url 编码、5 分钟过期、成功使用
+一次后立即失效。二维码格式：
 
 ```json
-{ "type": "c2s.hello.auth", "payload": {
-  "token": "…",
-  "deviceId": "A1B2…",
+{
+  "v": 2,
+  "type": "deeppilot-pairing",
+  "host": "https://example.funnel.ts.net",
+  "code": "<single-use base64url code>",
+  "expiresAt": 1756000300000,
+  "audience": "deeppilot:<stable host id>"
+}
+```
+
+App 为该主机生成 P-256 Signing 私钥；真机优先使用 Secure Enclave，私钥不得离开设备。
+App 向 `POST /phone/pair` 发送：
+
+```json
+{
+  "v": 2,
+  "code": "<single-use code>",
+  "publicKey": "<65-byte uncompressed X9.63 P-256 key, base64url>",
   "deviceName": "iPhone 15 Pro",
   "appVersion": "0.1.0",
-  "resumeCursor": 1042
+  "scopes": ["sessions.read", "prompt.send", "sessions.manage", "interactions.respond", "notifications.register"]
+}
+```
+
+成功返回 HTTP 201：
+
+```json
+{
+  "ok": true,
+  "v": 2,
+  "deviceId": "<base64url SHA-256 of raw public key>",
+  "audience": "deeppilot:<stable host id>",
+  "scopes": ["sessions.read", "prompt.send", "sessions.manage", "interactions.respond", "notifications.register"]
+}
+```
+
+App 扫码时必须确认响应 `audience` 与二维码一致。配对码无效、过期或已使用返回 401；
+频率限制返回 429；设备注册表满返回 409。`GET /phone/health` 只返回最小公开状态，
+不承担鉴权。
+
+### 2.2 WebSocket 挑战签名
+
+1. 客户端连接 `wss://host/phone`，HTTP Upgrade 不携带凭据。
+2. 服务端立即发送 `s2c.auth.challenge`：
+
+```json
+{ "v": 2, "type": "s2c.auth.challenge", "payload": {
+  "nonce": "<24-byte base64url random>",
+  "audience": "deeppilot:<stable host id>",
+  "issuedAt": 1756000000000,
+  "expiresAt": 1756000030000
 } }
 ```
+
+3. 客户端确认 `audience` 与配对记录一致，并在 30 秒内发送 `c2s.auth.prove`：
+
+```json
+{ "v": 2, "type": "c2s.auth.prove", "payload": {
+  "nonce": "<challenge nonce>",
+  "audience": "deeppilot:<stable host id>",
+  "issuedAt": 1756000000000,
+  "expiresAt": 1756000030000,
+  "deviceId": "<registered device id>",
+  "deviceName": "iPhone 15 Pro",
+  "appVersion": "0.1.0",
+  "resumeCursor": 1042,
+  "signature": "<ASN.1 DER ECDSA P-256/SHA-256 signature, base64url>"
+} }
+```
+
+签名输入必须是下列 UTF-8 字节。文本字段先做无 padding 的 base64url；时间戳和游标
+必须是十进制有限整数，缺失游标写 `-`：
+
+```text
+deeppilot-auth-v2
+device-id:<base64url(deviceId UTF-8)>
+nonce:<nonce>
+audience:<base64url(audience UTF-8)>
+issued-at:<issuedAt>
+expires-at:<expiresAt>
+device-name:<base64url(deviceName UTF-8)>
+app-version:<base64url(appVersion UTF-8)>
+resume-cursor:<resumeCursor or ->
+```
+
+4. 服务端仅接受注册、未撤销且签名有效的设备。失败以 **4401** 关闭；超时以
+   **4402** 关闭；版本不匹配以 **4500** 关闭。welcome 前客户端只允许发送 proof 与 ping。
+5. scope 在每次认证时载入内存；scope 变更或撤销会立即断开该设备，重连后重新判定。
+
+scope 与操作映射：
+
+| scope | 允许的操作 |
+|---|---|
+| `sessions.read` | 会话/工作区/目录读取、会话打开与历史、模型目录读取、pending 快照 |
+| `prompt.send` | `c2s.session.sendPrompt` |
+| `sessions.manage` | 创建/重命名/归档/取消会话，创建工作区，切换模型 |
+| `interactions.respond` | 回答 approval 与 question |
+| `notifications.register` | 注册 APNs token 与通知偏好 |
+
+缺少所需 scope 时服务端回 `E_FORBIDDEN`，连接保持打开。当前产品默认配对授予
+全部 scope，普通设置页不提供逐项权限控制，只提供全局连接开关和逐设备删除。
+`c2s.ping` 与 `c2s.resume` 是已认证连接的控制帧，不额外要求业务 scope。
 
 ### s2c.welcome
 
 ```json
 { "type": "s2c.welcome", "payload": {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "serverVersion": "0.1.0",
+  "deviceId": "<authenticated device id>",
+  "scopes": ["sessions.read", "prompt.send"],
   "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "pendingSnapshot": true, "notifyAllCategories": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true },
   "cursor": 1042,
   "resumed": true
@@ -79,11 +174,11 @@ SessionSummary：
 }
 ```
 
-`status` 取值：running | idle | error | unknown；当前 v1 Bridge 的会话镜像稳定产生
-running/idle，error/unknown 为旧实现与后续 Host 状态扩展保留；`todos` 无则为 null。
+`status` 取值：running | idle | error | unknown；当前 v2 Bridge 的会话镜像稳定产生
+running/idle，error/unknown 为 Host 状态扩展保留；`todos` 无则为 null。
 `todoItems` 为完整清单条目（`content` 非空字符串；`status` 取值 pending | in_progress |
-completed），供会话详情页渲染任务进度；无任务时为 null 或缺省。旧 Bridge 不下发该字段，
-客户端必须容忍缺失（可选字段，向后兼容）。
+completed），供会话详情页渲染任务进度；无任务时为 null 或缺省。该字段为可选字段，
+客户端必须容忍缺失。
 
 列表变更推送（握手后自动开始，无需订阅）：
 
@@ -140,7 +235,7 @@ Message 投影：
 - `role: system` 表示宿主注入的模型侧上下文（运行时快照、后台任务通知、工作区指令、技能内容等），
   不是真人发言。DSH Host 会把这类 `agent.inject()` 内容与真人 prompt 同样记为 user-role 消息，
   但其消息 `source.kind` 不是 `'user'`；Bridge 参照 Host 轨迹视图的分类规则，把这类行投影为
-  `system`，客户端必须与用户气泡区分展示。旧 Bridge 不做该分类，此类行仍是 `user`——客户端须容忍。
+  `system`，客户端必须与用户气泡区分展示。
 - `context`：仅 system 行可选携带的来源信息。`label` 为生产者名（插件名 / 技能名 / 指令路径等），
   `form` 为语义类别（instructions | catalog | snapshot | notice | relay | recall）。两者皆可缺省，
   出现未知取值时客户端按不透明文本处理，不得丢弃该行。
@@ -151,7 +246,7 @@ Message 投影：
 - 一次 `s2c.session.tail` / `s2c.history.page` 的 `messages` JSON 数组不超过 900KB；超出时保留最接近请求边界的较新后缀，并令 `hasMore: true`，客户端继续分页即可完整取回，禁止发送一个超大整帧后让客户端静默丢弃。
 - `attachments`：仅 user 行携带的图片清单。`kind` 恒为 image；`attachmentId` 是宿主附件服务的持久引用，
   供 c2s.session.attachment 读回原图；`width`/`height` 为像素尺寸（可选，供客户端预留布局）。
-  旧 Bridge 不下发 attachmentId/宽高，客户端必须容忍缺失。
+  attachmentId/宽高为可选字段，客户端必须容忍缺失。
 
 ### 会话模型目录与切换
 
@@ -197,7 +292,7 @@ Message 投影：
 ### s2c.session.event（实时推送）
 
 `kind` 取值：message.start / message.delta / thinking.delta / message.final / tool.start / tool.end / turn.start / turn.end / projection / error。
-当前 v1 Bridge 主动发射 message.delta / thinking.delta / message.final / tool.start /
+当前 v2 Bridge 主动发射 message.delta / thinking.delta / message.final / tool.start /
 tool.end / turn.start / turn.end；其余 kind 为兼容 Host 后续事件投影而保留，客户端必须忽略未知或暂未使用的 kind。
 
 ```json
@@ -234,7 +329,7 @@ tool.end / turn.start / turn.end；其余 kind 为兼容 Host 后续事件投影
 } }
 ```
 
-DeepPilot 的标准 bundle 固定组合 Host 官方 `directory-picker-browse` 双面包，使远程 iPhone 能调用 `directory.list`。连接旧 Bridge 或其他仍使用 `native` 的组合时，该请求返回 `E_UNSUPPORTED`；客户端可在用户明确点击后请求 Mac 系统选择器。取消时 `path=null`：
+DeepPilot 的标准 bundle 固定组合 Host 官方 `directory-picker-browse` 双面包，使远程 iPhone 能调用 `directory.list`。Host 不提供该能力时请求返回 `E_UNSUPPORTED`；客户端可在用户明确点击后请求 Mac 系统选择器。取消时 `path=null`：
 
 ```json
 { "type": "c2s.directory.pick", "id": "d-2", "payload": {} }
@@ -252,13 +347,13 @@ DeepPilot 的标准 bundle 固定组合 Host 官方 `directory-picker-browse` �
 
 ### c2s.session.create（payload: workspaceId? 或 cwd?）
 
-客户端正常流程必须先选择项目并发送 `workspaceId`。`cwd` 仅为旧客户端兼容；两者互斥。服务端通过核心 API 创建空白会话并返回 id，随后客户端可 session.open 订阅。
+客户端正常流程必须先选择项目并发送 `workspaceId`。`cwd` 用于显式路径创建；两者互斥。服务端通过核心 API 创建空白会话并返回 id，随后客户端可 session.open 订阅。
 
 ```json
 { "type": "s2c.ack", "payload": { "sessionId": "session-…" } }
 ```
 
-旧 Bridge 的 `projectSelection` 缺省或为 false 时，客户端保留入口并明确提示更新，不得静默创建到 Host 默认目录。
+`projectSelection=false` 时，客户端保留入口并明确提示能力不可用，不得静默创建到 Host 默认目录。
 
 ## 4c. 会话管理
 
@@ -276,7 +371,7 @@ DeepPilot 的标准 bundle 固定组合 Host 官方 `directory-picker-browse` �
 { "type": "s2c.session.archived", "id": "a-1", "payload": { "sessionId": "session-…" } }
 ```
 
-旧 Host 不具备这两个 RPC 时 `welcome.capabilities.sessionManagement=false`，请求返回 `E_UNSUPPORTED`，客户端不得伪造本地成功状态。
+Host 不具备这两个 RPC 时 `welcome.capabilities.sessionManagement=false`，请求返回 `E_UNSUPPORTED`，客户端不得伪造本地成功状态。
 
 ## 5. 写链路
 
@@ -351,7 +446,7 @@ RPC 响应 result 为 `{ "mediaType": "image/jpeg", "data": "<base64>" }`；宿�
 - `custom` 仅在用户确实输入了非空白自由文本时携带；禁止发送 `"custom": ""`。
   主机侧严格校验答案批次（逐题 id、选项 label 集合），出现空 `custom`、重复 label，
   或单选题同时携带 selected 与 custom，都会被整体拒绝（`E_PROTOCOL`，answer rejected）。
-- Bridge 在转发前会按上述规则归一化 answers（剔除空白 custom 等），旧版客户端仍可正常作答。
+- Bridge 在转发前会按上述规则归一化 answers（剔除空白 custom 等）。
 
 ### 待处理快照
 
@@ -366,7 +461,7 @@ APNs 只承载通知投影，不承载回答所需的 requestId 和完整问题�
 } }
 ```
 
-- `welcome.capabilities.pendingSnapshot=true` 表示服务端支持此请求；旧服务端缺失该字段时客户端继续依赖重放并降级展示。
+- `welcome.capabilities.pendingSnapshot=true` 表示服务端支持此请求；false 或缺失时客户端依赖重放并降级展示。
 - 快照是全量替换语义；空数组表示当前没有对应的待处理请求。
 
 ## 6. 通知
@@ -389,7 +484,7 @@ APNs 只承载通知投影，不承载回答所需的 requestId 和完整问题�
 - `s2c.session.event` 和 `s2c.pending.*` 仍是会话内容、待处理状态及回答操作的权威数据源；
   `s2c.notify` 只是面向用户的展示投影。Bridge 必须先记录权威事件，再记录对应 notify，
   以保证按 seq 重放时状态先于通知到达。
-- 旧 Bridge 缺失 `notifyAllCategories` 时，客户端可继续从 turn.end / pending.* 做兼容回退；
+- `notifyAllCategories` 为 false 或缺失时，客户端可从 turn.end / pending.* 做回退；
   一旦能力为 true，就必须关闭这些回退分支。
 - 触发规则（F-9）：对未打开该会话的在线设备，在 turn 结束、出现
   pending.approval / pending.question 或会话 error 时发送；离线设备走同事实的 APNs 投影。
@@ -398,7 +493,7 @@ APNs 只承载通知投影，不承载回答所需的 requestId 和完整问题�
 - `title` / `body` 是可直接展示的回退文本；客户端可按已知 category 使用本地化标题，
   但不得改写动态 body 或依赖 title 文案判断类别。
 
-### 离线推送（APNs，v1.x 追加）
+### 离线推送（APNs）
 
 `welcome.capabilities.push=true` 表示 Bridge 已配置 APNs。App 在获得系统远程通知
 token 后发送：
@@ -413,16 +508,16 @@ token 后发送：
 { "type": "s2c.ack", "id": "pu-1", "payload": { "enabled": true } }
 ```
 
-- ack 的 `enabled`（v1.x 追加）：注册处理完成后的实际就绪状态。自动注册
+- ack 的 `enabled`：注册处理完成后的实际就绪状态。自动注册
   场景下 Bridge 可能在本次注册中才切换为就绪，客户端据此立即更新本地能力
-  标记，无需等待下一次握手；旧 Bridge 回空 payload，客户端须容忍缺省。
+  标记，无需等待下一次握手；客户端须容忍 `enabled` 缺省。
 
 - `deviceToken`：hex 字符串，32–512 个字符；服务端只接受 `[0-9a-f]`。
 - `environment`：development | production。设备按自身构建自动上报
   （调试=sandbox，TestFlight/App Store=production），Bridge 按设备逐一路由。
 - `categories` 可选：设备端按类别的开关镜像；缺省视为全开。Bridge 对离线设备
   推送时必须尊重该开关。
-- `enrollKey` 可选（v1.x 追加）：分发者内置到 App 的共享注册密钥。Bridge 在
+- `enrollKey` 可选：分发者内置到 App 的共享注册密钥。Bridge 在
   未配置任何推送 provider 时收到它，会自动切换为 relay 模式并向中继执行
   自动注册（零配置接入）；已显式配置 provider 的 Bridge 忽略该字段。
 - 每次握手成功后 App 应重新发送（token 与开关都可能变化）；重复注册幂等。
@@ -437,7 +532,7 @@ token 后发送：
 ## 7. 断线重放
 
 - 每个 s2c 推送帧信封额外携带数值字段 seq（服务端本次启动以来单调递增），覆盖 sessions.delta / session.event / notify / pending.* 。请求响应帧不占 seq。
-- 重连时 hello.auth 带 resumeCursor：命中缓冲则按序补发原帧，补发完追加一帧 `s2c.resume.done`。
+- 重连时 `c2s.auth.prove` 带 `resumeCursor`：命中缓冲则按序补发原帧，补发完追加一帧 `s2c.resume.done`。
 - 游标过旧（超出环形缓冲）则发 `s2c.resync`（payload.reason 为 gap），客户端应重新拉 sessions.list 并重开关注的会话。
 
 ## 8. 心跳与生命周期
@@ -457,7 +552,8 @@ token 后发送：
 
 | 码 | 含义 |
 |---|---|
-| E_AUTH | token 缺失或错误 |
+| E_AUTH | 设备未注册、已撤销或签名证明无效 |
+| E_FORBIDDEN | 设备 scope 不允许该操作 |
 | E_PROTOCOL | 未知类型或非法 payload |
 | E_NOT_FOUND | 会话或请求不存在 |
 | E_BUSY | 会话正在处理上一条输入 |
@@ -467,7 +563,8 @@ token 后发送：
 ## 10. 能力协商与版本策略
 
 - welcome.capabilities 中为 false 的能力，客户端不得调用对应 c2s 帧（服务端将回 E_UNSUPPORTED）。
-- `notifyAllCategories` 是服务端投影保证而非新请求权限：缺失/false 表示客户端保留旧事件
+- `notifyAllCategories` 是服务端投影保证而非新请求权限：缺失/false 表示客户端保留事件
   通知回退，true 表示四类通知均由 `s2c.notify` 唯一负责展示。
-- v1.x 新增字段一律向后兼容：双方必须忽略未知字段。
-- 破坏性变更升级 v 为 2，v1 保持可用一个过渡期。
+- v2 同版本新增可选字段时双方必须忽略未知字段。
+- v1 不受支持；服务端不得接受 Bearer、`c2s.hello.auth` 或通过错误重试降级。
+- 后续破坏性变更必须升级 `v`，不能静默重新解释 v2 字段。

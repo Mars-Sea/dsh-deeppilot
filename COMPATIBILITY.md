@@ -1,26 +1,23 @@
 # Compatibility
 
-This file separates tested evidence from intended fallback behavior. Passing
-unit tests does not prove every DSH build, network, Mac, or iPhone combination.
+This file separates tested evidence from intended behavior. Passing unit tests does not prove every DSH build, network, Mac, or iPhone combination.
 
 ## Public-beta baseline
 
 | Component | Baseline | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | package engine and CI |
-| DSH packages | `0.1.1-rc.2` peer family | build/type contracts and isolated host smoke tests |
+| DSH packages | current supported developer-preview family | build/type contracts and isolated Host smoke tests |
 | Host OS | macOS on Apple silicon | embedded helper artifact and local integration testing |
-| Remote access | Tailscale Funnel, ports 443/8443/10000 | helper and supervisor tests; real-tailnet acceptance remains release-specific |
-| iOS | native DeepPilot client, protocol v1 | simulator build and bridge pairing evidence |
+| Remote access | Tailscale Funnel, ports 443/8443/10000 | helper and supervisor tests |
+| iOS | native DeepPilot client, protocol v2 | simulator build and v2 pairing/challenge evidence |
 
-## Expected degradation
+## Protocol boundary
 
-- Without a compatible embedded helper, the core bridge and trusted-LAN mode
-  can still run; remote Funnel reports `unavailable`.
-- If a DSH host API is missing, only the dependent capability should be
-  disabled. The plugin must not crash the host.
-- URL query credentials are rejected. Supported clients use Bearer or
-  first-frame authentication.
+- Protocol v2 is the only supported wire version. Existing protocol-v1 devices must pair again after upgrading.
+- Bearer authentication, URL credentials, and first-frame shared tokens are rejected. A supported client registers a P-256 public key through `/phone/pair` and signs each WebSocket challenge.
+- Without a compatible embedded helper, the core bridge and trusted-LAN mode can still run; remote Funnel reports `unavailable`.
+- If a DSH Host API is missing, only the dependent capability should be disabled. The plugin must not crash the Host.
 
 ## Not yet claimed
 
@@ -31,6 +28,4 @@ unit tests does not prove every DSH build, network, Mac, or iPhone combination.
 - physical-device performance and every carrier/network combination;
 - production APNs delivery without a real provider credential and device.
 
-When reporting an issue, include `node --version`, the exact DSH package
-version, plugin commit/tag, macOS version and architecture, connection mode,
-and sanitized status output. Never include bearer tokens or message content.
+When reporting an issue, include `node --version`, the exact DSH package version, plugin commit/tag, macOS version and architecture, connection mode, and sanitized status output. Never include pairing codes, key material, APNs tokens, or message content.

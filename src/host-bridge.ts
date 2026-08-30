@@ -936,7 +936,7 @@ export class HostBridge {
             sessionId: pending.sessionId,
             approvalId: requestId,
             outcome,
-            // PROTOCOL v1: a deny may carry the user's explanation so the
+            // PROTOCOL v2: a deny may carry the user's explanation so the
             // model can adjust course instead of blindly retrying.
             ...(denialReason.length > 0 ? { reason: denialReason } : {}),
           },

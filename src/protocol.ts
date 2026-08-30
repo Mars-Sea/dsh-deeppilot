@@ -1,11 +1,13 @@
 /**
- * DeepPilot Bridge Protocol v1 — shared frame vocabulary (TypeScript face).
+ * DeepPilot Bridge Protocol v2 — shared frame vocabulary (TypeScript face).
  * The normative spec is PROTOCOL.md at the repo root; this module
  * mirrors it for the plugin implementation. The iOS app hand-mirrors the
  * same shapes in Swift.
  */
 
-export const PROTOCOL_VERSION = 1
+import type { DeviceScope } from './device-auth.ts'
+
+export const PROTOCOL_VERSION = 2
 
 export interface Envelope {
   v: number
@@ -21,12 +23,18 @@ export interface Envelope {
 
 // ---------- c2s payloads ----------
 
-export interface HelloAuthPayload {
-  /** Optional after Bearer authentication; required for an unauthenticated upgrade. */
-  token?: string
+export interface AuthChallengePayload {
+  nonce: string
+  audience: string
+  issuedAt: number
+  expiresAt: number
+}
+
+export interface AuthProofPayload extends AuthChallengePayload {
   deviceId: string
   deviceName: string
   appVersion: string
+  signature: string
   resumeCursor?: number
 }
 
@@ -99,6 +107,8 @@ export interface WelcomeCapabilities {
 export interface WelcomePayload {
   protocolVersion: number
   serverVersion: string
+  deviceId: string
+  scopes: DeviceScope[]
   capabilities: WelcomeCapabilities
   cursor: number
   resumed: boolean
@@ -347,7 +357,8 @@ export interface ResyncPayload { reason: "gap" }
 export interface ErrorPayload { code: string; message: string }
 
 export const ERROR_CODES = {
-  E_AUTH: 'token missing or invalid',
+  E_AUTH: 'device proof missing or invalid',
+  E_FORBIDDEN: 'device scope does not allow this operation',
   E_PROTOCOL: 'unknown type or malformed payload',
   E_NOT_FOUND: 'session or request not found',
   E_BUSY: 'session is busy',

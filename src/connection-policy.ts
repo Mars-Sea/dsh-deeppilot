@@ -1,11 +1,11 @@
-import { tokenMatches } from './token.ts'
+import type { DeviceScope } from './device-auth.ts'
 
-export const AUTH_TIMEOUT_MS = 5_000
+export const AUTH_TIMEOUT_MS = 35_000
 export const MAX_OUTBOUND_BUFFER_BYTES = 4 * 1024 * 1024
 /**
  * Pre-auth frame cap. The 64 MiB cap on a fully authenticated socket exists
  * to support multi-MB image attachments; before hello the only legal frames
- * are c2s.ping and c2s.hello.auth, neither of which can legitimately exceed
+ * are c2s.ping and c2s.auth.prove, neither of which can legitimately exceed
  * a few KB. Capping unauthenticated frames at 64 KiB keeps an anonymous TCP
  * peer from forcing expensive JSON.parse work on a 64 MiB payload inside
  * the 5-second auth window.
@@ -16,7 +16,7 @@ export const MAX_PROMPT_IMAGES = 4
 export const MAX_BASE64_CHARS_PER_IMAGE = 8 * 1024 * 1024
 /** Bounds a single prompt's text; the frame itself is capped by ws maxPayload. */
 export const MAX_PROMPT_TEXT_CHARS = 256 * 1024
-// Client-supplied identity fields land in logs and devices.json — keep them
+// Client-supplied identity fields land in logs and devices-v2.json — keep them
 // short and free of control characters so they can neither flood the registry
 // nor forge log lines.
 export const MAX_DEVICE_ID_CHARS = 128
@@ -28,12 +28,21 @@ export function sanitizeDeviceField(value: unknown, maxChars: number): string {
   return raw.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, maxChars)
 }
 
-export function helloTokenAccepted(
-  transportAuthenticated: boolean | undefined,
-  presentedToken: string | undefined,
-  expectedToken: string,
-): boolean {
-  return transportAuthenticated === true || tokenMatches(presentedToken, expectedToken)
+export function requiredScope(type: string): DeviceScope | undefined {
+  if (type === 'c2s.ping' || type === 'c2s.resume') return undefined
+  if (type === 'c2s.session.sendPrompt') return 'prompt.send'
+  if (type === 'c2s.approval.respond' || type === 'c2s.question.respond') return 'interactions.respond'
+  if (type === 'c2s.push.register') return 'notifications.register'
+  if (
+    type === 'c2s.workspace.create' ||
+    type === 'c2s.session.create' ||
+    type === 'c2s.session.rename' ||
+    type === 'c2s.session.archive' ||
+    type === 'c2s.session.cancel' ||
+    type === 'c2s.session.selectModel'
+  ) return 'sessions.manage'
+  if (type.startsWith('c2s.')) return 'sessions.read'
+  return undefined
 }
 
 export function sanitizeImageName(value: string): string {
@@ -41,7 +50,8 @@ export function sanitizeImageName(value: string): string {
 }
 
 export const ERROR_CODES = {
-  E_AUTH: 'token missing or invalid',
+  E_AUTH: 'device proof missing or invalid',
+  E_FORBIDDEN: 'device scope does not allow this operation',
   E_PROTOCOL: 'unknown type or malformed payload',
   E_NOT_FOUND: 'session or request not found',
   E_BUSY: 'session is busy',

@@ -74,7 +74,7 @@ test('translateWith calls the locale-aware slot translator directly', () => {
   assert.equal(translateWith(zh, 'help.step1').startsWith('先打开'), true)
   assert.equal(
     translateWith(zh, 'pair.qrHint', { kind: '内网' }),
-    '二维码包含内网地址和配对 Token，将在 60 秒后自动隐藏。',
+    '二维码包含内网地址和一次性配对码；配对码 5 分钟后失效，二维码将在 60 秒后自动隐藏。',
   )
 })
 
@@ -94,7 +94,7 @@ test('t() substitutes placeholders when a vars object is passed', () => {
   // through t() as well.
   assert.equal(
     t(undefined, 'pair.qrHint', { kind: 'LAN' }),
-    'The QR contains a LAN address and the pairing token; it auto-hides after 60 seconds.',
+    'The QR contains a LAN address and a single-use pairing code. The code expires after 5 minutes; the QR auto-hides after 60 seconds.',
   )
 })
 
