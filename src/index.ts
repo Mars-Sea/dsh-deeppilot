@@ -10,7 +10,7 @@ import { BridgeConnection } from './connection.ts'
 import { HostBridge } from './host-bridge.ts'
 import type { PushOutlet } from './host-bridge.ts'
 import { Dsh012ApiProxy } from './dsh012-api-proxy.ts'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsSectionHooks } from '@deepseek-ai/dsh-settings'
 import { applyReportRemote } from './report-remote.ts'
 import { runRelayProbe } from './relay-test.ts'
 import type { PushTestResult } from './report-wire.ts'
@@ -145,12 +145,7 @@ export function apply(ctx: Context, options: unknown): void {
   // `enabled` decides whether the bridge starts at all (next restart). This is
   // registered unconditionally so the master switch stays reachable even while
   // the bridge is off — otherwise a disabled bridge could never be re-enabled.
-  installSettingsSection<PluginConfig>(
-    ctx,
-    settingsNamespace('deeppilot'),
-    Config as unknown as Parameters<typeof installSettingsSection<PluginConfig>>[2],
-    normalizeOptions(undefined),
-    {
+  const settingsHooks: SettingsSectionHooks<PluginConfig> = {
     setSource: (source) => {
       liveSource = source
       // Settings can attach after webServer. Defer one microtask so the
@@ -159,8 +154,16 @@ export function apply(ctx: Context, options: unknown): void {
       queueMicrotask(() => scheduleRemoteReconcile?.())
     },
     onChange: () => queueMicrotask(() => scheduleRemoteReconcile?.()),
-    },
-  )
+  }
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.installSection(
+      ctx,
+      'deeppilot',
+      Config,
+      normalizeOptions(undefined),
+      settingsHooks,
+    )
+  })
 
   // Master switch, resolved against the latest available settings document.
   // Individual injected services also read currentConfig() when they activate.
