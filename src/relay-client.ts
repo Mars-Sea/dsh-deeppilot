@@ -11,6 +11,7 @@
 
 import type { ApnsEnvironment } from './token.ts'
 import type { PushNotification } from './protocol.ts'
+import { normalizeRelayBaseUrl } from './relay-url.ts'
 
 export interface RelayClientOptions {
   /** Base URL of the relay, e.g. https://relay.example.com */
@@ -36,7 +37,7 @@ export class RelayClient {
   private readonly log: (message: string) => void
 
   constructor(opts: RelayClientOptions) {
-    this.base = opts.url.trim().replace(/\/+$/, '')
+    this.base = normalizeRelayBaseUrl(opts.url)
     this.token = (opts.token ?? '').trim()
     this.timeoutMs = opts.timeoutMs ?? 10_000
     this.debug = opts.debug === true
