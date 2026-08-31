@@ -53,7 +53,7 @@ jobs:
           HELPER_TARGETS: ${{ matrix.targets }}
         run: sh scripts/build-all-helpers.sh
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: helper-binaries-${{ matrix.os }}
           path: |
