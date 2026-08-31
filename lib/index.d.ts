@@ -609,7 +609,7 @@ declare const Config: z<Schemastery.ObjectS<{
     maxConnectionsPerSource: z<number, number>;
   }>>;
   push: z<Schemastery.ObjectS<{
-    provider: z<"none" | "apns" | "relay", "none" | "apns" | "relay">;
+    provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay">;
     teamId: z<string, string>;
     keyId: z<string, string>;
     keyPath: z<string, string>;
@@ -617,7 +617,7 @@ declare const Config: z<Schemastery.ObjectS<{
     relayUrl: z<string, string>;
     relayToken: z<string, string>;
   }>, Schemastery.ObjectT<{
-    provider: z<"none" | "apns" | "relay", "none" | "apns" | "relay">;
+    provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay">;
     teamId: z<string, string>;
     keyId: z<string, string>;
     keyPath: z<string, string>;
@@ -648,7 +648,7 @@ declare const Config: z<Schemastery.ObjectS<{
     maxConnectionsPerSource: z<number, number>;
   }>>;
   push: z<Schemastery.ObjectS<{
-    provider: z<"none" | "apns" | "relay", "none" | "apns" | "relay">;
+    provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay">;
     teamId: z<string, string>;
     keyId: z<string, string>;
     keyPath: z<string, string>;
@@ -656,7 +656,7 @@ declare const Config: z<Schemastery.ObjectS<{
     relayUrl: z<string, string>;
     relayToken: z<string, string>;
   }>, Schemastery.ObjectT<{
-    provider: z<"none" | "apns" | "relay", "none" | "apns" | "relay">;
+    provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay">;
     teamId: z<string, string>;
     keyId: z<string, string>;
     keyPath: z<string, string>;
