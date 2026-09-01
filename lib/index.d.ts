@@ -40,12 +40,13 @@ interface MessageContextInfo {
 /** One image carried by a user message. `attachmentId` keys the read-back RPC
  * (c2s.session.attachment); width/height let clients reserve layout space. */
 interface MessageAttachment {
-  kind: 'image';
+  kind: 'image' | 'document';
   name?: string;
   mediaType?: string;
   attachmentId?: string;
   width?: number;
   height?: number;
+  truncated?: boolean;
 }
 interface MessageProjection {
   /** Durable row identity; unique within one session/page. */
@@ -402,6 +403,14 @@ interface PushOutlet {
   isAvailable(): boolean;
 }
 //#endregion
+//#region src/document-payload.d.ts
+interface PromptDocument {
+  name: string;
+  mediaType: string;
+  text: string;
+  truncated?: boolean;
+}
+//#endregion
 //#region src/host-bridge.d.ts
 declare class HostBridge {
   private readonly apiProxy;
@@ -537,7 +546,7 @@ declare class HostBridge {
     mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
     data: string;
     name?: string;
-  }>): Promise<SessionManagementResult<number>>;
+  }>, documents?: PromptDocument[]): Promise<SessionManagementResult<number>>;
   respondApproval(requestId: string, decision: 'allow' | 'deny', reason?: string): Promise<PendingResponseOutcome>;
   respondQuestion(requestId: string, answers: unknown): Promise<PendingResponseOutcome>;
 }

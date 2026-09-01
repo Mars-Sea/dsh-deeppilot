@@ -1,5 +1,6 @@
 import type { MessageProjection, SessionEventKind } from './protocol.ts'
 import type { SessionEventLike } from './host-api.ts'
+import { projectedDocument } from './document-payload.ts'
 
 export const MAX_MESSAGE_PROJECTION_BYTES = 256 * 1024
 /// Aggregate message-array budget for one tail/history frame. The complete
@@ -217,7 +218,9 @@ function contentText(content: unknown): string {
       if (typeof part === 'string') return part;
       if (part && typeof part === 'object') {
         const piece = part as { type?: string; text?: string };
-        if (piece.type === 'text' && typeof piece.text === 'string') return piece.text;
+        if (piece.type === 'text' && typeof piece.text === 'string') {
+          return projectedDocument(piece.text) ? '' : piece.text
+        }
       }
       return '';
     }).join('');
@@ -226,24 +229,35 @@ function contentText(content: unknown): string {
 }
 
 function messageAttachments(data: unknown): Array<{
-  kind: 'image'
+  kind: 'image' | 'document'
   name?: string
   mediaType?: string
   attachmentId?: string
   width?: number
   height?: number
+  truncated?: boolean
 }> {
   if (!data || typeof data !== 'object') return [];
   const obj = data as { content?: unknown; message?: unknown };
   if (obj.message && typeof obj.message === 'object') return messageAttachments(obj.message);
   if (!Array.isArray(obj.content)) return [];
-  return obj.content.flatMap(part => {
-    if (!part || typeof part !== 'object') return [];
+  const attachments: Array<{
+    kind: 'image' | 'document'
+    name?: string
+    mediaType?: string
+    attachmentId?: string
+    width?: number
+    height?: number
+    truncated?: boolean
+  }> = []
+  for (const part of obj.content) {
+    if (!part || typeof part !== 'object') continue
     // The host normalizes uploaded bytes into an ImageAttachmentRef
     // (attachmentId/mediaType/bytes/width/height...); the id is what clients
     // need to read the image back through c2s.session.attachment.
     const block = part as {
       type?: string
+      text?: unknown
       attachment?: {
         name?: unknown
         mediaType?: unknown
@@ -252,7 +266,19 @@ function messageAttachments(data: unknown): Array<{
         height?: unknown
       }
     };
-    if (block.type !== 'image' || !block.attachment) return [];
+    if (block.type === 'text' && typeof block.text === 'string') {
+      const document = projectedDocument(block.text)
+      if (document) {
+        attachments.push({
+          kind: 'document',
+          name: document.name,
+          mediaType: document.mediaType,
+          ...(document.truncated ? { truncated: true } : {}),
+        })
+      }
+      continue
+    }
+    if (block.type !== 'image' || !block.attachment) continue
     const attachmentId = typeof block.attachment.attachmentId === 'string' && block.attachment.attachmentId.length > 0
       ? block.attachment.attachmentId
       : undefined;
@@ -262,15 +288,16 @@ function messageAttachments(data: unknown): Array<{
     const height = typeof block.attachment.height === 'number' && Number.isFinite(block.attachment.height)
       ? block.attachment.height
       : undefined;
-    return [{
-      kind: 'image' as const,
+    attachments.push({
+      kind: 'image',
       ...(typeof block.attachment.name === 'string' ? { name: block.attachment.name } : {}),
       ...(typeof block.attachment.mediaType === 'string' ? { mediaType: block.attachment.mediaType } : {}),
       ...(attachmentId ? { attachmentId } : {}),
       ...(width !== undefined ? { width } : {}),
       ...(height !== undefined ? { height } : {}),
-    }];
-  });
+    })
+  }
+  return attachments
 }
 
 function attachmentProjection(data: unknown): { attachments?: ReturnType<typeof messageAttachments> } {

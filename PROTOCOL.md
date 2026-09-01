@@ -223,7 +223,8 @@ Message 投影：
   "tool": { "name": "bash", "state": "ok", "summary": "pnpm test 通过" },
   "attachments": [
     { "kind": "image", "name": "photo.jpg", "mediaType": "image/jpeg",
-      "attachmentId": "att-…", "width": 2048, "height": 1536 }
+      "attachmentId": "att-…", "width": 2048, "height": 1536 },
+    { "kind": "document", "name": "notes.md", "mediaType": "text/markdown" }
   ],
   "context": { "label": "runtime-context", "form": "snapshot" },
   "ts": 1756000000000,
@@ -244,8 +245,10 @@ Message 投影：
 - `truncated: true` 表示该条 Message 的 UTF-8 JSON 序列化投影原本超过 256KB，
   Bridge 已缩短正文/推理/摘要或附件元数据，使最终单条投影不超过 256KB。
 - 一次 `s2c.session.tail` / `s2c.history.page` 的 `messages` JSON 数组不超过 900KB；超出时保留最接近请求边界的较新后缀，并令 `hasMore: true`，客户端继续分页即可完整取回，禁止发送一个超大整帧后让客户端静默丢弃。
-- `attachments`：仅 user 行携带的图片清单。`kind` 恒为 image；`attachmentId` 是宿主附件服务的持久引用，
+- `attachments`：仅 user 行携带的附件清单。图片的 `kind=image`，`attachmentId` 是宿主附件服务的持久引用，
   供 c2s.session.attachment 读回原图；`width`/`height` 为像素尺寸（可选，供客户端预留布局）。
+  文本文档的 `kind=document`，由 Bridge 以带边界的模型文本提交；当前 Host 没有通用二进制附件服务，
+  因此文档不提供 attachmentId/read-back。`truncated=true` 表示客户端只提交了可读文本前缀。
   attachmentId/宽高为可选字段，客户端必须容忍缺失。
 
 ### 会话模型目录与切换
@@ -375,17 +378,20 @@ Host 不具备这两个 RPC 时 `welcome.capabilities.sessionManagement=false`�
 
 ## 5. 写链路
 
-### c2s.session.sendPrompt（payload: sessionId, text, images?）
+### c2s.session.sendPrompt（payload: sessionId, text, images?, documents?）
 
-服务端受理后回 `s2c.ack`（payload 附 `userSeq`），随后该输入以正常消息事件流入会话流。`userSeq` 是 Bridge 生成的受理回执标记，不属于会话事件 seq，客户端不得拿它与 `session.event.seq` 对账。会话正忙回 `E_BUSY`。`text` 与 `images` 至少一项非空。
+服务端受理后回 `s2c.ack`（payload 附 `userSeq`），随后该输入以正常消息事件流入会话流。`userSeq` 是 Bridge 生成的受理回执标记，不属于会话事件 seq，客户端不得拿它与 `session.event.seq` 对账。会话正忙回 `E_BUSY`。`text`、`images` 与 `documents` 至少一项非空。
 
 `images` 最多 4 项，每项为 `{mediaType,data,name?}`。`mediaType` 仅允许 `image/png`、`image/jpeg`、`image/webp`、`image/gif`，`data` 为无 data-URL 前缀的标准 base64。Bridge 做数量、类型和单项体积初筛，DSH Host 再按当前模型与附件服务限制完成最终校验和持久化。
+
+`documents` 最多 4 项，且与 images 合计不超过 4 项。每项为 `{mediaType,name,text,truncated?}`：App 在本机提取 UTF-8 文本（包括 PDF 的文本层），单项不超过 256K 字符；Bridge 以明确文件名和边界的 text block 交给 Host。二进制 Office/压缩包等无法安全提取文本的格式必须由客户端拒绝，不得假装上传成功。
 
 ```json
 { "type": "c2s.session.sendPrompt", "payload": {
   "sessionId": "session-…",
   "text": "分析这张图",
-  "images": [{"mediaType":"image/jpeg","data":"/9j/…","name":"photo.jpg"}]
+  "images": [{"mediaType":"image/jpeg","data":"/9j/…","name":"photo.jpg"}],
+  "documents": [{"mediaType":"text/markdown","name":"notes.md","text":"# Notes"}]
 } }
 ```
 

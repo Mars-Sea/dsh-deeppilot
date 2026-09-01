@@ -14,6 +14,10 @@ export const PRE_AUTH_FRAME_BYTES = 64 * 1024
 export const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 export const MAX_PROMPT_IMAGES = 4
 export const MAX_BASE64_CHARS_PER_IMAGE = 8 * 1024 * 1024
+export const MAX_PROMPT_DOCUMENTS = 4
+export const MAX_DOCUMENT_TEXT_CHARS = 256 * 1024
+export const MAX_DOCUMENT_NAME_CHARS = 180
+export const MAX_DOCUMENT_MEDIA_TYPE_CHARS = 120
 /** Bounds a single prompt's text; the frame itself is capped by ws maxPayload. */
 export const MAX_PROMPT_TEXT_CHARS = 256 * 1024
 // Client-supplied identity fields land in logs and devices-v2.json — keep them
@@ -47,6 +51,10 @@ export function requiredScope(type: string): DeviceScope | undefined {
 
 export function sanitizeImageName(value: string): string {
   return value.replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, 120)
+}
+
+export function sanitizeDocumentField(value: string, maxChars: number): string {
+  return value.replace(/[\u0000-\u001F\u007F]/g, ' ').trim().slice(0, maxChars)
 }
 
 export const ERROR_CODES = {

@@ -364,6 +364,47 @@ test('an ordinary prompt passes validation and is acknowledged', async () => {
   assert.equal(lastFrame(ws).id, 'm2')
 })
 
+test('document prompts are bounded, sanitized, and accepted with ordinary text', async () => {
+  let promptPayload: any
+  const { ws, authenticate } = await makeConnection({
+    proxyOverrides: {
+      sessions: {
+        list: async () => ({ result: { ok: true, value: { items: [] } } }),
+        history: async () => ({ result: { ok: true, value: { events: [], hasMore: false } } }),
+        prompt: async (request: any) => {
+          promptPayload = request.payload
+          return { result: { ok: true, value: { accepted: true } } }
+        },
+        create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
+      },
+    },
+  })
+  authenticate()
+  ws.sent.length = 0
+  ws.receive({
+    v: 2,
+    type: 'c2s.session.sendPrompt',
+    id: 'doc-1',
+    payload: {
+      sessionId: 's1',
+      text: '总结它',
+      documents: [{ name: 'notes\n.md', mediaType: 'text/markdown', text: '# Notes' }],
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(lastFrame(ws).type, 's2c.ack')
+  assert.match(promptPayload.content[1].text, /Attached document: notes \.md/)
+
+  ws.receive({
+    v: 2,
+    type: 'c2s.session.sendPrompt',
+    id: 'doc-bad',
+    payload: { sessionId: 's1', text: '', documents: [{ name: 'bad.bin', mediaType: 'application/octet-stream', text: '' }] },
+  })
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL')
+})
+
 test('history page echoes the request id so the client can settle its timeout', async () => {
   const { ws, authenticate } = await makeConnection()
   authenticate()

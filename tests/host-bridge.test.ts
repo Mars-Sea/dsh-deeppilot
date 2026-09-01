@@ -668,6 +668,40 @@ test('sendPrompt forwards image content and projects attachment metadata', async
   bridge.dispose()
 })
 
+test('sendPrompt projects bounded documents as attachment chips without echoing their body', async () => {
+  const { proxy } = makeFakeProxy()
+  let promptRequest: any
+  proxy.sessions.prompt = async (request) => {
+    promptRequest = request
+    return { result: { ok: true, value: { accepted: true } } }
+  }
+  const bridge = new HostBridge(proxy, 100)
+  const sent = await bridge.sendPrompt('session-doc', '总结附件', [], [{
+    name: 'notes.md',
+    mediaType: 'text/markdown',
+    text: '# Private notes\nimportant details',
+  }])
+  assert.equal(sent.ok, true)
+  assert.equal(promptRequest.payload.content[0].text, '总结附件')
+  assert.match(promptRequest.payload.content[1].text, /^\[DeepPilot document:/)
+  assert.match(promptRequest.payload.content[1].text, /important details/)
+
+  const rows = projectHistory([{
+    event: {
+      type: 'user/message',
+      seq: 2,
+      data: { message: { role: 'user', content: promptRequest.payload.content } },
+    },
+  }] as any)
+  assert.equal(rows[0]?.text, '总结附件')
+  assert.deepEqual(rows[0]?.attachments, [{
+    kind: 'document',
+    name: 'notes.md',
+    mediaType: 'text/markdown',
+  }])
+  bridge.dispose()
+})
+
 test('turn.end notifies only devices not viewing the session', async () => {
   const { proxy, getPush } = makeFakeProxy()
   const bridge = new HostBridge(proxy, 100)

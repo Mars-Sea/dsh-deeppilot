@@ -50,7 +50,8 @@ export interface SessionCreatePayload { workspaceId?: string; cwd?: string }
 export interface DirectoryListPayload { path?: string }
 export interface WorkspaceCreatePayload { path: string }
 export interface PromptImagePayload { mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string; name?: string }
-export interface SendPromptPayload { sessionId: string; text: string; images?: PromptImagePayload[] }
+export interface PromptDocumentPayload { mediaType: string; name: string; text: string; truncated?: boolean }
+export interface SendPromptPayload { sessionId: string; text: string; images?: PromptImagePayload[]; documents?: PromptDocumentPayload[] }
 export interface ApprovalRespondPayload { requestId: string; decision: "allow" | "deny"; reason?: string }
 export interface QuestionAnswer {
   id: string
@@ -182,12 +183,13 @@ export interface MessageContextInfo {
 /** One image carried by a user message. `attachmentId` keys the read-back RPC
  * (c2s.session.attachment); width/height let clients reserve layout space. */
 export interface MessageAttachment {
-  kind: 'image'
+  kind: 'image' | 'document'
   name?: string
   mediaType?: string
   attachmentId?: string
   width?: number
   height?: number
+  truncated?: boolean
 }
 
 export interface MessageProjection {

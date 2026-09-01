@@ -18,10 +18,14 @@ import {
   IMAGE_MEDIA_TYPES,
   MAX_APP_VERSION_CHARS,
   MAX_BASE64_CHARS_PER_IMAGE,
+  MAX_DOCUMENT_MEDIA_TYPE_CHARS,
+  MAX_DOCUMENT_NAME_CHARS,
+  MAX_DOCUMENT_TEXT_CHARS,
   MAX_DEVICE_ID_CHARS,
   MAX_DEVICE_NAME_CHARS,
   MAX_OUTBOUND_BUFFER_BYTES,
   MAX_PROMPT_IMAGES,
+  MAX_PROMPT_DOCUMENTS,
   MAX_PROMPT_TEXT_CHARS,
   PRE_AUTH_FRAME_BYTES,
   managementErrorCode,
@@ -29,6 +33,7 @@ import {
   pendingResponseMessage,
   sanitizeDeviceField,
   sanitizeImageName,
+  sanitizeDocumentField,
   requiredScope,
 } from './connection-policy.ts'
 
@@ -496,17 +501,22 @@ export class BridgeConnection implements BridgeSink {
           sessionId?: string
           text?: string
           images?: Array<{ mediaType?: string; data?: string; name?: string }>
+          documents?: Array<{ mediaType?: string; name?: string; text?: string; truncated?: boolean }>
         }
         const text = typeof p?.text === 'string' ? p.text : ''
         const rawImages = Array.isArray(p?.images) ? p.images : []
-        if (!p?.sessionId || (text.trim().length === 0 && rawImages.length === 0)) {
-          return this.fail(env.id, 'E_PROTOCOL', 'sessionId and text or images required')
+        const rawDocuments = Array.isArray(p?.documents) ? p.documents : []
+        if (!p?.sessionId || (text.trim().length === 0 && rawImages.length === 0 && rawDocuments.length === 0)) {
+          return this.fail(env.id, 'E_PROTOCOL', 'sessionId and prompt content required')
         }
         if (text.length > MAX_PROMPT_TEXT_CHARS) {
           return this.fail(env.id, 'E_PROTOCOL', 'prompt text too long')
         }
         if (rawImages.length > MAX_PROMPT_IMAGES) {
           return this.fail(env.id, 'E_PROTOCOL', 'too many images')
+        }
+        if (rawDocuments.length > MAX_PROMPT_DOCUMENTS || rawImages.length + rawDocuments.length > MAX_PROMPT_IMAGES) {
+          return this.fail(env.id, 'E_PROTOCOL', 'too many prompt attachments')
         }
         const images: Array<{
           mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
@@ -527,7 +537,21 @@ export class BridgeConnection implements BridgeSink {
               : {}),
           })
         }
-        const userSeq = await this.deps.bridge.sendPrompt(p.sessionId, text, images)
+        const documents: Array<{ mediaType: string; name: string; text: string; truncated?: boolean }> = []
+        for (const document of rawDocuments) {
+          if (typeof document?.name !== 'string' || typeof document?.mediaType !== 'string' ||
+              typeof document?.text !== 'string' || document.text.length === 0 ||
+              document.text.length > MAX_DOCUMENT_TEXT_CHARS) {
+            return this.fail(env.id, 'E_PROTOCOL', 'invalid document attachment')
+          }
+          const name = sanitizeDocumentField(document.name, MAX_DOCUMENT_NAME_CHARS)
+          const mediaType = sanitizeDocumentField(document.mediaType, MAX_DOCUMENT_MEDIA_TYPE_CHARS).toLowerCase()
+          if (!name || !mediaType || mediaType.startsWith('image/')) {
+            return this.fail(env.id, 'E_PROTOCOL', 'invalid document attachment')
+          }
+          documents.push({ name, mediaType, text: document.text, ...(document.truncated === true ? { truncated: true } : {}) })
+        }
+        const userSeq = await this.deps.bridge.sendPrompt(p.sessionId, text, images, documents)
         if (!userSeq.ok) return this.fail(env.id, managementErrorCode(userSeq.kind), userSeq.message)
         this.send('s2c.ack', { userSeq: userSeq.value }, env.id)
         return

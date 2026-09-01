@@ -31,6 +31,7 @@ import {
   projectEvent,
   projectHistory,
 } from './host-event-projection.ts'
+import { documentPromptBlock, type PromptDocument } from './document-payload.ts'
 
 export {
   MAX_MESSAGE_PROJECTION_BYTES,
@@ -881,11 +882,13 @@ export class HostBridge {
     sessionId: string,
     text: string,
     images: Array<{ mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string; name?: string }> = [],
+    documents: PromptDocument[] = [],
   ): Promise<SessionManagementResult<number>> {
     try {
       const content: PromptArgs['content'] = [];
       if (text.trim().length > 0) content.push({ type: 'text', text });
       for (const image of images) content.push({ type: 'image', ...image });
+      for (const document of documents) content.push({ type: 'text', text: documentPromptBlock(document) });
       const response = await this.apiProxy.sessions.prompt({
         rpcId: randomUUID(),
         payload: {
