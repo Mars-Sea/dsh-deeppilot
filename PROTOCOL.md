@@ -470,6 +470,25 @@ APNs 只承载通知投影，不承载回答所需的 requestId 和完整问题�
 - `welcome.capabilities.pendingSnapshot=true` 表示服务端支持此请求；false 或缺失时客户端依赖重放并降级展示。
 - 快照是全量替换语义；空数组表示当前没有对应的待处理请求。
 
+### 与 DSH 官方 Web 回答者的共存
+
+DSH `0.1.2-alpha.3` 起，Host 侧的 `approval/request` 与
+`user-questions/request` 只由官方 API Remotes 接入一次；API Gateway 为每个请求
+保存统一 pending 状态，并把相同请求并行投递给官方 Web Client 与 DeepPilot
+驻留 Remote Client。任一 Client 先回答后，由 Gateway 统一结算并取消其他 Client
+上的同一请求。因此 DeepPilot 不直接注册或抢占 Host waterfall，也不替换官方
+Web composer。
+
+存在至少一台已配对且未吊销的设备时，DeepPilot Client 保持请求待答并向手机
+发布 `s2c.pending.*`；设备离线、APNs 不可用或通知被静默都不影响稍后通过
+`c2s.pending.list` 主动拉取。没有可用配对设备时，DeepPilot Client 对自己的
+delivery 调用 `next()`；这不会撤销 Gateway 已经并行交给官方 Web 的 delivery。
+
+Web 或另一 Client 先回答时，Gateway cancellation 会让插件发布对应的
+`s2c.pending.*.resolved`，手机上的卡片随即失效。手机先回答时，
+`c2s.*.respond` 的结果沿官方 Remote Events result 通道返回 Gateway，由 Gateway
+负责 first-answer-wins 仲裁。
+
 ## 6. 通知
 
 ```json

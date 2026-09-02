@@ -3,13 +3,18 @@
  *
  * DeepPilot's phone protocol deliberately speaks one stable in-process
  * `apiProxy` vocabulary. Harness 0.1.2 removed that service in favor of
- * direct Session/Workspace controllers plus scoped Cordis interaction events.
+ * direct Session/Workspace controllers plus Gateway-backed Remote Events.
  * This adapter rebuilds the small subset the bridge needs from those public
- * controllers, keeping the protocol implementation isolated from the Host API
- * migration. It is intentionally Host-only.
+ * controllers and joins the official Client interaction plane in-process,
+ * keeping the phone protocol isolated from the Host API migration.
  */
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
+import {
+  startDsh012RemoteInteractions,
+  type RemoteApprovalRequest,
+  type RemoteQuestionRequest,
+} from './dsh012-remote-interactions.ts'
 import { isSubagentRow } from './host-api.ts'
 import { projectHistory } from './host-event-projection.ts'
 import type {
@@ -55,19 +60,46 @@ interface DeferredInteraction {
   map(value: unknown): unknown
 }
 
+/** Which DSH 0.1.2 first-answer-wins interaction a phone may surface. */
+export type DshInteractionKind = 'approval' | 'question'
+
+export interface Dsh012ApiProxyOptions {
+  /**
+   * Decide whether the resident DeepPilot Remote Client represents a usable
+   * phone surface. Returning false delegates only this Client delivery; API
+   * Gateway keeps the official Web delivery independent.
+   */
+  shouldSurfaceInteraction?: (kind: DshInteractionKind) => boolean
+}
+
 /** Direct-controller facade with the exact legacy shape HostBridge consumes. */
 export class Dsh012ApiProxy implements ApiProxyLike {
   private readonly session: SessionControllerLike
   private readonly workspaceController: WorkspaceControllerLike | undefined
   private readonly directoryPicker: DirectoryPickerControllerLike | undefined
   private readonly interactions = new Map<string, DeferredInteraction>()
+  private readonly shouldSurfaceInteraction: (kind: DshInteractionKind) => boolean
 
-  constructor(private readonly ctx: Context) {
+  constructor(private readonly ctx: Context, options: Dsh012ApiProxyOptions = {}) {
     const session = ctx.get('sessionController') as SessionControllerLike | undefined
     if (session === undefined) throw new Error('dsh 0.1.2 sessionController is unavailable')
     this.session = session
     this.workspaceController = ctx.get('workspaceController') as WorkspaceControllerLike | undefined
     this.directoryPicker = ctx.get('directoryPickerController') as DirectoryPickerControllerLike | undefined
+    this.shouldSurfaceInteraction = options.shouldSurfaceInteraction ?? (() => true)
+  }
+
+  /**
+   * Decide whether this Gateway Client can surface a phone card. The decision
+   * fails open to false so a broken device registry delegates this delivery
+   * while the official Web Client remains able to answer.
+   */
+  private canSurfaceInteraction(kind: DshInteractionKind): boolean {
+    try {
+      return this.shouldSurfaceInteraction(kind)
+    } catch {
+      return false
+    }
   }
 
   readonly sessions: ApiProxyLike['sessions'] = {
@@ -191,59 +223,77 @@ export class Dsh012ApiProxy implements ApiProxyLike {
     const offProjection = projections?.onChanged?.((session, key, value) => {
       queue.push({ type: 'session/projection', sessionId: String(session.id), key, value })
     })
-    const offApproval = this.ctx.on('approval/request' as never, ((request: {
-      agent?: { id?: string; session?: { id?: string } }; toolName?: string; reason?: string; signal?: AbortSignal
-    }) => {
-      const rpcId = randomUUID()
-      const sessionId = String(request.agent?.session?.id ?? request.agent?.id ?? '')
-      const response = deferred<unknown>()
-      const abort = (): void => response.resolve('cancelled')
-      request.signal?.addEventListener('abort', abort, { once: true })
-      this.interactions.set(rpcId, {
-        resolve: response.resolve,
-        map: value => {
-          const outcome = (value as { outcome?: unknown } | undefined)?.outcome
-          return outcome === 'allowed-once' || outcome === 'rejected' ? outcome : 'unavailable'
-        },
+
+    let disposeInteractions: (() => Promise<void>) | undefined
+    try {
+      disposeInteractions = await startDsh012RemoteInteractions(this.ctx, {
+        approval: (sessionId, request, next) => this.answerApproval(queue, sessionId, request, next),
+        question: (sessionId, request, next) => this.answerQuestion(queue, sessionId, request, next),
       })
-      queue.push({
-        type: 'approval/requested', rpcId, sessionId, approvalId: rpcId,
-        toolName: String(request.toolName ?? 'tool'), reason: String(request.reason ?? ''),
-      })
-      return response.promise.finally(() => {
-        request.signal?.removeEventListener('abort', abort)
-        this.interactions.delete(rpcId)
-        queue.push({ type: 'approval/resolved', approvalId: rpcId })
-      })
-    }) as never, { global: true })
-    const offQuestion = this.ctx.on('user-questions/request' as never, ((request: {
-      agent?: { id?: string; session?: { id?: string } }; questions?: unknown; signal?: AbortSignal
-    }) => {
-      const rpcId = randomUUID()
-      const sessionId = String(request.agent?.session?.id ?? request.agent?.id ?? '')
-      const response = deferred<unknown>()
-      const abort = (): void => response.reject(new Error('question cancelled'))
-      request.signal?.addEventListener('abort', abort, { once: true })
-      this.interactions.set(rpcId, {
-        resolve: response.resolve,
-        map: value => (value as { answer?: unknown } | undefined)?.answer ?? value,
-      })
-      queue.push({ type: 'question/requested', rpcId, sessionId, questions: request.questions ?? [] })
-      return response.promise.finally(() => {
-        request.signal?.removeEventListener('abort', abort)
-        this.interactions.delete(rpcId)
-        queue.push({ type: 'question/resolved', questionRpcId: rpcId })
-      })
-    }) as never, { global: true })
+    } catch (error) {
+      console.warn(`[deeppilot] DSH Remote interaction client unavailable: ${toError(error).message}`)
+    }
+
     try {
       yield* queue.iterate()
     } finally {
       offEvent()
       offProjection?.()
-      offApproval()
-      offQuestion()
+      await disposeInteractions?.()
       queue.close()
     }
+  }
+
+  private answerApproval(
+    queue: AsyncFrameQueue,
+    sessionId: string,
+    request: RemoteApprovalRequest,
+    next: () => Promise<unknown>,
+  ): Promise<unknown> {
+    if (!this.canSurfaceInteraction('approval')) return next()
+    const rpcId = randomUUID()
+    const response = deferred<unknown>()
+    const abort = (): void => response.resolve('cancelled')
+    request.signal?.addEventListener('abort', abort, { once: true })
+    this.interactions.set(rpcId, {
+      resolve: response.resolve,
+      map: value => {
+        const outcome = (value as { outcome?: unknown } | undefined)?.outcome
+        return outcome === 'allowed-once' || outcome === 'rejected' ? outcome : 'unavailable'
+      },
+    })
+    queue.push({
+      type: 'approval/requested', rpcId, sessionId, approvalId: rpcId,
+      toolName: String(request.toolName ?? 'tool'), reason: String(request.reason ?? ''),
+    })
+    return response.promise.finally(() => {
+      request.signal?.removeEventListener('abort', abort)
+      this.interactions.delete(rpcId)
+      queue.push({ type: 'approval/resolved', approvalId: rpcId })
+    })
+  }
+
+  private answerQuestion(
+    queue: AsyncFrameQueue,
+    sessionId: string,
+    request: RemoteQuestionRequest,
+    next: () => Promise<unknown>,
+  ): Promise<unknown> {
+    if (!this.canSurfaceInteraction('question')) return next()
+    const rpcId = randomUUID()
+    const response = deferred<unknown>()
+    const abort = (): void => response.reject(new Error('question cancelled'))
+    request.signal?.addEventListener('abort', abort, { once: true })
+    this.interactions.set(rpcId, {
+      resolve: response.resolve,
+      map: value => (value as { answer?: unknown } | undefined)?.answer ?? value,
+    })
+    queue.push({ type: 'question/requested', rpcId, sessionId, questions: request.questions ?? [] })
+    return response.promise.finally(() => {
+      request.signal?.removeEventListener('abort', abort)
+      this.interactions.delete(rpcId)
+      queue.push({ type: 'question/resolved', questionRpcId: rpcId })
+    })
   }
 
   private async *hostEvents(signal: AbortSignal): AsyncIterable<MuxFrameLike> {

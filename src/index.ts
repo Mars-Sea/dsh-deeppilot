@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws'
 import { BridgeConnection } from './connection.ts'
 import { HostBridge } from './host-bridge.ts'
 import type { PushOutlet } from './host-bridge.ts'
-import { Dsh012ApiProxy } from './dsh012-api-proxy.ts'
+import { Dsh012ApiProxy, type DshInteractionKind } from './dsh012-api-proxy.ts'
 import type { SettingsSectionHooks } from '@deepseek-ai/dsh-settings'
 import { applyReportRemote } from './report-remote.ts'
 import { runRelayProbe } from './relay-test.ts'
@@ -937,8 +937,21 @@ export function apply(ctx: Context, options: unknown): void {
 
   // Data plane: dsh 0.1.2 removed apiProxy. Build the bridge's stable
   // protocol-facing façade from the public Session/Workspace controllers.
+
+  /**
+   * Whether the resident Gateway Client represents a real phone surface. A
+   * paired device remains answerable even while offline: HostBridge retains an
+   * authoritative pending snapshot that the app pulls on reconnect, while
+   * APNs is only a best-effort wakeup. With no paired device this Client calls
+   * `next()`; Gateway's independent official Web delivery is unaffected.
+   */
+  const hasPairedPhoneSurface = (_kind: DshInteractionKind): boolean => {
+    const devices = auth.devices?.list() ?? []
+    return devices.some((device) => device.revokedAt === undefined)
+  }
+
   ;(ctx as unknown as { inject: (deps: string[], fn: (sub: unknown) => void) => void }).inject(
-    ['sessionController'],
+    ['sessionController', 'connection', 'typertGateway'],
     (sub) => {
       if (currentConfig().enabled !== true) {
         log('bridge disabled; data plane stays inactive')
@@ -947,7 +960,7 @@ export function apply(ctx: Context, options: unknown): void {
       const apiCtx = sub as unknown as Context & SubContext
       let proxy: Dsh012ApiProxy
       try {
-        proxy = new Dsh012ApiProxy(apiCtx)
+        proxy = new Dsh012ApiProxy(apiCtx, { shouldSurfaceInteraction: hasPairedPhoneSurface })
       } catch (error) {
         log('dsh 0.1.2 session bridge unavailable: ' + String(error))
         return

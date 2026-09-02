@@ -7,7 +7,7 @@ This file separates tested evidence from intended behavior. Passing unit tests d
 | Component | Baseline | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | package engine and CI |
-| DSH CLI and Host API | `0.1.2-alpha.2` minimum | published alpha.2 type/build checks, profile install and Host-start smoke test, plus 0.1.2 history and `/phone` protocol tests |
+| DSH CLI and Host API | `0.1.2-alpha.3` minimum; `0.1.2-alpha.4` verified | clean alpha.3 install and Host-start smoke; isolated alpha.4 type/build plus 167 unit tests; alpha.4 Host-start smoke; `/phone` protocol tests |
 | Host OS | macOS on Apple silicon | embedded helper artifact and local integration testing |
 | Remote access | Tailscale Funnel, ports 443/8443/10000 | helper and supervisor tests |
 | iOS | native DeepPilot client, protocol v2 | simulator build and v2 pairing/challenge evidence |
@@ -18,12 +18,16 @@ This file separates tested evidence from intended behavior. Passing unit tests d
 - Bearer authentication, URL credentials, and first-frame shared tokens are rejected. A supported client registers a P-256 public key through `/phone/pair` and signs each WebSocket challenge.
 - Without a compatible embedded helper, the core bridge and trusted-LAN mode can still run; remote Funnel reports `unavailable`.
 - If a DSH Host API is missing, only the dependent capability should be disabled. The plugin must not crash the Host.
-- DSH versions older than `0.1.2-alpha.2` are unsupported: they do not expose
-  the controller and client package family required by this plugin.
-- On the tested `0.1.2-alpha.2` Host, the compatibility facade converts the
+- DSH versions older than `0.1.2-alpha.3` are unsupported: they do not expose
+  the Gateway multi-client Remote Events routing required by this plugin.
+- DSH `0.1.2-alpha.4` keeps the Gateway Remote Events contract used for
+  approvals and questions. Its event-sequence/log-offset refactor changes
+  session internals, but the plugin's stable history facade passes the alpha.4
+  type/build and unit-test baseline.
+- On the alpha.3 package baseline, the compatibility facade converts the
   current Session controller's raw event arrays into the stable wrapped
   history entries consumed by the phone bridge. Sessions persisted by earlier
-  Hosts can therefore be listed and opened when the alpha.2 Host's own
+  Hosts can therefore be listed and opened when the alpha.3 Host's own
   persistence reader accepts their log vocabulary. Unsupported persisted
   formats still fail closed in the Host without modifying the original log.
 
@@ -32,7 +36,7 @@ This file separates tested evidence from intended behavior. Passing unit tests d
 - Intel macOS support for the embedded helper;
 - signed/notarized helper distribution;
 - Windows or Linux host validation;
-- repair or migration of persisted history rejected by the `0.1.2-alpha.2`
+- repair or migration of persisted history rejected by the `0.1.2-alpha.3`
   Host's own session reader;
 - every DSH developer-preview revision;
 - physical-device performance and every carrier/network combination;

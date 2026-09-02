@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { Context } from '@deepseek-ai/cordis'
 import { Dsh012ApiProxy } from '../src/dsh012-api-proxy.ts'
 import { HostBridge, projectHistory } from '../src/host-bridge.ts'
 import type { BridgeSink } from '../src/host-bridge.ts'
+import { unwrapStreamItem } from '../src/host-api.ts'
 
 test('dsh 0.1.2 non-empty raw history opens through the stable bridge shape', async () => {
   const rawEvents = [
@@ -161,4 +163,277 @@ test('dsh 0.1.2 history adapter accumulates raw pages up to the requested phone 
     { seq: 1, ts: 10, role: 'user', text: 'oldest' },
   ])
   assert.equal(second.result.value.hasMore, false)
+})
+
+interface RemoteResultFrame {
+  clientId: string
+  eventId: string
+  outcome: { kind: string; value?: unknown }
+}
+
+class RemoteEventHarness {
+  private readonly frames: unknown[] = []
+  private readonly results: RemoteResultFrame[] = []
+  private frameWake: (() => void) | undefined
+  private resultWake: (() => void) | undefined
+  private openedWake: (() => void) | undefined
+  private opened = false
+
+  readonly gateway = {
+    wireStream: {
+      open: async (endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> => {
+        assert.equal(endpoint, '$events')
+        assert.deepEqual(payload, { args: {} })
+        this.opened = true
+        this.openedWake?.()
+        return this.stream(signal)
+      },
+    },
+  }
+
+  readonly connection = {
+    createSharedFetchHandler: (channel: string) => {
+      assert.equal(channel, '/api')
+      return {
+        fetch: async (request: Request): Promise<Response> => {
+          const body = await request.json() as {
+            rpcId: string
+            method: string
+            payload: { args: RemoteResultFrame }
+          }
+          assert.equal(body.method, '$events/result')
+          this.results.push(body.payload.args)
+          this.resultWake?.()
+          return Response.json({
+            type: 'server-response',
+            rpcId: body.rpcId,
+            result: { ok: true },
+          })
+        },
+      }
+    },
+  }
+
+  push(frame: unknown): void {
+    this.frames.push(frame)
+    this.frameWake?.()
+  }
+
+  async waitUntilOpened(): Promise<void> {
+    if (this.opened) return
+    await new Promise<void>(resolve => { this.openedWake = resolve })
+    this.openedWake = undefined
+  }
+
+  async nextResult(): Promise<RemoteResultFrame> {
+    while (this.results.length === 0) {
+      await new Promise<void>(resolve => { this.resultWake = resolve })
+      this.resultWake = undefined
+    }
+    return this.results.shift()!
+  }
+
+  private async *stream(signal: AbortSignal): AsyncIterable<unknown> {
+    yield { type: 'ready', clientId: 'deeppilot-client', host: { home: '/tmp/home' } }
+    while (!signal.aborted) {
+      const frame = this.frames.shift()
+      if (frame !== undefined) {
+        yield frame
+        continue
+      }
+      await new Promise<void>(resolve => {
+        const abort = (): void => resolve()
+        signal.addEventListener('abort', abort, { once: true })
+        this.frameWake = () => {
+          signal.removeEventListener('abort', abort)
+          resolve()
+        }
+      })
+      this.frameWake = undefined
+    }
+  }
+}
+
+function interactionContext(harness: RemoteEventHarness): Context {
+  const ctx = new Context()
+  ctx.provide('sessionController', {})
+  ctx.provide('connection', harness.connection)
+  ctx.provide('typertGateway', harness.gateway)
+  return ctx
+}
+
+async function startMux(proxy: Dsh012ApiProxy, signal: AbortSignal) {
+  const iterator = proxy.events.mux({}, signal)[Symbol.asyncIterator]()
+  const firstFrame = iterator.next()
+  return { iterator, firstFrame }
+}
+
+function dispatchHostWaterfall(
+  ctx: Context,
+  event: string,
+  request: unknown,
+  fallback: () => Promise<unknown>,
+): Promise<unknown> {
+  return (ctx as unknown as {
+    waterfall(event: string, request: unknown, fallback: () => Promise<unknown>): Promise<unknown>
+  }).waterfall(event, request, fallback)
+}
+
+test('DeepPilot no longer registers a competing Host interaction waterfall', async () => {
+  const harness = new RemoteEventHarness()
+  const ctx = interactionContext(harness)
+  const proxy = new Dsh012ApiProxy(ctx)
+  const controller = new AbortController()
+  const { iterator } = await startMux(proxy, controller.signal)
+  await harness.waitUntilOpened()
+
+  assert.equal(await dispatchHostWaterfall(
+    ctx,
+    'approval/request',
+    { toolName: 'write' },
+    async () => 'official-host-chain',
+  ), 'official-host-chain')
+
+  controller.abort()
+  await iterator.return?.()
+})
+
+test('a missing phone surface delegates only the DeepPilot Gateway delivery', async () => {
+  const harness = new RemoteEventHarness()
+  const ctx = interactionContext(harness)
+  const proxy = new Dsh012ApiProxy(ctx, { shouldSurfaceInteraction: () => false })
+  const controller = new AbortController()
+  const { iterator, firstFrame } = await startMux(proxy, controller.signal)
+  await harness.waitUntilOpened()
+
+  harness.push({
+    type: 'waterfall', event: 'approval/request', eventId: 'approval-next',
+    agentId: 'session-a', request: { toolName: 'write' },
+  })
+  assert.deepEqual(await harness.nextResult(), {
+    clientId: 'deeppilot-client', eventId: 'approval-next', outcome: { kind: 'next' },
+  })
+
+  controller.abort()
+  assert.equal((await firstFrame).done, true, 'delegated delivery must not create a phone pending frame')
+  await iterator.return?.()
+})
+
+test('the resident phone Client returns a question through the official Gateway result channel', async () => {
+  const harness = new RemoteEventHarness()
+  const ctx = interactionContext(harness)
+  const proxy = new Dsh012ApiProxy(ctx, {
+    shouldSurfaceInteraction: kind => kind === 'question',
+  })
+  const controller = new AbortController()
+  const { iterator, firstFrame } = await startMux(proxy, controller.signal)
+  await harness.waitUntilOpened()
+
+  harness.push({
+    type: 'waterfall', event: 'user-questions/request', eventId: 'question-1', agentId: 'session-q',
+    request: { questions: [{ id: 'choice', question: 'A or B?' }] },
+  })
+  const streamItem = await firstFrame
+  assert.equal(streamItem.done, false)
+  const frame = unwrapStreamItem(streamItem.value!)
+  assert.equal(frame.type, 'question/requested')
+  assert.equal(frame.sessionId, 'session-q')
+
+  const phoneAnswer = { answers: [{ id: 'choice', selected: ['A'] }] }
+  assert.deepEqual(await proxy.respond({
+    type: 'client-response',
+    rpcId: frame.rpcId!,
+    result: { ok: true, value: { answer: phoneAnswer } },
+  }), { accepted: true })
+  assert.deepEqual(await harness.nextResult(), {
+    clientId: 'deeppilot-client', eventId: 'question-1',
+    outcome: { kind: 'result', value: phoneAnswer },
+  })
+
+  controller.abort()
+  await iterator.return?.()
+})
+
+test('a phone approval is sent through Gateway and resolves the local pending card', async () => {
+  const harness = new RemoteEventHarness()
+  const ctx = interactionContext(harness)
+  const proxy = new Dsh012ApiProxy(ctx, { shouldSurfaceInteraction: kind => kind === 'approval' })
+  const controller = new AbortController()
+  const { iterator, firstFrame } = await startMux(proxy, controller.signal)
+  await harness.waitUntilOpened()
+
+  harness.push({
+    type: 'waterfall', event: 'approval/request', eventId: 'approval-1', agentId: 'session-a',
+    request: { toolName: 'write', reason: 'edit' },
+  })
+  const streamItem = await firstFrame
+  assert.equal(streamItem.done, false)
+  const frame = unwrapStreamItem(streamItem.value!)
+  assert.equal(frame.type, 'approval/requested')
+  assert.equal(frame.sessionId, 'session-a')
+
+  assert.deepEqual(await proxy.respond({
+    type: 'client-response',
+    rpcId: frame.rpcId!,
+    result: { ok: true, value: { outcome: 'allowed-once' } },
+  }), { accepted: true })
+  assert.deepEqual(await harness.nextResult(), {
+    clientId: 'deeppilot-client', eventId: 'approval-1',
+    outcome: { kind: 'result', value: 'allowed-once' },
+  })
+
+  const resolved = unwrapStreamItem((await iterator.next()).value!)
+  assert.equal(resolved.type, 'approval/resolved')
+  assert.equal(resolved.approvalId, frame.approvalId)
+
+  controller.abort()
+  await iterator.return?.()
+})
+
+test('Gateway cancellation from a Web answer clears the phone pending interaction', async () => {
+  const harness = new RemoteEventHarness()
+  const ctx = interactionContext(harness)
+  const proxy = new Dsh012ApiProxy(ctx)
+  const controller = new AbortController()
+  const { iterator, firstFrame } = await startMux(proxy, controller.signal)
+  await harness.waitUntilOpened()
+
+  harness.push({
+    type: 'waterfall', event: 'approval/request', eventId: 'web-won', agentId: 'session-a',
+    request: { toolName: 'write' },
+  })
+  const frame = unwrapStreamItem((await firstFrame).value!)
+  assert.equal(frame.type, 'approval/requested')
+
+  harness.push({ type: 'cancel', eventId: 'web-won' })
+  const resolved = unwrapStreamItem((await iterator.next()).value!)
+  assert.equal(resolved.type, 'approval/resolved')
+  assert.deepEqual(await proxy.respond({
+    type: 'client-response', rpcId: frame.rpcId!, result: { ok: true, value: { outcome: 'rejected' } },
+  }), { accepted: false, reason: 'not-pending' })
+
+  controller.abort()
+  await iterator.return?.()
+})
+
+test('a throwing phone-surface decision delegates this Gateway delivery', async () => {
+  const harness = new RemoteEventHarness()
+  const ctx = interactionContext(harness)
+  const proxy = new Dsh012ApiProxy(ctx, {
+    shouldSurfaceInteraction: () => { throw new Error('registry broke') },
+  })
+  const controller = new AbortController()
+  const { iterator, firstFrame } = await startMux(proxy, controller.signal)
+  await harness.waitUntilOpened()
+
+  harness.push({
+    type: 'waterfall', event: 'approval/request', eventId: 'decision-error',
+    agentId: 'session-a', request: { toolName: 'write' },
+  })
+  assert.deepEqual(await harness.nextResult(), {
+    clientId: 'deeppilot-client', eventId: 'decision-error', outcome: { kind: 'next' },
+  })
+  controller.abort()
+  assert.equal((await firstFrame).done, true)
+  await iterator.return?.()
 })

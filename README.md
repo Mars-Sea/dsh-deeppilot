@@ -37,18 +37,23 @@ require it.
 
 | Plugin version | Required DSH | How to install |
 |---|---|---|
-| `0.6.0-alpha.x` (new, `alpha` tag) | DSH `0.1.2-alpha.2` or newer | `dsh plugin --profile web add dsh-deeppilot@alpha` |
+| `0.6.0-alpha.x` (new, `alpha` tag) | DSH `0.1.2-alpha.3` or newer | `dsh plugin --profile web add dsh-deeppilot@alpha` |
 | `0.5.x` (previous stable, `latest`) | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot` |
 
 The `0.6.0` alpha line is built against the DSH
-[0.1.2-alpha.2](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.2-alpha.2)
-controller and client package family, so it requires DSH `0.1.2-alpha.2` or
-newer (its `alpha` npm dist-tag). Earlier DSH builds do not provide the Host
-APIs required by this plugin. Users who need a DSH release before that must
-stay on the `0.5.x` plugin.
+[0.1.2-alpha.3](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.2-alpha.3)
+Host and client package family, so it requires DSH `0.1.2-alpha.3` or newer
+(its `alpha` npm dist-tag). The alpha.3 Gateway provides the multi-client
+Remote Events routing used to keep Web and DeepPilot independently answerable.
+Earlier DSH builds do not provide that routing contract. Users who need a DSH
+release before that must stay on the `0.5.x` plugin.
+
+DSH `0.1.2-alpha.4` is also verified. It retains the same interaction-routing
+contract; see [COMPATIBILITY.md](./COMPATIBILITY.md) for the tested evidence and
+its session-history compatibility note.
 
 ```sh
-# DSH 0.1.2-alpha.2 or newer (recommended):
+# DSH 0.1.2-alpha.3 or newer (recommended):
 dsh plugin --profile web add dsh-deeppilot@alpha
 # DSH 0.1.1-rc.2 through 0.1.2-alpha.1 (previous stable):
 dsh plugin --profile web add dsh-deeppilot
@@ -73,13 +78,13 @@ DeepPilot state under `$DSH_HOME/deeppilot/`.
 
 ## Publishing (maintainers)
 
-`0.6.0-alpha.x` targets DSH `0.1.2-alpha.2`+; `0.5.x` stays compatible with
+`0.6.0-alpha.x` targets DSH `0.1.2-alpha.3`+; `0.5.x` stays compatible with
 DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep both published:
 
 1. Bump `version` in `package.json` and in the root `""` entry of
    `package-lock.json`, then run `npm test && npm run typecheck && npm run build`
    and inspect `npm pack --dry-run --json` (the check
-   `tests/compatibility-metadata.test.ts` enforces the `^0.1.2-alpha.2` peer
+   `tests/compatibility-metadata.test.ts` enforces the `^0.1.2-alpha.3` peer
    ranges).
 2. Commit the release and push it. `npm publish` runs `prepack` (build) and
    `prepublishOnly` (test + typecheck) automatically.
@@ -91,7 +96,7 @@ DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep both published:
 
    After a successful publish, `npm view dsh-deeppilot dist-tags --json` shows
    `"latest": "0.5.x"` and `"alpha": "0.6.0-alpha.x"`. Verify the published
-   package by installing it into a DSH `0.1.2-alpha.2` profile before pointing
+   package by installing it into a DSH `0.1.2-alpha.3` profile before pointing
    users at it.
 4. Tag the release commit `v0.6.0-alpha.x` and prepare a GitHub Release
    (English + 简体中文 notes) that links this README section.

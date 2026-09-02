@@ -10,9 +10,10 @@ const packageJson = JSON.parse(
   devDependencies?: Record<string, string>
 }
 
-const DSH_BASELINE = '^0.1.2-alpha.2'
+const DSH_BASELINE = '^0.1.2-alpha.3'
 const DSH_PEERS = [
   '@deepseek-ai/dsh',
+  '@deepseek-ai/dsh-api-gateway',
   '@deepseek-ai/dsh-api-remotes',
   '@deepseek-ai/dsh-client-connection',
   '@deepseek-ai/dsh-client-locale',
@@ -20,6 +21,7 @@ const DSH_PEERS = [
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-settings',
   '@deepseek-ai/dsh-typert-protocol',
+  '@deepseek-ai/dsh-typert-registry',
 ]
 const HOST_RUNTIME_PEERS = [
   '@deepseek-ai/cordis',
@@ -28,7 +30,7 @@ const HOST_RUNTIME_PEERS = [
   'react',
 ]
 
-test('package metadata requires the DSH 0.1.2-alpha.2 family', () => {
+test('package metadata requires the DSH 0.1.2-alpha.3 family', () => {
   for (const name of DSH_PEERS) {
     assert.equal(packageJson.peerDependencies?.[name], DSH_BASELINE, name)
   }
@@ -38,6 +40,11 @@ test('package metadata requires the DSH 0.1.2-alpha.2 family', () => {
 })
 
 test('typechecked DSH packages use the supported host family', () => {
-  assert.equal(packageJson.devDependencies?.['@deepseek-ai/dsh-settings'], DSH_BASELINE)
-  assert.equal(packageJson.devDependencies?.['@deepseek-ai/dsh-typert-protocol'], DSH_BASELINE)
+  for (const name of [
+    '@deepseek-ai/dsh-api-gateway',
+    '@deepseek-ai/dsh-client-connection',
+    '@deepseek-ai/dsh-settings',
+    '@deepseek-ai/dsh-typert-protocol',
+    '@deepseek-ai/dsh-typert-registry',
+  ]) assert.equal(packageJson.devDependencies?.[name], DSH_BASELINE, name)
 })

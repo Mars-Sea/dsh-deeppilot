@@ -34,17 +34,21 @@
 
 | 插件版本 | 所需 DSH | 安装命令 |
 |---|---|---|
-| `0.6.0-alpha.x`（新版，`alpha` tag） | DSH `0.1.2-alpha.2` 或更高 | `dsh plugin --profile web add dsh-deeppilot@alpha` |
+| `0.6.0-alpha.x`（新版，`alpha` tag） | DSH `0.1.2-alpha.3` 或更高 | `dsh plugin --profile web add dsh-deeppilot@alpha` |
 | `0.5.x`（旧版稳定版，`latest`） | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot` |
 
 `0.6.0` alpha 系列基于 DSH
-[0.1.2-alpha.2](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.2-alpha.2)
-的 controller 与 client 包族构建，因此要求 DSH `0.1.2-alpha.2` 或更高版本
-（对应 npm `alpha` dist-tag）。更早的 DSH 版本不提供本插件依赖的 Host API；
+[0.1.2-alpha.3](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.2-alpha.3)
+的 Host 与 client 包族构建，因此要求 DSH `0.1.2-alpha.3` 或更高版本（对应
+npm `alpha` dist-tag）。alpha.3 Gateway 提供多 Client Remote Events 路由，
+使 Web 与 DeepPilot 能独立接收并处理同一交互。更早版本没有这项路由契约；
 需要更早 DSH 版本的用户请继续使用 `0.5.x` 插件。
 
+DSH `0.1.2-alpha.4` 也已验证，交互路由契约保持不变；测试证据和会话历史兼容性
+说明见 [COMPATIBILITY.md](./COMPATIBILITY.md)。
+
 ```sh
-# DSH 0.1.2-alpha.2 或更高（推荐）：
+# DSH 0.1.2-alpha.3 或更高（推荐）：
 dsh plugin --profile web add dsh-deeppilot@alpha
 # DSH 0.1.1-rc.2 至 0.1.2-alpha.1（旧版稳定）：
 dsh plugin --profile web add dsh-deeppilot
@@ -67,13 +71,13 @@ dsh plugin --profile web remove dsh-deeppilot
 
 ## 发布说明（维护者）
 
-`0.6.0-alpha.x` 面向 DSH `0.1.2-alpha.2`+；`0.5.x` 保持兼容 DSH
+`0.6.0-alpha.x` 面向 DSH `0.1.2-alpha.3`+；`0.5.x` 保持兼容 DSH
 `0.1.1-rc.2`–`0.1.2-alpha.1`，两个版本线都要保持发布：
 
 1. 同步修改 `package.json` 与 `package-lock.json` 根 `""` 条目中的
    `version`，然后运行 `npm test && npm run typecheck && npm run build`，
    并检查 `npm pack --dry-run --json`（`tests/compatibility-metadata.test.ts`
-   会强制校验 `^0.1.2-alpha.2` 的 peer 范围）。
+   会强制校验 `^0.1.2-alpha.3` 的 peer 范围）。
 2. 提交发布并推送。`npm publish` 会自动执行 `prepack`（构建）与
    `prepublishOnly`（测试 + 类型检查）。
 3. 发布 alpha 版本线，不要动 `latest`：
@@ -84,7 +88,7 @@ dsh plugin --profile web remove dsh-deeppilot
 
    发布成功后，`npm view dsh-deeppilot dist-tags --json` 应显示
    `"latest": "0.5.x"` 与 `"alpha": "0.6.0-alpha.x"`。向用户推荐前，请先在
-   DSH `0.1.2-alpha.2` profile 中安装验证发布的包。
+   DSH `0.1.2-alpha.3` profile 中安装验证发布的包。
 4. 为发布提交打 `v0.6.0-alpha.x` tag，并准备包含英文与简体中文说明的
    GitHub Release，链接本 README 的发布说明。
 5. alpha 转正时升级到 `0.6.0`，用 `npm publish --tag latest` 发布，使
