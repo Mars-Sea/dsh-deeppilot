@@ -21,10 +21,10 @@ SUMS_FILE="$BIN_DIR/SHA256SUMS"
 # supported platforms. The bundle size for every entry is roughly 6 MB
 # (compressed); the matrix below is ~36 MB on the wire.
 TARGETS="
-darwin-arm64
 darwin-amd64
-linux-arm64
+darwin-arm64
 linux-amd64
+linux-arm64
 windows-amd64
 windows-arm64
 "
@@ -59,7 +59,7 @@ for target in $TARGETS; do
   echo "==> building $target"
   ( cd "$PLUGIN_DIR/helper" && \
     GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
-      go build -trimpath -ldflags='-s -w' \
+      go build -trimpath -buildvcs=false -ldflags='-s -w' \
         -o "$OUT_DIR/$OUT_NAME" . )
   chmod 0755 "$OUT_DIR/$OUT_NAME"
   if [ "$GOOS" = "windows" ]; then
@@ -68,12 +68,13 @@ for target in $TARGETS; do
   fi
   # Compute the hash from a stable relative path so the manifest is
   # portable across checkouts.
-  REL="$target/$OUT_NAME"
+  REL="./$target/$OUT_NAME"
   ( cd "$BIN_DIR" && shasum -a 256 -- "$REL" >> "$TMP_SUMS" )
 done
 
-# Sort + dedupe, then atomically replace the published manifest.
-sort -u -o "$TMP_SUMS" "$TMP_SUMS"
+# Sort by the relative path, matching the CI merge job, then atomically replace
+# the published manifest.
+LC_ALL=C sort -u -k 2,2 -o "$TMP_SUMS" "$TMP_SUMS"
 mv "$TMP_SUMS" "$SUMS_FILE"
 echo "==> wrote $SUMS_FILE"
 cat "$SUMS_FILE"
