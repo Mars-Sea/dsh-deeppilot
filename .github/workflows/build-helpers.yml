@@ -93,6 +93,7 @@ jobs:
             Automatic refresh of the embedded Go tunnel helper for every
             supported platform/arch. Triggered by changes under `helper/`
             or the build scripts. No protocol or plugin API changes.
+          base: main
           branch: chore/helper-matrix-refresh
           add-paths: |
             bin/
