@@ -12,6 +12,8 @@
  * Transport is injectable (`fetchImpl`) so tests never touch the network.
  */
 
+import { normalizeRelayBaseUrl } from './relay-url.ts'
+
 export interface RelayTestStep {
   id: 'health' | 'enroll'
   ok: boolean
@@ -64,7 +66,7 @@ async function requestJson(
 }
 
 export async function runRelayProbe(options: RelayProbeOptions): Promise<RelayTestResult> {
-  const base = options.url.trim().replace(/\/+$/, '')
+  const base = normalizeRelayBaseUrl(options.url)
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const fetchImpl = options.fetchImpl ?? fetch
   const steps: RelayTestStep[] = []
