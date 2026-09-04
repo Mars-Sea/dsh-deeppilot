@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { encodePairingQRPayload, selectPairingTarget } from '../src/pairing-qr.ts'
+import { encodePairingQRPayload, selectPairingTargets } from '../src/pairing-qr.ts'
 
 const grant = () => ({ code: 'x'.repeat(43), expiresAt: Date.now() + 60_000, audience: 'deeppilot:test' })
 
@@ -24,28 +24,24 @@ test('pairing QR supports LAN HTTP but rejects malformed or credentialed hosts',
   assert.throws(() => encodePairingQRPayload('https://user:pass@phone.example', grant()))
 })
 
-test('pairing target prefers Funnel and falls back from loopback to a private Host address', () => {
-  assert.deepEqual(selectPairingTarget(
+test('pairing targets list the independent LAN endpoint before Funnel', () => {
+  assert.deepEqual(selectPairingTargets(
+    { phase: 'online', endpoints: ['http://192.168.1.149:3098', 'http://10.0.0.8:3098'] },
     { phase: 'online', publicURL: 'https://phone.example.ts.net' },
-    ['192.168.1.149'],
-    'http://127.0.0.1:3080',
-  ), { host: 'https://phone.example.ts.net', kind: 'public' })
-  assert.deepEqual(selectPairingTarget(
-    { phase: 'disabled' },
-    ['192.168.1.149'],
-    'http://127.0.0.1:3080',
-  ), { host: 'http://192.168.1.149:3080', kind: 'lan' })
-  assert.deepEqual(selectPairingTarget(
-    { phase: 'disabled' },
-    ['192.168.1.149'],
-    'http://macbook.local:3080',
-  ), { host: 'http://macbook.local:3080', kind: 'lan' })
+  ), [
+    { host: 'http://192.168.1.149:3098', kind: 'lan' },
+    { host: 'http://10.0.0.8:3098', kind: 'lan' },
+    { host: 'https://phone.example.ts.net', kind: 'public' },
+  ])
 })
 
-test('browsing DSH through the Funnel address stays a public target even if the phase flapped', () => {
-  assert.deepEqual(selectPairingTarget(
+test('pairing targets hide failed listeners and reject malformed reported URLs', () => {
+  assert.deepEqual(selectPairingTargets(
+    { phase: 'error', endpoints: ['http://192.168.1.149:3098'] },
     { phase: 'error', publicURL: 'https://phone.example.ts.net' },
-    ['192.168.1.149'],
-    'https://phone.example.ts.net',
-  ), { host: 'https://phone.example.ts.net', kind: 'public' })
+  ), [])
+  assert.deepEqual(selectPairingTargets(
+    { phase: 'online', endpoints: ['not a url', 'http://user:pass@192.168.1.149:3098'] },
+    { phase: 'online', publicURL: 'javascript:alert(1)' },
+  ), [])
 })

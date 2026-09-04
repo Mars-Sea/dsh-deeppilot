@@ -25,6 +25,7 @@ import type { PushTestResult, RelayTestResult } from '../report-wire.ts'
 import { injectCss } from './styles.ts'
 import { DeepPilotSettingsPage } from './settings-page.ts'
 import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, normalizeFunnelConnectionLimit } from '../funnel-policy.ts'
+import { DEFAULT_LOCAL_PORT, normalizeLocalPort } from '../local-policy.ts'
 
 export { DeepPilotSettingsPage } from './settings-page.ts'
 
@@ -48,7 +49,11 @@ type AnyCtx = Context & {
 interface SettingsScopeLike {
   getSnapshot(): {
     status: 'loading' | 'ready' | 'unavailable'
-    value?: { enabled?: boolean; remote?: { enabled?: boolean; maxConnectionsPerSource?: number; [key: string]: unknown } }
+    value?: {
+      enabled?: boolean
+      local?: { enabled?: boolean; port?: number; [key: string]: unknown }
+      remote?: { enabled?: boolean; maxConnectionsPerSource?: number; [key: string]: unknown }
+    }
     writable?: boolean
   }
   subscribe(listener: () => void): () => void
@@ -73,6 +78,16 @@ export interface EnabledState {
 export interface RemoteEnabledState {
   status: 'loading' | 'ready' | 'unavailable'
   enabled: boolean
+}
+
+export interface LocalEnabledState {
+  status: 'loading' | 'ready' | 'unavailable'
+  enabled: boolean
+}
+
+export interface LocalPortState {
+  status: 'loading' | 'ready' | 'unavailable'
+  value: number
 }
 
 export interface RemoteConnectionLimitState {
@@ -264,6 +279,18 @@ export function apply(ctx: Context): void {
     // Pre-adopt fallback so the first flip still has a sane rollback target.
     return enabledStore.getSnapshot().enabled
   }
+  const localEnabledStore = createSnapshotStore<LocalEnabledState>({ status: 'loading', enabled: true })
+  const localPortStore = createSnapshotStore<LocalPortState>({ status: 'loading', value: DEFAULT_LOCAL_PORT })
+  const lastConfirmedLocalEnabled = (): boolean => {
+    const snap = scope?.getSnapshot()
+    if (snap?.status === 'ready') return snap.value?.local?.enabled !== false
+    return localEnabledStore.getSnapshot().enabled
+  }
+  const lastConfirmedLocalPort = (): number => {
+    const snap = scope?.getSnapshot()
+    if (snap?.status === 'ready') return normalizeLocalPort(snap.value?.local?.port)
+    return localPortStore.getSnapshot().value
+  }
   const lastConfirmedRemoteEnabled = (): boolean => {
     const snap = scope?.getSnapshot()
     if (snap?.status === 'ready') return snap.value?.remote?.enabled === true
@@ -287,6 +314,49 @@ export function apply(ctx: Context): void {
       const message = error instanceof Error ? error.message : String(error)
       console.error('[deeppilot] failed to persist enabled=' + String(value) + ': ' + message)
     })
+  }
+
+  const adoptLocal = (): void => {
+    if (scope === undefined) return
+    const snap = scope.getSnapshot()
+    if (snap.status === 'ready') {
+      localEnabledStore.set({ status: 'ready', enabled: snap.value?.local?.enabled !== false })
+      localPortStore.set({ status: 'ready', value: normalizeLocalPort(snap.value?.local?.port) })
+    } else if (snap.status === 'unavailable') {
+      localEnabledStore.set({ status: 'unavailable', enabled: true })
+      localPortStore.set({ status: 'unavailable', value: DEFAULT_LOCAL_PORT })
+    }
+  }
+  if (scope !== undefined) {
+    scope.subscribe(adoptLocal)
+    adoptLocal()
+  }
+
+  const setDeepPilotLocalEnabled = (value: boolean): void => {
+    const previous = lastConfirmedLocalEnabled()
+    localEnabledStore.set({ status: 'ready', enabled: value })
+    if (scope === undefined) return
+    const currentLocal = scope.getSnapshot().value?.local ?? {}
+    void scope.set('local', { ...currentLocal, enabled: value }).then(() => {}, (error: unknown) => {
+      localEnabledStore.set({ status: 'ready', enabled: previous })
+      console.error('[deeppilot] failed to persist local.enabled=' + String(value) + ': ' + (error instanceof Error ? error.message : String(error)))
+    })
+  }
+
+  const setDeepPilotLocalPort = async (value: number): Promise<void> => {
+    const next = normalizeLocalPort(value)
+    if (next !== value) throw new RangeError('local port must be an integer between 1024 and 65535')
+    if (scope === undefined) throw new Error('settings scope unavailable')
+    const previous = lastConfirmedLocalPort()
+    localPortStore.set({ status: 'ready', value: next })
+    const currentLocal = scope.getSnapshot().value?.local ?? {}
+    try {
+      await scope.set('local', { ...currentLocal, port: next })
+    } catch (error) {
+      localPortStore.set({ status: 'ready', value: previous })
+      console.error('[deeppilot] failed to persist local.port=' + String(next) + ': ' + (error instanceof Error ? error.message : String(error)))
+      throw error
+    }
   }
 
   const remoteEnabledStore = createSnapshotStore<RemoteEnabledState>({ status: 'loading', enabled: false })
@@ -363,6 +433,8 @@ export function apply(ctx: Context): void {
         hooks: {
           deepPilotReport: store,
           deepPilotEnabled: enabledStore,
+          deepPilotLocalEnabled: localEnabledStore,
+          deepPilotLocalPort: localPortStore,
           deepPilotRemoteEnabled: remoteEnabledStore,
           deepPilotRemoteConnectionLimit: remoteConnectionLimitStore,
         },
@@ -372,6 +444,8 @@ export function apply(ctx: Context): void {
         testRelay: testRelayConnection,
         testPush: sendTestPush,
         setDeepPilotEnabled,
+        setDeepPilotLocalEnabled,
+        setDeepPilotLocalPort,
         setDeepPilotRemoteEnabled,
         setDeepPilotRemoteConnectionLimit,
         // Bound translation function for the page. The page never imports

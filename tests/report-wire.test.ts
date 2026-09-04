@@ -18,6 +18,12 @@ function validReport(extra: Record<string, unknown> = {}) {
     historyBufferMax: 2000,
     debug: false,
     lanAddresses: [],
+    local: {
+      phase: 'online' as const,
+      port: 3098,
+      endpoints: ['http://192.168.1.149:3098'],
+      updatedAt: 0,
+    },
     remote: {
       provider: 'tailscale-funnel' as const,
       phase: 'disabled' as const,
@@ -55,6 +61,9 @@ test('reportSchema rejects non-integer and negative counters', () => {
   })))
   assert.throws(() => reportSchema.parse(validReport({
     remote: { provider: 'tailscale-funnel', phase: 'online', publicURL: 'https://x.ts.net', updatedAt: -1 },
+  })))
+  assert.throws(() => reportSchema.parse(validReport({
+    local: { phase: 'online', port: -1, endpoints: [], updatedAt: 0 },
   })))
 })
 

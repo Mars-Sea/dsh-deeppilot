@@ -18,6 +18,12 @@ const reportRemote: ReportRemote = {
         historyBufferMax: 2000,
         debug: false,
         lanAddresses: [],
+        local: {
+          phase: 'online',
+          port: 3098,
+          endpoints: [],
+          updatedAt: 0,
+        },
         remote: {
           provider: 'tailscale-funnel',
           phase: 'disabled',

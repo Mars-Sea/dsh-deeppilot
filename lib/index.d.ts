@@ -561,6 +561,11 @@ interface Config {
   historyBufferMax?: number;
   /** Verbose per-frame diagnostics (never prints token or message bodies). */
   debug?: boolean;
+  /** Independent LAN transport. Never exposes the wider DSH web server. */
+  local?: {
+    enabled?: boolean;
+    port?: number;
+  };
   /** Optional embedded remote transport. Reconciled when settings change. */
   remote?: {
     enabled?: boolean;
@@ -600,6 +605,13 @@ declare const Config: z<Schemastery.ObjectS<{
   devicesPath: z<string, string>;
   historyBufferMax: z<number, number>;
   debug: z<boolean, boolean>;
+  local: z<Schemastery.ObjectS<{
+    enabled: z<boolean, boolean>;
+    port: z<number, number>;
+  }>, Schemastery.ObjectT<{
+    enabled: z<boolean, boolean>;
+    port: z<number, number>;
+  }>>;
   remote: z<Schemastery.ObjectS<{
     enabled: z<boolean, boolean>;
     provider: z<"tailscale-funnel", "tailscale-funnel">;
@@ -639,6 +651,13 @@ declare const Config: z<Schemastery.ObjectS<{
   devicesPath: z<string, string>;
   historyBufferMax: z<number, number>;
   debug: z<boolean, boolean>;
+  local: z<Schemastery.ObjectS<{
+    enabled: z<boolean, boolean>;
+    port: z<number, number>;
+  }>, Schemastery.ObjectT<{
+    enabled: z<boolean, boolean>;
+    port: z<number, number>;
+  }>>;
   remote: z<Schemastery.ObjectS<{
     enabled: z<boolean, boolean>;
     provider: z<"tailscale-funnel", "tailscale-funnel">;
@@ -693,9 +712,9 @@ declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 
 //#region src/index.d.ts
 /**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
- * clients. Registers exactly one WebSocket upgrade route (/phone) plus an
- * optional health probe (/phone/health) on the existing web server. The web
- * UI is never touched.
+ * clients. Owns independent, narrowly routed LAN and Funnel-origin listeners;
+ * temporary compatibility routes remain on the existing DSH web server. The
+ * web UI and the rest of DSH's API are never exposed by these listeners.
  *
  * Data plane: an in-process HostBridge consumes a local compatibility façade
  * over DSH 0.1.2 Session/Workspace controllers, mirrors session summaries,
@@ -706,7 +725,7 @@ declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 
  * Swift models mirror that v2 contract.
  */
 declare const name = "deeppilot";
-/** No eager service requirement: profiles without a web stack simply skip. */
+/** No eager web-service requirement: independent transports start on their own. */
 declare const inject: string[];
 declare function apply(ctx: Context, options: unknown): void;
 //#endregion

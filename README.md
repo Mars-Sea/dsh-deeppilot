@@ -31,29 +31,24 @@ Host on your own Mac and does not replace or modify the DSH Web UI.
 
 ## Install from npm
 
-Requirements: Node.js 22+, DSH with a `web` profile, and macOS. The bundled
-Funnel helper currently supports Apple silicon; trusted-LAN mode does not
-require it.
+Requirements: Node.js 22+ and DSH with a `web` profile. The package includes
+Funnel helpers for macOS, Linux, and Windows on amd64/arm64; trusted-LAN mode
+does not require the helper.
 
 | Plugin version | Required DSH | How to install |
 |---|---|---|
-| `0.6.0-alpha.x` (new, `alpha` tag) | DSH `0.1.2-alpha.3` or newer | `dsh plugin --profile web add dsh-deeppilot@alpha` |
+| `0.6.0-alpha.4` (new, `alpha` tag) | DSH `0.1.2-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot@alpha` |
 | `0.5.x` (previous stable, `latest`) | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot` |
 
-The `0.6.0` alpha line is built against the DSH
-[0.1.2-alpha.3](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.2-alpha.3)
-Host and client package family, so it requires DSH `0.1.2-alpha.3` or newer
-(its `alpha` npm dist-tag). The alpha.3 Gateway provides the multi-client
-Remote Events routing used to keep Web and DeepPilot independently answerable.
-Earlier DSH builds do not provide that routing contract. Users who need a DSH
-release before that must stay on the `0.5.x` plugin.
-
-DSH `0.1.2-alpha.4` is also verified. It retains the same interaction-routing
-contract; see [COMPATIBILITY.md](./COMPATIBILITY.md) for the tested evidence and
-its session-history compatibility note.
+`0.6.0-alpha.4` is built and typechecked against the DSH
+[0.1.2-rc.1](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.2-rc.1)
+Host and client package family. It uses the Gateway multi-client Remote Events
+routing that keeps Web and DeepPilot independently answerable. Earlier plugin
+alphas remain historical artifacts; users installing the current `alpha` tag
+should update DSH to `0.1.2-rc.1` or newer.
 
 ```sh
-# DSH 0.1.2-alpha.3 or newer (recommended):
+# DSH 0.1.2-rc.1 or newer (recommended):
 dsh plugin --profile web add dsh-deeppilot@alpha
 # DSH 0.1.1-rc.2 through 0.1.2-alpha.1 (previous stable):
 dsh plugin --profile web add dsh-deeppilot
@@ -63,6 +58,11 @@ dsh web
 After DSH restarts, open **Settings → DeepPilot**, enable the connection, show
 the pairing QR code, and scan it in the DeepPilot app. The same panel also
 shows a copyable pairing code for Simulator or manual entry.
+
+LAN access is enabled by default on the plugin's independent TCP port `3098`.
+DSH may continue listening only on `127.0.0.1:3080`; do not expose the full DSH
+web server. If a firewall is enabled, allow inbound TCP `3098` on trusted
+private networks. The port can be changed under **Advanced settings**.
 
 Package: [npmjs.com/package/dsh-deeppilot](https://www.npmjs.com/package/dsh-deeppilot)
 
@@ -78,13 +78,13 @@ DeepPilot state under `$DSH_HOME/deeppilot/`.
 
 ## Publishing (maintainers)
 
-`0.6.0-alpha.x` targets DSH `0.1.2-alpha.3`+; `0.5.x` stays compatible with
+`0.6.0-alpha.4` targets DSH `0.1.2-rc.1`+; `0.5.x` stays compatible with
 DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep both published:
 
 1. Bump `version` in `package.json` and in the root `""` entry of
    `package-lock.json`, then run `npm test && npm run typecheck && npm run build`
    and inspect `npm pack --dry-run --json` (the check
-   `tests/compatibility-metadata.test.ts` enforces the `^0.1.2-alpha.3` peer
+   `tests/compatibility-metadata.test.ts` enforces the `^0.1.2-rc.1` peer
    ranges).
 2. Commit the release and push it. `npm publish` runs `prepack` (build) and
    `prepublishOnly` (test + typecheck) automatically.
@@ -96,7 +96,7 @@ DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep both published:
 
    After a successful publish, `npm view dsh-deeppilot dist-tags --json` shows
    `"latest": "0.5.x"` and `"alpha": "0.6.0-alpha.x"`. Verify the published
-   package by installing it into a DSH `0.1.2-alpha.3` profile before pointing
+   package by installing it into a DSH `0.1.2-rc.1` profile before pointing
    users at it.
 4. Tag the release commit `v0.6.0-alpha.x` and prepare a GitHub Release
    (English + 简体中文 notes) that links this README section.
@@ -110,9 +110,10 @@ Never run `npm publish` from a copy that still has the old `0.5.x` version.
 ## Connection and privacy
 
 Conversation traffic travels directly between the iPhone and your DSH Host.
-Trusted-LAN `ws://` traffic is unencrypted, so use it only on a network you
-trust. Optional Funnel mode exposes only the DeepPilot connection, one-time
-pairing, and health endpoints, not the complete DSH Web UI.
+Trusted-LAN `ws://` traffic on the independent plugin port `3098` is
+unencrypted, so use it only on a network you trust. Both the LAN listener and
+optional Funnel mode expose only the DeepPilot connection, one-time pairing,
+and health endpoints, not the complete DSH Web UI.
 
 The DeepPilot settings page exposes **Connections per public source** under
 the collapsed **Advanced settings** section. It defaults to `8`, accepts

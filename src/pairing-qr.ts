@@ -17,42 +17,38 @@ export interface PairingTarget {
   kind: 'public' | 'lan'
 }
 
-function isLoopbackHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase()
-  return normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === '[::1]' || normalized === '::1' || normalized.startsWith('127.')
+/**
+ * Return every explicit DeepPilot transport target. LAN comes first because
+ * it is private and lower latency; an online Funnel remains available as a
+ * separate choice instead of silently replacing the local address.
+ */
+export function selectPairingTargets(
+  local: { phase: string; endpoints: string[] },
+  remote: { phase: string; publicURL?: string },
+): PairingTarget[] {
+  const targets: PairingTarget[] = []
+  if (local.phase === 'online') {
+    for (const host of local.endpoints) {
+      if (validTargetHost(host)) targets.push({ host, kind: 'lan' })
+    }
+  }
+  if (remote.phase === 'online' && remote.publicURL && validTargetHost(remote.publicURL)) {
+    targets.push({ host: remote.publicURL, kind: 'public' })
+  }
+  const seen = new Set<string>()
+  return targets.filter(({ host }) => !seen.has(host) && seen.add(host))
 }
 
-/** Prefer an online Funnel; otherwise turn the current web origin into a LAN target. */
-export function selectPairingTarget(
-  remote: { phase: string; publicURL?: string },
-  lanAddresses: string[],
-  currentOrigin?: string,
-): PairingTarget | null {
-  let origin: URL | undefined
+function validTargetHost(value: string): boolean {
   try {
-    if (currentOrigin) origin = new URL(currentOrigin)
+    const parsed = new URL(value)
+    return ['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)
+      && parsed.hostname !== ''
+      && parsed.username === ''
+      && parsed.password === ''
   } catch {
-    // Fall through to the Host-reported address.
+    return false
   }
-
-  // Browsing DSH through the Funnel address itself is a public target even
-  // when the report's phase flapped between refresh ticks.
-  if (remote.publicURL && origin?.origin === remote.publicURL) {
-    return { host: remote.publicURL, kind: 'public' }
-  }
-  if (remote.phase === 'online' && remote.publicURL) {
-    return { host: remote.publicURL, kind: 'public' }
-  }
-
-  if (origin && ['http:', 'https:'].includes(origin.protocol) && !isLoopbackHostname(origin.hostname)) {
-    return { host: origin.origin, kind: 'lan' }
-  }
-
-  const address = lanAddresses[0]
-  if (!address) return null
-  const protocol = origin?.protocol === 'https:' ? 'https:' : 'http:'
-  const port = origin?.port ? `:${origin.port}` : ''
-  return { host: `${protocol}//${address}${port}`, kind: 'lan' }
 }
 
 /** Encode a short-lived, single-use pairing grant without URL credentials. */

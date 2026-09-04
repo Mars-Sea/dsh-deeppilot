@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { access, mkdir } from 'node:fs/promises'
+import { access, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
@@ -43,6 +43,15 @@ interface HelperEvent {
 }
 
 const RESTART_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
+/**
+ * When the helper dies with a Go panic, the supervisor keeps only the last
+ * 2KB of stderr for the status message — enough for a summary but not for the
+ * full goroutine dump that would pinpoint the crash (and be needed to report
+ * upstream). Each crash therefore also writes the full stderr into the state
+ * directory as crash-<millis>.log (0600), and the log line points at it.
+ * Only the newest dumps are retained to bound disk usage.
+ */
+export const MAX_CRASH_DUMPS = 6
 /**
  * Throttle for configuration-level failures (helper binary missing, state dir
  * unwritable). The environment will not self-heal between attempts, so the
@@ -89,6 +98,166 @@ export function tunnelHelperArguments(
     '--port', String(options.funnelPort ?? 443),
     '--max-connections-per-source', String(normalizeFunnelConnectionLimit(options.maxConnectionsPerSource)),
   ]
+}
+
+/**
+ * Summarize a fatal helper crash from its stderr tail. Go panics dump the
+ * actual reason on the `panic:` line while the trailing stack frames are
+ * `file.go:NN +0xOFF` noise — the old behavior of reporting only the final
+ * line surfaced exactly that noise (e.g. `.../singleflight.go:194 +0x45c`)
+ * and hid the real panic message. Keep the crash header line (a raw
+ * `panic:`, a runtime `fatal error:`, or net/http's `http: panic serving`),
+ * plus an optional `[signal ...]` continuation and the first non-runtime
+ * stack frame's symbol + `file.go:NN` as a location hint. Pointer offsets
+ * are not architecture stable, so they are deliberately dropped.
+ *
+ * The frame symbol sits on the line just above the indented source line in a
+ * Go dump, e.g.:
+ *   tailscale.com/net/dnscache.(*Resolver).lookupIP(0x1400012c000, {...})
+ *       tailscale.com@v1.102.3/net/dnscache/dnscache.go:604 +0x25c
+ * The first symbol (shortened) is used because a bare `file.go:NN` is not
+ * unique across tailscale (singleflight.go is one example).
+ */
+export function helperCrashSummary(stderr: string): string {
+  const lines = stderr.split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!.trim()
+    if (line === '') continue
+    // `panic:` line, a runtime `fatal error:`, or net/http's
+    // `http: panic serving` (optionally prefixed by Go's log timestamp).
+    const logTimestamp = /^(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} )/.exec(line)?.[1] ?? ''
+    if (!/^(panic:|fatal error:|http: panic serving)/.test(logTimestamp.length > 0 ? line.slice(logTimestamp.length) : line)) {
+      continue
+    }
+    let summary = logTimestamp.length > 0 ? line.slice(logTimestamp.length) : line
+    const next = lines[i + 1]?.trim()
+    if (next?.startsWith('[signal')) summary += ' ' + next
+    // Walk the dump for the first non-runtime frame: symbol line followed by
+    // an indented `path/file.go:NN` source line. Track the last symbol seen
+    // before each source line.
+    let lastSymbol: string | undefined
+    for (let j = i + 1; j < lines.length; j++) {
+      const frame = lines[j]!
+      const trimmed = frame.trim()
+      if (trimmed === '') continue
+      // A symbol/argument line: `package.(*Type).method(args)` — not a source
+      // line (which is indented and ends with `file.go:NN +0x…`). Take the
+      // last symbol preceding a source line; the first source line after the
+      // crash header is the crash point.
+      const sourceMatch = /^\s+(\S+\.go:\d+)/.exec(frame)
+      if (sourceMatch !== null) {
+        const source = sourceMatch[1]!
+        if (source.startsWith('runtime/') || source.startsWith('runtime\\')) {
+          // runtime/debug.Stack() noise — skip to the next frame.
+          lastSymbol = undefined
+          continue
+        }
+        const slash = Math.max(source.lastIndexOf('/'), source.lastIndexOf('\\'))
+        const file = slash >= 0 ? source.slice(slash + 1) : source
+        const symbol = lastSymbol !== undefined ? shortenSymbol(lastSymbol) : undefined
+        summary += ' @ ' + (symbol !== undefined ? `${symbol} (${file})` : file)
+        break
+      }
+      // Otherwise this is a frame symbol (or a goroutine heading / created-by
+      // note); remember the last one so the following source line can pair.
+      if (trimmed.includes('(') || trimmed.endsWith(')')) {
+        lastSymbol = trimmed
+      }
+    }
+    return summary.replace(/\s+/g, ' ').trim()
+  }
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim()
+    if (line !== '') return line
+  }
+  return ''
+}
+
+/** Shrink a Go frame symbol to `pkg.Receiver.method` form (drop module-root
+ *  path, generic type arguments and the trailing call arguments), so the
+ *  summary hint stays readable. Keeps a `.funcN` closure suffix when present
+ *  (e.g. `doCall.func2`), since it identifies the exact closure.
+ *
+ *  A symbol looks like:
+ *    tailscale.com/util/singleflight.(*Group[...]).doCall.func2(0x…, …)
+ *  The trailing call arguments form a balanced paren group that starts at
+ *  the function name — that group is stripped first; generics appear only
+ *  inside `(*Group[...])` receiver brackets before the final method dot, so
+ *  they are removed by trimming from the first `[` to the matching `]`.
+ */
+export function shortenSymbol(symbol: string): string {
+  const trimmed = symbol.trim()
+  let end = trimmed.length
+  if (trimmed.endsWith(')')) {
+    let depth = 0
+    for (let i = trimmed.length - 1; i >= 0; i--) {
+      const ch = trimmed[i]!
+      if (ch === ')') depth++
+      else if (ch === '(') {
+        depth--
+        if (depth === 0) {
+          end = i
+          break
+        }
+      }
+    }
+  }
+  let name = trimmed.slice(0, end).trim()
+  // Remove generic instantiations `[...]` inside receiver/type brackets.
+  const bracketOpen = name.indexOf('[')
+  if (bracketOpen >= 0) {
+    const bracketClose = name.indexOf(']', bracketOpen)
+    if (bracketClose > bracketOpen) {
+      name = name.slice(0, bracketOpen) + name.slice(bracketClose + 1)
+    }
+  }
+  // Keep only the last path segment (after the final /).
+  const slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'))
+  return slash >= 0 ? name.slice(slash + 1) : name
+}
+
+/** A normalized fatal-crash analysis used by the exit handler to produce a
+ *  bounded status message and, when a full dump is available, persist it. */
+export interface CrashAnalysis {
+  summary: string
+  dumpPath?: string
+}
+
+/** Shared by crash summary and dump: whether the stderr looks like a Go
+ *  panic/fatal-error crash (vs. an ordinary exit). */
+function looksLikeCrash(stderr: string): boolean {
+  return /(?:^|\n)\s*(?:\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} )?(?:panic:|fatal error:|http: panic serving)/.test(stderr)
+}
+
+/** Turn a crash stderr tail into a status message and optionally persist the
+ *  full dump under the state dir. Keeps at most MAX_CRASH_DUMPS dump files. */
+export async function analyzeCrashExit(stderr: string, statePath: string): Promise<CrashAnalysis> {
+  const summary = helperCrashSummary(stderr) || 'helper exited'
+  if (!looksLikeCrash(stderr) || stderr.trim() === '') return { summary }
+  const target = statePath.trim()
+  if (target === '') return { summary }
+  try {
+    const file = join(target, `crash-${Date.now()}.log`)
+    await writeFile(file, stderr, { mode: 0o600 })
+    await trimCrashDumps(target)
+    return { summary, dumpPath: file }
+  } catch {
+    return { summary }
+  }
+}
+
+/** Remove oldest crash-*.log files beyond MAX_CRASH_DUMPS. */
+async function trimCrashDumps(dir: string): Promise<void> {
+  let names: string[]
+  try {
+    names = (await readdir(dir)).filter((name) => name.startsWith('crash-') && name.endsWith('.log'))
+  } catch {
+    return
+  }
+  if (names.length <= MAX_CRASH_DUMPS) return
+  names.sort()
+  const excess = names.length - MAX_CRASH_DUMPS
+  await Promise.all(names.slice(0, excess).map((name) => rm(join(dir, name), { force: true }).catch(() => {})))
 }
 
 /** Parse one helper IPC line without ever evaluating or interpolating it. */
@@ -266,27 +435,32 @@ export class RemoteSupervisor {
       for (const line of lines) this.acceptLine(line)
     })
 
+    // Keep enough stderr to write a full crash dump on exit; the summary the
+    // user sees is derived from this buffer.
     let stderrBuffer = ''
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk: string) => {
-      stderrBuffer = (stderrBuffer + chunk).slice(-2_000)
+      stderrBuffer = (stderrBuffer + chunk).slice(-16_000)
     })
 
     child.once('error', (error) => {
       this.setStatus({ phase: 'error', message: `helper launch failed: ${String(error)}` })
     })
-    child.once('exit', (code, signal) => {
+    child.once('exit', () => {
       if (this.child === child) this.child = undefined
       if (this.stopping) {
         this.setStatus({ phase: 'stopped', message: undefined })
         return
       }
-      const detail = stderrBuffer.trim().split('\n').at(-1)
-      this.setStatus({
-        phase: 'error',
-        message: detail || `helper exited (${signal ?? String(code)})`,
+      void analyzeCrashExit(stderrBuffer, this.options.statePath).then((analysis) => {
+        if (this.stopping) return
+        const message = analysis.summary + (analysis.dumpPath !== undefined ? ` (full dump: ${analysis.dumpPath})` : '')
+        this.setStatus({
+          phase: 'error',
+          message,
+        })
+        this.scheduleRestart(originURL, 'crash')
       })
-      this.scheduleRestart(originURL, 'crash')
     })
   }
 

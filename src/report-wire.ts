@@ -94,6 +94,14 @@ export interface DeepPilotReport {
   debug: boolean
   /** Private IPv4 candidates for local QR pairing. */
   lanAddresses: string[]
+  /** Independent LAN listener; this never represents DSH's own web port. */
+  local: {
+    phase: 'disabled' | 'starting' | 'online' | 'error' | 'stopped'
+    port: number
+    endpoints: string[]
+    message?: string
+    updatedAt: number
+  }
   remote: {
     provider: 'tailscale-funnel'
     phase: 'disabled' | 'starting' | 'login_required' | 'online' | 'error' | 'unavailable' | 'stopped'
@@ -197,6 +205,24 @@ function parseRemote(value: unknown): DeepPilotReport['remote'] {
   }
 }
 
+function parseLocal(value: unknown): DeepPilotReport['local'] {
+  const s = rec(value, 'local')
+  const phase = str(s, 'phase', 'local.phase')
+  const phases = ['disabled', 'starting', 'online', 'error', 'stopped']
+  if (!phases.includes(phase)) reject('local.phase')
+  const endpoints = s.endpoints
+  if (!Array.isArray(endpoints) || endpoints.some((entry) => typeof entry !== 'string')) reject('local.endpoints')
+  const message = s.message
+  if (message !== undefined && typeof message !== 'string') reject('local.message')
+  return {
+    phase: phase as DeepPilotReport['local']['phase'],
+    port: int(s, 'port', 'local.port'),
+    endpoints: endpoints as string[],
+    ...(typeof message === 'string' ? { message } : {}),
+    updatedAt: int(s, 'updatedAt', 'local.updatedAt'),
+  }
+}
+
 function parseRelayTestStep(value: unknown): RelayTestStep {
   const st = rec(value, 'step')
   const id = str(st, 'id', 'step.id')
@@ -290,6 +316,7 @@ function parseReport(value: unknown): DeepPilotReport {
     historyBufferMax: int(s, 'historyBufferMax', 'historyBufferMax'),
     debug: bool(s, 'debug', 'debug'),
     lanAddresses: lanAddresses as string[],
+    local: parseLocal(s.local),
     remote: parseRemote(s.remote),
     devices: (devices as unknown[]).map(parseDevice),
   }

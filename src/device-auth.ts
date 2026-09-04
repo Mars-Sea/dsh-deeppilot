@@ -9,7 +9,9 @@ import {
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-export const PAIRING_CODE_TTL_MS = 5 * 60_000
+export function getPairingCodeTtlMs(): number {
+  return Number(process.env.DEEPPILOT_PAIRING_TTL_MS) || 5 * 60_000
+}
 export const AUTH_CHALLENGE_TTL_MS = 30_000
 
 export const DEVICE_SCOPES = [
@@ -132,7 +134,7 @@ export class PairingCodeManager {
   issue(now = Date.now()): PairingGrant {
     const grant = {
       code: randomBytes(24).toString('base64url'),
-      expiresAt: now + PAIRING_CODE_TTL_MS,
+      expiresAt: now + getPairingCodeTtlMs(),
     }
     this.active = grant
     return { ...grant }

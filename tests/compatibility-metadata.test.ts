@@ -10,7 +10,7 @@ const packageJson = JSON.parse(
   devDependencies?: Record<string, string>
 }
 
-const DSH_BASELINE = '^0.1.2-alpha.3'
+const DSH_BASELINE = '^0.1.2-rc.1'
 const DSH_PEERS = [
   '@deepseek-ai/dsh',
   '@deepseek-ai/dsh-api-gateway',
@@ -30,7 +30,7 @@ const HOST_RUNTIME_PEERS = [
   'react',
 ]
 
-test('package metadata requires the DSH 0.1.2-alpha.3 family', () => {
+test('package metadata requires the DSH 0.1.2-rc.1 family', () => {
   for (const name of DSH_PEERS) {
     assert.equal(packageJson.peerDependencies?.[name], DSH_BASELINE, name)
   }

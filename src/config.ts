@@ -5,6 +5,7 @@ import {
 } from './remote-supervisor.ts'
 import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, MAX_FUNNEL_CONNECTIONS_PER_SOURCE } from './funnel-policy.ts'
 import { bridgeDataDir } from './token.ts'
+import { DEFAULT_LOCAL_PORT, MAX_LOCAL_PORT, MIN_LOCAL_PORT } from './local-policy.ts'
 
 export interface Config {
   /** Master switch; when false the plugin activates and does nothing. */
@@ -15,6 +16,11 @@ export interface Config {
   historyBufferMax?: number
   /** Verbose per-frame diagnostics (never prints token or message bodies). */
   debug?: boolean
+  /** Independent LAN transport. Never exposes the wider DSH web server. */
+  local?: {
+    enabled?: boolean
+    port?: number
+  }
   /** Optional embedded remote transport. Reconciled when settings change. */
   remote?: {
     enabled?: boolean
@@ -58,6 +64,17 @@ export const Config = z.object({
   devicesPath: z.string().default(join(bridgeDataDir(), 'devices-v2.json')),
   historyBufferMax: z.natural().min(100).default(2000),
   debug: z.boolean().default(false),
+  local: z.object({
+    enabled: z.boolean().default(true),
+    port: z.natural()
+      .min(MIN_LOCAL_PORT)
+      .max(MAX_LOCAL_PORT)
+      .default(DEFAULT_LOCAL_PORT)
+      .description('DeepPilot 局域网独立端口（默认 3098，修改后本地连接会短暂重连）'),
+  }).default({
+    enabled: true,
+    port: DEFAULT_LOCAL_PORT,
+  }),
   remote: z.object({
     enabled: z.boolean().default(false),
     provider: z.union(['tailscale-funnel'] as const).default('tailscale-funnel'),

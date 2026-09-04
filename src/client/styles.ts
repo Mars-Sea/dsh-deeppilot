@@ -26,6 +26,8 @@ const CSS = [
   '.pbb-action{font:inherit;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:none;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;padding:3px 8px}',
   '.pbb-action:hover:not(:disabled){color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-module-platform)}',
   '.pbb-action:disabled{cursor:default;opacity:.5}',
+  '.pbb-actionSelected{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-state-success-primary,#22a06b);background:var(--dsw-alias-bg-module-platform)}',
+  '.pbb-targetList{display:flex;flex-wrap:wrap;gap:6px;padding-top:4px}',
   '.pbb-actionDanger{color:#fff;background:#dc2626;border-color:#dc2626;line-height:1.35;padding:4px 10px;box-shadow:0 1px 2px rgba(127,29,29,.18);transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease,transform .1s ease}',
   '.pbb-actionDanger:hover:not(:disabled){color:#fff;background:#b91c1c;border-color:#b91c1c;box-shadow:0 2px 5px rgba(127,29,29,.24)}',
   '.pbb-actionDanger:active:not(:disabled){background:#991b1b;border-color:#991b1b;box-shadow:0 1px 2px rgba(127,29,29,.2);transform:translateY(1px)}',

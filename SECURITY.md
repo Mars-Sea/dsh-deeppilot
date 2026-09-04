@@ -17,8 +17,8 @@ Do not open a public issue containing pairing codes, APNs device tokens, provide
 - Protocol v1, shared Bearer tokens, query credentials, and `c2s.hello.auth` are not accepted. There is no remote downgrade switch.
 - The server enforces explicit protocol scopes, while the normal settings UI grants the default scope set and exposes only the global connection switch plus per-device deletion. Deleting a device disconnects it immediately.
 - The canonical `$DSH_HOME/deeppilot` directory is repaired to mode `0700`. `host-id` and `devices-v2.json` are owner-only.
-- LAN `ws://` is unencrypted. Use it only on a trusted network. Public access should use Funnel HTTPS/WSS.
-- The Funnel helper publishes only `/phone`, `/phone/pair`, and `/phone/health`, never the complete DSH Web UI.
+- LAN `ws://` on the independent plugin port (default `3098`) is unencrypted. Use it only on a trusted network and never forward that port to the public Internet. Public access should use Funnel HTTPS/WSS.
+- The LAN listener and Funnel helper publish only `/phone`, `/phone/pair`, and `/phone/health`, never the complete DSH Web UI.
 - Logs must never include pairing codes, key material, APNs tokens, or message bodies.
 
 ## Online attack controls

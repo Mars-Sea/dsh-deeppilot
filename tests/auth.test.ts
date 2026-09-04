@@ -64,6 +64,9 @@ test('P-256 challenge proof binds every canonical authentication field', () => {
 })
 
 test('configuration rejects unsupported providers and Funnel ports', () => {
+  assert.throws(() => Config({ local: { port: 1023 } } as never), TypeError)
+  assert.throws(() => Config({ local: { port: 65_536 } } as never), TypeError)
+  assert.throws(() => Config({ local: { port: 3098.5 } } as never), TypeError)
   assert.throws(() => Config({ remote: { provider: 'typo' } } as never), TypeError)
   assert.throws(() => Config({ remote: { funnelPort: 444 } } as never), TypeError)
   assert.throws(() => Config({ push: { provider: 'apnz' } } as never), TypeError)
@@ -71,6 +74,9 @@ test('configuration rejects unsupported providers and Funnel ports', () => {
   assert.throws(() => Config({ remote: { maxConnectionsPerSource: 17 } } as never), TypeError)
   assert.throws(() => Config({ remote: { maxConnectionsPerSource: 1.5 } } as never), TypeError)
   assert.equal(Config({ remote: { funnelPort: 8443 }, push: { provider: 'relay' } }).remote.funnelPort, 8443)
+  assert.equal(Config({}).local.enabled, true)
+  assert.equal(Config({}).local.port, 3098)
+  assert.equal(Config({ local: { port: 4098 } }).local.port, 4098)
   assert.equal(Config({}).remote.maxConnectionsPerSource, 8)
   assert.equal(Config({ remote: { maxConnectionsPerSource: 12 } }).remote.maxConnectionsPerSource, 12)
 })

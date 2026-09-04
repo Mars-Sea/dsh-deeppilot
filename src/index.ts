@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -13,7 +13,7 @@ import { Dsh012ApiProxy, type DshInteractionKind } from './dsh012-api-proxy.ts'
 import type { SettingsSectionHooks } from '@deepseek-ai/dsh-settings'
 import { applyReportRemote } from './report-remote.ts'
 import { runRelayProbe } from './relay-test.ts'
-import type { PushTestResult } from './report-wire.ts'
+import type { DeepPilotReport, PushTestResult } from './report-wire.ts'
 import { DeviceStore, MAX_DEVICES, bridgeDataDir, ensurePrivateBridgeDataDir, expandHome, migrateLegacyBridgeDataDir } from './token.ts'
 import type { ApnsEnvironment } from './token.ts'
 import {
@@ -40,12 +40,14 @@ import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import { shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
 import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
+import { DEFAULT_LOCAL_PORT, localEndpointURLs, localListenError, normalizeLocalPort } from './local-policy.ts'
+import { closeServer, createPhoneServer, listen } from './phone-server.ts'
 
 /**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
- * clients. Registers exactly one WebSocket upgrade route (/phone) plus an
- * optional health probe (/phone/health) on the existing web server. The web
- * UI is never touched.
+ * clients. Owns independent, narrowly routed LAN and Funnel-origin listeners;
+ * temporary compatibility routes remain on the existing DSH web server. The
+ * web UI and the rest of DSH's API are never exposed by these listeners.
  *
  * Data plane: an in-process HostBridge consumes a local compatibility façade
  * over DSH 0.1.2 Session/Workspace controllers, mirrors session summaries,
@@ -62,7 +64,7 @@ export { HostBridge } from './host-bridge.ts'
 export { Config } from './config.ts'
 export { shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
 
-/** No eager service requirement: profiles without a web stack simply skip. */
+/** No eager web-service requirement: independent transports start on their own. */
 export const inject: string[] = []
 
 
@@ -134,6 +136,7 @@ export function apply(ctx: Context, options: unknown): void {
    */
   let liveSource: (() => Config) | undefined
   let scheduleRemoteReconcile: (() => void) | undefined
+  let scheduleLocalReconcile: (() => void) | undefined
   const currentConfig = (): Config => {
     if (liveSource !== undefined) return normalizeOptions(liveSource())
     return normalizeOptions(options)
@@ -148,12 +151,17 @@ export function apply(ctx: Context, options: unknown): void {
   const settingsHooks: SettingsSectionHooks<PluginConfig> = {
     setSource: (source) => {
       liveSource = source
-      // Settings can attach after webServer. Defer one microtask so the
-      // settings service can finish publishing the new source before the
-      // remote runtime reads it.
-      queueMicrotask(() => scheduleRemoteReconcile?.())
+      // Defer one microtask so the settings service can finish publishing the
+      // new source before either transport runtime reads it.
+      queueMicrotask(() => {
+        scheduleLocalReconcile?.()
+        scheduleRemoteReconcile?.()
+      })
     },
-    onChange: () => queueMicrotask(() => scheduleRemoteReconcile?.()),
+    onChange: () => queueMicrotask(() => {
+      scheduleLocalReconcile?.()
+      scheduleRemoteReconcile?.()
+    }),
   }
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.settings.installSection(
@@ -620,6 +628,16 @@ export function apply(ctx: Context, options: unknown): void {
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES })
   let remoteSupervisor: RemoteSupervisor | undefined
+  let localState: DeepPilotReport['local'] = {
+    phase: currentConfig().enabled === true && currentConfig().local?.enabled !== false ? 'starting' : 'disabled',
+    port: normalizeLocalPort(currentConfig().local?.port),
+    endpoints: [],
+    updatedAt: Date.now(),
+  }
+  const localStatus = (addresses: readonly string[]): DeepPilotReport['local'] => ({
+    ...localState,
+    endpoints: localState.phase === 'online' ? localEndpointURLs(addresses, localState.port) : [],
+  })
   const remoteStatus = (): RemoteStatus => remoteSupervisor?.status() ?? {
     provider: 'tailscale-funnel',
     phase: currentConfig().remote?.enabled === true ? 'stopped' : 'disabled',
@@ -664,6 +682,7 @@ export function apply(ctx: Context, options: unknown): void {
       // degraded: report the minimum without token facts
     }
     const update = updateInfo()
+    const lanAddresses = localLANIPv4Addresses()
     return {
       protocolVersion: 2,
       serverVersion: SERVER_VERSION,
@@ -676,7 +695,8 @@ export function apply(ctx: Context, options: unknown): void {
       activeConnections: connections.size,
       historyBufferMax: currentConfig().historyBufferMax ?? 2000,
       debug: currentConfig().debug === true,
-      lanAddresses: localLANIPv4Addresses(),
+      lanAddresses,
+      local: localStatus(lanAddresses),
       remote: remoteStatus(),
       devices,
     }
@@ -935,6 +955,156 @@ export function apply(ctx: Context, options: unknown): void {
     }
   }
 
+  const phoneHandlers = {
+    health: handleHealth,
+    pair: handlePair,
+    upgrade: handleUpgrade,
+  }
+
+  // Independent transport listeners. LAN owns a stable configurable port;
+  // Funnel keeps its loopback-only ephemeral origin. They share only the
+  // narrow handlers above, so a LAN bind failure cannot take remote access
+  // down and neither listener exposes DSH's wider web/API surface.
+  let localServer: ReturnType<typeof createPhoneServer> | undefined
+  let appliedLocalKey: string | undefined
+  let localDisposed = false
+  let localTail = Promise.resolve()
+  const reconcileLocal = async (): Promise<void> => {
+    if (localDisposed) return
+    const config = currentConfig()
+    const localConfig = config.local ?? {}
+    const next = {
+      enabled: config.enabled === true && localConfig.enabled !== false,
+      port: normalizeLocalPort(localConfig.port),
+    }
+    const nextKey = JSON.stringify(next)
+    if (nextKey === appliedLocalKey) return
+    appliedLocalKey = nextKey
+
+    const previous = localServer
+    localServer = undefined
+    await closeServer(previous)
+    if (localDisposed) return
+    if (!next.enabled) {
+      localState = { phase: 'disabled', port: next.port, endpoints: [], updatedAt: Date.now() }
+      log('local transport disabled')
+      return
+    }
+
+    localState = { phase: 'starting', port: next.port, endpoints: [], updatedAt: Date.now() }
+    const server = createPhoneServer(phoneHandlers)
+    localServer = server
+    try {
+      await listen(server, next.port, '0.0.0.0')
+      if (localDisposed || localServer !== server) {
+        await closeServer(server)
+        return
+      }
+      localState = { phase: 'online', port: next.port, endpoints: [], updatedAt: Date.now() }
+      log(`local transport listening on 0.0.0.0:${next.port}`)
+    } catch (error) {
+      if (localServer === server) localServer = undefined
+      await closeServer(server)
+      const message = localListenError(error, next.port)
+      localState = { phase: 'error', port: next.port, endpoints: [], message, updatedAt: Date.now() }
+      log('local transport failed: ' + message)
+    }
+  }
+  scheduleLocalReconcile = () => {
+    localTail = localTail
+      .then(reconcileLocal)
+      .catch((error) => log('local reconcile failed: ' + String(error)))
+  }
+
+  const originServer = createPhoneServer(phoneHandlers)
+  let originURL: string | undefined
+  let appliedRemoteKey: string | undefined
+  let remoteDisposed = false
+  let remoteTail = Promise.resolve()
+  const reconcileRemote = async (): Promise<void> => {
+    if (remoteDisposed || originURL === undefined) return
+    const config = currentConfig()
+    const remoteConfig = config.remote ?? {}
+    const remotePort: 443 | 8443 | 10000 = remoteConfig.funnelPort === 8443 || remoteConfig.funnelPort === 10000
+      ? remoteConfig.funnelPort
+      : 443
+    const helperPath = remoteConfig.helperPath?.trim() || undefined
+    const next = {
+      enabled: config.enabled === true && remoteConfig.enabled === true && remoteConfig.provider === 'tailscale-funnel',
+      hostname: normalizeRemoteHostname(remoteConfig.hostname),
+      statePath: remoteConfig.statePath?.trim() || join(dataDir, 'tailscale'),
+      helperPath,
+      funnelPort: remotePort,
+      maxConnectionsPerSource: normalizeFunnelConnectionLimit(remoteConfig.maxConnectionsPerSource),
+    }
+    const nextKey = JSON.stringify(next)
+    if (nextKey === appliedRemoteKey) return
+
+    const previous = remoteSupervisor
+    remoteSupervisor = undefined
+    if (previous !== undefined) await previous.dispose()
+    if (remoteDisposed) return
+
+    const supervisor = new RemoteSupervisor({
+      enabled: next.enabled,
+      hostname: next.hostname,
+      statePath: next.statePath,
+      ...(next.helperPath ? { helperPath: next.helperPath } : {}),
+      funnelPort: next.funnelPort,
+      maxConnectionsPerSource: next.maxConnectionsPerSource,
+      log,
+    })
+    remoteSupervisor = supervisor
+    appliedRemoteKey = nextKey
+    await supervisor.start(originURL)
+  }
+  scheduleRemoteReconcile = () => {
+    remoteTail = remoteTail
+      .then(reconcileRemote)
+      .catch((error) => log('remote reconcile failed: ' + String(error)))
+  }
+
+  ;(ctx as unknown as SubContext).effect(() => {
+    scheduleLocalReconcile?.()
+    void listen(originServer, 0, '127.0.0.1').then(() => {
+      const address = originServer.address()
+      if (address && typeof address === 'object') {
+        originURL = `http://127.0.0.1:${address.port}`
+        scheduleRemoteReconcile?.()
+      }
+    }, (error: unknown) => log('remote origin failed: ' + String(error)))
+    return async () => {
+      localDisposed = true
+      remoteDisposed = true
+      scheduleLocalReconcile = undefined
+      scheduleRemoteReconcile = undefined
+      const activeLocal = localServer
+      localServer = undefined
+      await Promise.allSettled([closeServer(activeLocal), closeServer(originServer)])
+      localState = { phase: 'stopped', port: localState.port, endpoints: [], updatedAt: Date.now() }
+      await Promise.allSettled([
+        localTail,
+        remoteTail.then(async () => {
+          const supervisor = remoteSupervisor
+          remoteSupervisor = undefined
+          if (supervisor !== undefined) await supervisor.dispose()
+        }),
+      ])
+    }
+  }, 'deeppilot: independent transports')
+
+  const sweep = setInterval(() => {
+    const now = Date.now()
+    for (const connection of connections) {
+      if (connection.isStale(now, 60_000)) {
+        log('dropping stale connection')
+        connection.closeIdle()
+        connections.delete(connection)
+      }
+    }
+  }, 30_000)
+  ;(ctx as unknown as SubContext).effect(() => () => clearInterval(sweep), 'deeppilot: stale sweep')
+
   // Data plane: dsh 0.1.2 removed apiProxy. Build the bridge's stable
   // protocol-facing façade from the public Session/Workspace controllers.
 
@@ -978,14 +1148,15 @@ export function apply(ctx: Context, options: unknown): void {
     },
   )
 
-  // Transport plane: /phone WebSocket + /phone/health probe.
+  // Temporary 3080 compatibility plane. New clients use the independent LAN
+  // listener above; these DSH routes remain for one migration cycle.
   ;(ctx as unknown as { inject: (deps: string[], fn: (sub: unknown) => void) => void }).inject(
     ['webServer'],
     (sub) => {
       const webCtx = sub as unknown as { webServer?: WebServerLike } & SubContext
       const web = webCtx.webServer
       if (!web) {
-        log('webServer service absent in this profile; bridge stays inactive')
+        log('webServer service absent; 3080 compatibility routes unavailable (independent transports remain active)')
         return
       }
       // Routes are registered regardless of the master switch so a mid-session
@@ -1021,113 +1192,10 @@ export function apply(ctx: Context, options: unknown): void {
         'deeppilot: /phone/pair',
       )
 
-      const sweep = setInterval(() => {
-        const now = Date.now()
-        for (const connection of connections) {
-          if (connection.isStale(now, 60_000)) {
-            log('dropping stale connection')
-            connection.closeIdle()
-            connections.delete(connection)
-          }
-        }
-      }, 30_000)
-      webCtx.effect(() => () => clearInterval(sweep), 'deeppilot: stale sweep')
-
-      // The settings source is not guaranteed to attach before webServer.
-      // Keep a loopback origin ready and reconcile the helper whenever that
-      // source appears or changes, instead of freezing the schema defaults at
-      // injection time.
-      const originServer = createServer((req, res) => {
-        let path = '/'
-        try { path = new URL(req.url ?? '/', 'http://phone.local').pathname } catch { /* reject below */ }
-        if (path === '/phone/health') {
-          void handleHealth(req, res)
-        } else if (path === '/phone/pair') {
-          void handlePair(req, res)
-        } else {
-          res.statusCode = 404
-          res.end('not found')
-        }
-      })
-      originServer.on('upgrade', (req, socket, head) => {
-        let path = '/'
-        try { path = new URL(req.url ?? '/', 'http://phone.local').pathname } catch { /* reject below */ }
-        if (path !== '/phone') {
-          socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
-          return
-        }
-        handleUpgrade(req, socket, head)
-      })
-
-      let originURL: string | undefined
-      let appliedRemoteKey: string | undefined
-      let remoteDisposed = false
-      let reconcileTail = Promise.resolve()
-      const reconcileRemote = async (): Promise<void> => {
-        if (remoteDisposed || originURL === undefined) return
-        const config = currentConfig()
-        const remoteConfig = config.remote ?? {}
-        const remotePort: 443 | 8443 | 10000 = remoteConfig.funnelPort === 8443 || remoteConfig.funnelPort === 10000
-          ? remoteConfig.funnelPort
-          : 443
-        const helperPath = remoteConfig.helperPath?.trim() || undefined
-        const next = {
-          enabled: config.enabled === true && remoteConfig.enabled === true && remoteConfig.provider === 'tailscale-funnel',
-          hostname: normalizeRemoteHostname(remoteConfig.hostname),
-          statePath: remoteConfig.statePath?.trim() || join(dataDir, 'tailscale'),
-          helperPath,
-          funnelPort: remotePort,
-          maxConnectionsPerSource: normalizeFunnelConnectionLimit(remoteConfig.maxConnectionsPerSource),
-        }
-        const nextKey = JSON.stringify(next)
-        if (nextKey === appliedRemoteKey) return
-
-        const previous = remoteSupervisor
-        remoteSupervisor = undefined
-        if (previous !== undefined) await previous.dispose()
-        if (remoteDisposed) return
-
-        const supervisor = new RemoteSupervisor({
-          enabled: next.enabled,
-          hostname: next.hostname,
-          statePath: next.statePath,
-          ...(next.helperPath ? { helperPath: next.helperPath } : {}),
-          funnelPort: next.funnelPort,
-          maxConnectionsPerSource: next.maxConnectionsPerSource,
-          log,
-        })
-        remoteSupervisor = supervisor
-        appliedRemoteKey = nextKey
-        await supervisor.start(originURL)
-      }
-      scheduleRemoteReconcile = () => {
-        reconcileTail = reconcileTail
-          .then(reconcileRemote)
-          .catch((error) => log('remote reconcile failed: ' + String(error)))
-      }
-
-      originServer.listen(0, '127.0.0.1', () => {
-        const address = originServer.address()
-        if (address && typeof address === 'object') {
-          originURL = `http://127.0.0.1:${address.port}`
-          scheduleRemoteReconcile?.()
-        }
-      })
-      originServer.on('error', (error) => log('remote origin failed: ' + String(error)))
-      webCtx.effect(() => () => {
-        remoteDisposed = true
-        scheduleRemoteReconcile = undefined
-        originServer.close()
-        reconcileTail = reconcileTail.then(async () => {
-          const supervisor = remoteSupervisor
-          remoteSupervisor = undefined
-          if (supervisor !== undefined) await supervisor.dispose()
-        })
-      }, 'deeppilot: embedded Funnel')
       if (enabledNow()) {
-        log('/phone WebSocket registered')
+        log('/phone compatibility routes registered on DSH web server')
       } else {
-        log('bridge disabled; /phone refuses connections until re-enabled and restarted')
+        log('bridge disabled; /phone refuses connections until re-enabled')
       }
     },
   )

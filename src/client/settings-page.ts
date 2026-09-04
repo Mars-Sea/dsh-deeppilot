@@ -1,10 +1,11 @@
 import { createElement as h, useEffect, useState } from 'react'
 import * as QRCode from 'qrcode/lib/browser.js'
 import type { DeepPilotReport, PairingGrantSnapshot, PushTestResult, RelayTestResult } from '../report-wire.ts'
-import { encodePairingQRPayload, selectPairingTarget } from '../pairing-qr.ts'
+import { encodePairingQRPayload, selectPairingTargets } from '../pairing-qr.ts'
 import { translateWith as t } from './i18n.ts'
-import type { EnabledState, PageState, RemoteConnectionLimitState, RemoteEnabledState } from './index.ts'
+import type { EnabledState, LocalEnabledState, LocalPortState, PageState, RemoteConnectionLimitState, RemoteEnabledState } from './index.ts'
 import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, MAX_FUNNEL_CONNECTIONS_PER_SOURCE } from '../funnel-policy.ts'
+import { DEFAULT_LOCAL_PORT, MAX_LOCAL_PORT, MIN_LOCAL_PORT } from '../local-policy.ts'
 
 type T = (key: string, vars?: Readonly<Record<string, unknown>>) => string
 
@@ -41,11 +42,22 @@ const REMOTE_PHASE_META: Record<DeepPilotReport['remote']['phase'], { dot: strin
   stopped: { dot: '', labelKey: 'phase.stopped' },
 }
 
+const LOCAL_PHASE_META: Record<DeepPilotReport['local']['phase'], { dot: string; labelKey: string }> = {
+  disabled: { dot: '', labelKey: 'local.phaseDisabled' },
+  starting: { dot: ' pbb-dotWarn', labelKey: 'local.phaseStarting' },
+  online: { dot: ' pbb-dotOk', labelKey: 'local.phaseOnline' },
+  error: { dot: ' pbb-dotBad', labelKey: 'local.phaseError' },
+  stopped: { dot: '', labelKey: 'local.phaseStopped' },
+}
+
 /** Slot component: hooks come from the slot renderer, named use<Key>. */
 export function DeepPilotSettingsPage(props: Record<string, any>): any {
   const [addressMessage, setAddressMessage] = useState('')
   const [remoteLimitDraft, setRemoteLimitDraft] = useState(String(DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE))
   const [remoteLimitMessage, setRemoteLimitMessage] = useState('')
+  const [localPortDraft, setLocalPortDraft] = useState(String(DEFAULT_LOCAL_PORT))
+  const [localPortMessage, setLocalPortMessage] = useState('')
+  const [selectedPairingHost, setSelectedPairingHost] = useState<string | null>(null)
   const [qrDataURL, setQRDataURL] = useState<string | null>(null)
   const [pairingGrant, setPairingGrant] = useState<PairingGrantSnapshot | null>(null)
   const [qrBusy, setQRBusy] = useState(false)
@@ -113,12 +125,18 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   }, [remoteLimitMessage])
 
   useEffect(() => {
+    if (!localPortMessage) return
+    const timer = globalThis.setTimeout(() => setLocalPortMessage(''), 4_000)
+    return () => globalThis.clearTimeout(timer)
+  }, [localPortMessage])
+
+  useEffect(() => {
     if (qrDataURL === null) return
     const timer = globalThis.setTimeout(() => {
       setQRDataURL(null)
       setPairingGrant(null)
       setQRMessage(t(props.t, 'pair.qrAutoHidden'))
-    }, 60_000)
+    }, 48 * 60 * 60_000)
     return () => globalThis.clearTimeout(timer)
   }, [qrDataURL])
 
@@ -132,6 +150,10 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   let report: DeepPilotReport | null = null
   let enabled: boolean = true
   let switchReady = false
+  let localEnabled = true
+  let localSwitchReady = false
+  let localPort = DEFAULT_LOCAL_PORT
+  let localPortReady = false
   let remoteEnabled = false
   let remoteSwitchReady = false
   let remoteConnectionLimit = DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE
@@ -164,6 +186,22 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
     if (typeof props.testRelay !== 'function') diag.push(t(props.t, 'diag.missingTestRelay'))
     if (typeof props.testPush !== 'function') diag.push(t(props.t, 'diag.missingTestPush'))
     if (typeof props.setDeepPilotEnabled !== 'function') diag.push(t(props.t, 'diag.missingSetEnabled'))
+    if (typeof props.useDeepPilotLocalEnabled === 'function') {
+      const state = props.useDeepPilotLocalEnabled((s: LocalEnabledState) => s)
+      localEnabled = state.enabled
+      localSwitchReady = state.status === 'ready'
+    } else {
+      diag.push(t(props.t, 'diag.missingLocalEnabledHook'))
+    }
+    if (typeof props.useDeepPilotLocalPort === 'function') {
+      const state = props.useDeepPilotLocalPort((s: LocalPortState) => s)
+      localPort = state.value
+      localPortReady = state.status === 'ready'
+    } else {
+      diag.push(t(props.t, 'diag.missingLocalPortHook'))
+    }
+    if (typeof props.setDeepPilotLocalEnabled !== 'function') diag.push(t(props.t, 'diag.missingSetLocal'))
+    if (typeof props.setDeepPilotLocalPort !== 'function') diag.push(t(props.t, 'diag.missingSetLocalPort'))
     if (typeof props.useDeepPilotRemoteEnabled === 'function') {
       const state = props.useDeepPilotRemoteEnabled((s: RemoteEnabledState) => s)
       remoteEnabled = state.enabled
@@ -189,6 +227,25 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
     setRemoteLimitDraft(String(remoteConnectionLimit))
   }, [remoteConnectionLimit])
 
+  useEffect(() => {
+    setLocalPortDraft(String(localPort))
+  }, [localPort])
+
+  const parsedLocalPort = Number(localPortDraft)
+  const localPortValid = Number.isInteger(parsedLocalPort) && parsedLocalPort >= MIN_LOCAL_PORT && parsedLocalPort <= MAX_LOCAL_PORT
+  const applyLocalPort = (): void => {
+    if (!localPortValid || typeof props.setDeepPilotLocalPort !== 'function') {
+      setLocalPortMessage(t(props.t, 'local.portInvalid'))
+      return
+    }
+    setLocalPortMessage('')
+    void props.setDeepPilotLocalPort(parsedLocalPort).then(() => {
+      setLocalPortMessage(t(props.t, 'local.portApplied'))
+    }, (error: unknown) => {
+      setLocalPortMessage(t(props.t, 'local.portFailed') + (error instanceof Error ? error.message : String(error)))
+    })
+  }
+
   const parsedRemoteLimit = Number(remoteLimitDraft)
   const remoteLimitValid = Number.isInteger(parsedRemoteLimit) && parsedRemoteLimit >= 1 && parsedRemoteLimit <= MAX_FUNNEL_CONNECTIONS_PER_SOURCE
   const applyRemoteLimit = (): void => {
@@ -204,13 +261,8 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
     })
   }
 
-  const pairingTarget = report === null
-    ? null
-    : selectPairingTarget(
-        report.remote,
-        report.lanAddresses,
-        typeof window === 'undefined' ? undefined : window.location.origin,
-      )
+  const pairingTargets = report === null ? [] : selectPairingTargets(report.local, report.remote)
+  const pairingTarget = pairingTargets.find(({ host }) => host === selectedPairingHost) ?? pairingTargets[0] ?? null
 
   useEffect(() => {
     setQRDataURL(null)
@@ -367,6 +419,35 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
         h('div', { className: 'pbb-switchText' },
           h('span', { className: 'pbb-switchTitle pbb-dotRow' },
             h('span', {
+              className: 'pbb-dot' + (report !== null ? LOCAL_PHASE_META[report.local.phase].dot : ''),
+              role: 'img',
+              'aria-label': report !== null ? t(props.t, LOCAL_PHASE_META[report.local.phase].labelKey) : t(props.t, 'phase.unknown'),
+              title: report !== null ? t(props.t, LOCAL_PHASE_META[report.local.phase].labelKey) : undefined,
+            }),
+            t(props.t, 'local.title')),
+          h('span', { className: 'pbb-switchDesc' }, localSwitchReady
+            ? (localEnabled ? t(props.t, 'local.on', { port: localPort }) : t(props.t, 'local.off'))
+            : t(props.t, 'master.loading')),
+          report !== null && report.local.message && report.local.phase === 'error'
+            ? h('p', { className: 'pbb-diag pbb-diagBad' }, report.local.message)
+            : null,
+        ),
+        h('button', {
+          type: 'button',
+          role: 'switch',
+          'aria-checked': localEnabled,
+          'aria-label': t(props.t, 'local.title'),
+          disabled: !localSwitchReady,
+          className: 'pbb-switch' + (localEnabled ? ' pbb-switchOn' : ''),
+          onClick: () => {
+            if (typeof props.setDeepPilotLocalEnabled === 'function') props.setDeepPilotLocalEnabled(!localEnabled)
+          },
+        }),
+      ),
+      h('div', { className: 'pbb-switchRow' },
+        h('div', { className: 'pbb-switchText' },
+          h('span', { className: 'pbb-switchTitle pbb-dotRow' },
+            h('span', {
               className: 'pbb-dot' + (report !== null ? REMOTE_PHASE_META[report.remote.phase].dot : ''),
               role: 'img',
               'aria-label': report !== null ? t(props.t, REMOTE_PHASE_META[report.remote.phase].labelKey) : t(props.t, 'phase.unknown'),
@@ -402,6 +483,44 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
       h('details', { className: 'pbb-help' },
         h('summary', null, t(props.t, 'remote.advancedSettings')),
         h('div', { className: 'pbb-helpBody' },
+          h('div', { className: 'pbb-limitRow pbb-limitNested' },
+            h('div', { className: 'pbb-switchText' },
+              h('label', { className: 'pbb-switchTitle', htmlFor: 'deeppilot-local-port' }, t(props.t, 'local.portTitle')),
+              h('span', { className: 'pbb-switchDesc' }, t(props.t, 'local.portDescription')),
+              !localPortValid
+                ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'local.portInvalid'))
+                : localPortMessage
+                  ? h('p', { className: 'pbb-diag' + (localPortMessage.startsWith(t(props.t, 'local.portFailed')) ? ' pbb-diagBad' : '') }, localPortMessage)
+                  : null,
+            ),
+            h('div', { className: 'pbb-limitControl' },
+              h('input', {
+                id: 'deeppilot-local-port',
+                className: 'pbb-numberInput',
+                type: 'number',
+                min: MIN_LOCAL_PORT,
+                max: MAX_LOCAL_PORT,
+                step: 1,
+                inputMode: 'numeric',
+                value: localPortDraft,
+                disabled: !localPortReady,
+                'aria-label': t(props.t, 'local.portTitle'),
+                onChange: (event: { currentTarget: { value: string } }) => setLocalPortDraft(event.currentTarget.value),
+                onKeyDown: (event: { key: string; preventDefault: () => void }) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    applyLocalPort()
+                  }
+                },
+              }),
+              h('button', {
+                type: 'button',
+                className: 'pbb-action',
+                disabled: !localPortReady || !localPortValid || parsedLocalPort === localPort,
+                onClick: applyLocalPort,
+              }, t(props.t, 'remote.limitApply')),
+            ),
+          ),
           h('div', { className: 'pbb-limitRow pbb-limitNested' },
             h('div', { className: 'pbb-switchText' },
               h('label', { className: 'pbb-switchTitle', htmlFor: 'deeppilot-funnel-source-limit' }, t(props.t, 'remote.limitTitle')),
@@ -515,6 +634,17 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
         pairingTarget === null
           ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'pair.noAddressHelp'))
           : null,
+        pairingTargets.length < 2 ? null : h('div', { className: 'pbb-targetList' },
+          pairingTargets.map((target) => h('button', {
+            type: 'button',
+            key: target.host,
+            className: 'pbb-action' + (target.host === pairingTarget?.host ? ' pbb-actionSelected' : ''),
+            onClick: () => {
+              setSelectedPairingHost(target.host)
+              hidePairingQR()
+            },
+          }, (target.kind === 'public' ? t(props.t, 'pair.kind.public') : t(props.t, 'pair.kind.lan')) + ' · ' + target.host)),
+        ),
         qrMessage ? h('p', { className: 'pbb-diag' }, qrMessage) : null,
         pairingTarget === null || qrDataURL === null || pairingGrant === null ? null : h('div', { className: 'pbb-qrPanel' },
           h('img', {

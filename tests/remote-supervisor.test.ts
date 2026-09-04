@@ -1,16 +1,20 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync } from 'node:fs'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  analyzeCrashExit,
   bundledHelperCandidates,
   bundledHelperPlatformDir,
+  helperCrashSummary,
+  MAX_CRASH_DUMPS,
   normalizeRemoteHostname,
   parseHelperEvent,
   RemoteSupervisor,
   restartDelayMs,
+  shortenSymbol,
   tunnelHelperArguments,
 } from '../src/remote-supervisor.ts'
 import { normalizeFunnelConnectionLimit } from '../src/funnel-policy.ts'
@@ -172,6 +176,251 @@ test('dispose during an in-flight start never spawns the helper', async () => {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
     assert.equal(existsSync(marker), false, 'helper must not be spawned after dispose won the race')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------- crash summary extraction ----------
+
+test('crash summary surfaces the panic reason, not the trailing stack noise', () => {
+  const stderr = [
+    '2026/09/03 22:30:11 http: panic serving 100.101.102.103:443: runtime error: invalid memory address or nil pointer dereference',
+    'goroutine 123 [running]:',
+    'runtime/debug.Stack()',
+    '    runtime/debug/stack.go:26 +0x5e',
+    'tailscale.com/net/dnscache.(*Resolver).lookupIP(0x1400012c000, {0x140001d20e0, 0x140001d20e0})',
+    '    /root/go/pkg/mod/tailscale.com@v1.102.3/net/dnscache/dnscache.go:604 +0x25c',
+    'created by tailscale.com/util/singleflight.(*Group).DoChanContext in goroutine 9',
+    '    /root/go/pkg/mod/tailscale.com@v1.102.3/util/singleflight/singleflight.go:194 +0x45c',
+  ].join('\n')
+  assert.equal(
+    helperCrashSummary(stderr),
+    'http: panic serving 100.101.102.103:443: runtime error: invalid memory address or nil pointer dereference @ dnscache.(*Resolver).lookupIP (dnscache.go:604)',
+  )
+})
+
+test('crash summary keeps the signal continuation and skips runtime frames', () => {
+  const stderr = [
+    'panic: runtime error: invalid memory address or nil pointer dereference',
+    '[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x1029a1b4c]',
+    '',
+    'goroutine 21 [running]:',
+    'runtime/debug.Stack()',
+    '    runtime/debug/stack.go:26 +0x5e',
+    'main.fail(0x102b7c5b0)',
+    '    helper/main.go:425 +0x20',
+    'created by tailscale.com/util/singleflight.(*Group).DoChanContext in goroutine 9',
+    '    tailscale.com@v1.102.3/util/singleflight/singleflight.go:194 +0x45c',
+  ].join('\n')
+  assert.equal(
+    helperCrashSummary(stderr),
+    'panic: runtime error: invalid memory address or nil pointer dereference [signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x1029a1b4c] @ main.fail (main.go:425)',
+  )
+})
+
+test('crash summary handles a bare fatal error without app frames', () => {
+  const stderr = [
+    'fatal error: concurrent map writes',
+    '',
+    'goroutine 8 [running]:',
+    'runtime.throw({0x10293c5b0, 0x0})',
+    '    runtime/panic.go:1108 +0x70',
+    'runtime.mapassign_faststr(0x140000582c0, 0x1400010e1e0, {0x102a4e6a0, 0x2})',
+    '    runtime/map_fast.go:203 +0x39e',
+    'main.main()',
+    '    helper/main.go:196 +0x20',
+    'created by main.main in goroutine 1',
+    '    runtime/proc.go:272 +0x10',
+  ].join('\n')
+  assert.equal(
+    helperCrashSummary(stderr),
+    'fatal error: concurrent map writes @ main.main (main.go:196)',
+  )
+})
+
+test('crash summary falls back to the last non-empty stderr line', () => {
+  assert.equal(helperCrashSummary(''), '')
+  assert.equal(helperCrashSummary('  '), '')
+  const runtimeNoise = 'some log line\ntailscale.com@v1.102.3/util/singleflight/singleflight.go:194 +0x45c'
+  assert.equal(helperCrashSummary(runtimeNoise), runtimeNoise.split('\n').at(-1))
+})
+
+test('shortenSymbol shrinks module paths, receivers, generics and args', () => {
+  assert.equal(shortenSymbol('tailscale.com/net/dnscache.(*Resolver).lookupIP(0x1400012c000, {0x140001d20e0})'),
+    'dnscache.(*Resolver).lookupIP')
+  assert.equal(shortenSymbol('tailscale.com/util/singleflight.(*Group[...]).doCall(0x3cdce79dc280, 0x0)'),
+    'singleflight.(*Group).doCall')
+  assert.equal(shortenSymbol('tailscale.com/util/singleflight.(*Group[...]).doCall.func2(0x3cdce79dc280, 0x0, 0x3cdce7b01e80?)'),
+    'singleflight.(*Group).doCall.func2')
+  assert.equal(shortenSymbol('main.fail(0x102b7c5b0)'), 'main.fail')
+  assert.equal(shortenSymbol('runtime.throw({0x10293c5b0, 0x0})'), 'runtime.throw')
+  assert.equal(shortenSymbol('created by tailscale.com/util/singleflight.(*Group).DoChanContext in goroutine 9'),
+    'singleflight.(*Group).DoChanContext in goroutine 9')
+})
+
+test('crash summary handles the real tailscale doCall.func2 sample', () => {
+  const stderr = [
+    'panic: runtime error: invalid memory address or nil pointer dereference',
+    '[signal SIGSEGV: segmentation violation code=0x1 addr=0x1b pc=0x1b]',
+    '',
+    'goroutine 103 [running]:',
+    'tailscale.com/util/singleflight.(*Group[...]).doCall.func2(0x3cdce79dc280, 0x0, 0x3cdce7b01e80?)',
+    '        tailscale.com@v1.102.3/util/singleflight/singleflight.go:297 +0x16b',
+    'tailscale.com/util/singleflight.(*Group[...]).doCall(0x3cdce79f8000?, 0x3cdce778a1a0?, {0x3cdce799e040?, 0x99bb57?}, 0x0?)',
+    '        tailscale.com@v1.102.3/util/singleflight/singleflight.go:297 +0x89',
+    'created by tailscale.com/util/singleflight.(*Group[...]).DoChanContext in goroutine 102',
+    '        tailscale.com@v1.102.3/util/singleflight/singleflight.go:194 +0x45c',
+  ].join('\n')
+  assert.equal(
+    helperCrashSummary(stderr),
+    'panic: runtime error: invalid memory address or nil pointer dereference [signal SIGSEGV: segmentation violation code=0x1 addr=0x1b pc=0x1b] @ singleflight.(*Group).doCall.func2 (singleflight.go:297)',
+  )
+})
+
+test('analyzeCrashExit writes a 0600 dump and points the summary at it', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'deeppilot-crashdump-'))
+  try {
+    const stateDir = join(dir, 'state')
+    await mkdir(stateDir, { recursive: true })
+    await writeFile(join(stateDir, '.keep'), '', { flag: 'a' })
+    const stderr = [
+      'panic: runtime error: invalid memory address or nil pointer dereference',
+      '[signal SIGSEGV: segmentation violation code=0x1 addr=0x1b pc=0x1b]',
+      '',
+      'goroutine 21 [running]:',
+      'tailscale.com/util/singleflight.(*Group).doCall(0x1400012c000, {0x140001d20e0, 0x0})',
+      '    tailscale.com@v1.102.3/util/singleflight/singleflight.go:297 +0x45c',
+    ].join('\n')
+    const analysis = await analyzeCrashExit(stderr, stateDir)
+    assert.ok(analysis.dumpPath !== undefined, 'expected a dump path')
+    assert.ok(analysis.dumpPath.startsWith(stateDir), 'dump should live in the state dir')
+    assert.equal(analysis.summary.includes('panic: runtime error'), true)
+    const dump = await readFile(analysis.dumpPath!, 'utf8')
+    assert.equal(dump, stderr)
+    const stat = await import('node:fs/promises').then((m) => m.stat(analysis.dumpPath!))
+    assert.equal(stat.mode & 0o777, 0o600, 'dump must be 0600')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('analyzeCrashExit skips writing when the exit is not a crash', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'deeppilot-crashdump-skip-'))
+  try {
+    const stateDir = join(dir, 'state')
+    await mkdir(stateDir, { recursive: true })
+    await writeFile(join(stateDir, '.keep'), '', { flag: 'a' })
+    const analysis = await analyzeCrashExit('helper exited (SIGTERM)', stateDir)
+    assert.equal(analysis.dumpPath, undefined)
+    assert.equal(analysis.summary, 'helper exited (SIGTERM)')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('analyzeCrashExit dumps the real goroutine-103 format with no signal line', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'deeppilot-crashdump-103-'))
+  try {
+    const stateDir = join(dir, 'state')
+    await mkdir(stateDir, { recursive: true })
+    const stderr = [
+      'panic: runtime error: invalid memory address or nil pointer dereference',
+      '',
+      'goroutine 103 [running]:',
+      'tailscale.com/util/singleflight.(*Group[...]).doCall.func2(0x3cdce79dc280, 0x0, 0x3cdce7b01e80?)',
+      '        tailscale.com@v1.102.3/util/singleflight/singleflight.go:297 +0x16b',
+      'created by tailscale.com/util/singleflight.(*Group[...]).DoChanContext in goroutine 102',
+      '        tailscale.com@v1.102.3/util/singleflight/singleflight.go:194 +0x45c',
+    ].join('\n')
+    const analysis = await analyzeCrashExit(stderr, stateDir)
+    assert.ok(analysis.dumpPath !== undefined, 'expected a dump path')
+    const dump = await readFile(analysis.dumpPath!, 'utf8')
+    assert.equal(dump, stderr)
+    assert.ok(analysis.summary.includes('singleflight.(*Group).doCall.func2'),
+      `expected closure symbol in summary, got: ${analysis.summary}`)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('analyzeCrashExit trims to the newest MAX_CRASH_DUMPS dumps', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'deeppilot-crashdump-trim-'))
+  try {
+    const stateDir = join(dir, 'state')
+    await mkdir(stateDir, { recursive: true })
+    const stderr = ['panic: runtime error: invalid memory address or nil pointer dereference', '',
+      'goroutine 8 [running]:',
+      'main.main', '    helper/main.go:196 +0x20',
+    ].join('\n')
+    // Simulate an already-full directory of older dumps, then one more crash.
+    for (let i = 0; i < MAX_CRASH_DUMPS; i++) {
+      await writeFile(join(stateDir, `crash-${1_000 + i}.log`), stderr, { mode: 0o600 })
+    }
+    const analysis = await analyzeCrashExit(stderr, stateDir)
+    assert.ok(analysis.dumpPath !== undefined)
+    const names = (await readdir(stateDir)).filter((n) => n.startsWith('crash-'))
+    assert.equal(names.length, MAX_CRASH_DUMPS, 'old dumps should be trimmed to the newest cap')
+    assert.ok(names.includes(join(analysis.dumpPath!).split('/').pop()!), 'new dump should be retained')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('analyzeCrashExit tolerates an unwritable state dir and returns only the summary', async () => {
+  const analysis = await analyzeCrashExit('panic: boom', '/nonexistent-ro/state')
+  assert.equal(analysis.dumpPath, undefined)
+  assert.equal(analysis.summary, 'panic: boom')
+})
+
+test('supervisor surfaces the panic reason when the helper process crashes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'deeppilot-sup-panic-'))
+  try {
+    // A stub that crashes exactly like the Go helper does: emit a structured
+    // stdout event, then dump a panic-style stack to stderr and die non-zero.
+    const helper = join(dir, 'panic-helper')
+    const stateDir = join(dir, 'state')
+    const script = [
+      '#!/bin/sh',
+      `printf '%s\\n' '{"phase":"starting"}'`,
+      "printf '%s\\n' 'panic: runtime error: invalid memory address or nil pointer dereference' >&2",
+      "printf '%s\\n' '[signal SIGSEGV: segmentation violation code=0x1 addr=0x1b pc=0x1b]' >&2",
+      "printf '%s\\n' 'goroutine 21 [running]:' >&2",
+      "printf '%s\\n' 'tailscale.com/net/dnscache.(*Resolver).lookupIP(0x1400012c000, {0x140001d20e0, 0x140001d20e0})' >&2",
+      "printf '%s\\n' '    tailscale.com@v1.102.3/net/dnscache/dnscache.go:604 +0x25c' >&2",
+      "printf '%s\\n' 'created by tailscale.com/util/singleflight.(*Group).doCall in goroutine 9' >&2",
+      "printf '%s\\n' '    tailscale.com@v1.102.3/util/singleflight/singleflight.go:297 +0x45c' >&2",
+      'exit 2',
+      '',
+    ].join('\n')
+    await writeFile(helper, script, { mode: 0o755 })
+    const supervisor = new RemoteSupervisor({
+      enabled: true,
+      hostname: 'panic-probe',
+      statePath: stateDir,
+      helperPath: helper,
+      log: () => {},
+    })
+    await supervisor.start('http://127.0.0.1:39997')
+    // start() resolves immediately after spawning; wait for the child exit.
+    for (let waited = 0; waited < 2_000 && supervisor.status().phase !== 'error'; waited += 20) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    const status = supervisor.status()
+    assert.equal(status.phase, 'error')
+    assert.ok(status.message?.startsWith('panic: runtime error: invalid memory address'),
+      `expected panic reason as the message, got: ${status.message}`)
+    assert.ok(!status.message?.includes('singleflight.go:194'),
+      `message must not be the trailing stack frame, got: ${status.message}`)
+    assert.ok(status.message?.includes('full dump:'), `expected a dump path, got: ${status.message}`)
+    const dumpMatch = /full dump: (.+)\)$/.exec(status.message ?? '')
+    assert.ok(dumpMatch !== null, `could not parse dump path from: ${status.message}`)
+    const dumpPath = dumpMatch[1]!
+    assert.ok(dumpPath.startsWith(stateDir), `dump should live under state dir, got ${dumpPath}`)
+    const dump = await readFile(dumpPath, 'utf8')
+    assert.ok(dump.includes('panic: runtime error'), 'dump should include the full panic')
+    assert.ok(dump.includes('singleflight.go:297'), 'dump should include the full stack')
+    await supervisor.dispose()
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
