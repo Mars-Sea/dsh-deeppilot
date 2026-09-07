@@ -24,7 +24,7 @@ export function registerTestIdentity(store: DeviceStore, identity: TestIdentity)
 export function authenticateTestSocket(
   ws: { sent: any[]; receive(payload: unknown): void },
   identity: TestIdentity,
-  overrides: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string } = {},
+  overrides: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string; clientRole?: 'widget' } = {},
 ): void {
   const challenge = ws.sent.find((frame) => frame.type === 's2c.auth.challenge')?.payload
   if (!challenge) throw new Error('server auth challenge missing')
@@ -43,6 +43,6 @@ export function authenticateTestSocket(
     v: 2,
     type: 'c2s.auth.prove',
     id: 'auth-1',
-    payload: { ...fields, signature },
+    payload: { ...fields, signature, ...(overrides.clientRole ? { clientRole: overrides.clientRole } : {}) },
   })
 }

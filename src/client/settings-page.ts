@@ -9,6 +9,29 @@ import { DEFAULT_LOCAL_PORT, MAX_LOCAL_PORT, MIN_LOCAL_PORT } from '../local-pol
 
 type T = (key: string, vars?: Readonly<Record<string, unknown>>) => string
 
+/** Inline trash icon for the compact destructive row action. Kept as a tiny
+ *  element (no icon dependency) so the client bundle stays dependency-free
+ *  apart from React. */
+const TrashIcon = (): any =>
+  h('svg', {
+    className: 'pbb-actionIcon',
+    viewBox: '0 0 16 16',
+    width: 13,
+    height: 13,
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.5,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    'aria-hidden': true,
+  },
+    h('path', { d: 'M2.5 4.5h11' }),
+    h('path', { d: 'M6.5 2.5h3' }),
+    h('path', { d: 'M4 4.5l.6 8.2a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9l.6-8.2' }),
+    h('path', { d: 'M6.6 7v4.2' }),
+    h('path', { d: 'M9.4 7v4.2' }),
+  )
+
 async function writeClipboard(t: T, value: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(value)
@@ -374,9 +397,18 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
             h('td', null, h('code', { className: 'pbb-token' }, d.fingerprint.slice(0, 12))),
             h('td', null, new Date(d.lastSeenTs).toLocaleString()),
             h('td', null, h('button', {
-              type: 'button', className: 'pbb-action pbb-actionDanger', disabled: deviceBusy === d.deviceId,
+              type: 'button',
+              className: 'pbb-action pbb-actionDangerGhost',
+              disabled: deviceBusy === d.deviceId,
+              'aria-label': deviceBusy === d.deviceId
+                ? t(props.t, 'devices.deleting', { name: d.deviceName })
+                : t(props.t, 'devices.revokeAria', { name: d.deviceName }),
               onClick: () => revokeDevice(d.deviceId, d.deviceName),
-            }, t(props.t, 'devices.revoke')))))))
+            },
+              deviceBusy === d.deviceId ? null : TrashIcon(),
+              deviceBusy === d.deviceId
+                ? h('span', { className: 'pbb-actionBusy' }, t(props.t, 'devices.deleting'))
+                : t(props.t, 'devices.revoke')))))))
     : h('p', { className: 'pbb-empty' }, t(props.t, 'devices.empty'))
 
   const switchTitle = t(props.t, 'master.title')

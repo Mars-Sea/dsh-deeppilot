@@ -18,7 +18,7 @@ import { connect as http2Connect, type ClientHttp2Session } from 'node:http2'
 import { createHash, createPrivateKey, sign as cryptoSign, type KeyObject } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { ApnsEnvironment } from './token.ts'
-import type { PushNotification } from './protocol.ts'
+import type { PushDelivery, PushNotification } from './protocol.ts'
 
 export interface ApnsClientOptions {
   teamId: string
@@ -75,7 +75,13 @@ export interface LoadedKey {
 }
 
 /** Pure payload builder so tests can assert the wire format without sockets. */
-export function apnsPayload(notification: PushNotification): Record<string, unknown> {
+export function apnsPayload(notification: PushDelivery): Record<string, unknown> {
+  if ('kind' in notification && notification.kind === 'widget') return { aps: { 'content-changed': true } }
+  const alert = notification as PushNotification
+  return alertPayload(alert)
+}
+
+function alertPayload(notification: PushNotification): Record<string, unknown> {
   const timeSensitive = notification.category === 'approval.required' || notification.category === 'question.asked'
   return {
     aps: {
@@ -85,9 +91,10 @@ export function apnsPayload(notification: PushNotification): Record<string, unkn
       },
       sound: 'default',
       category: notification.category,
-      'thread-id': notification.sessionId.slice(0, 64),
+      'thread-id': notification.hostAudience ? createHash('sha256').update(`${notification.hostAudience}:${notification.sessionId}`).digest('hex') : notification.sessionId.slice(0, 64),
       ...(timeSensitive ? { 'interruption-level': 'time-sensitive' } : {}),
     },
+    ...(notification.hostAudience ? { hostAudience: notification.hostAudience } : {}),
     sessionId: notification.sessionId,
     notificationId: notification.notificationId,
     kind: notification.category,
@@ -97,14 +104,29 @@ export function apnsPayload(notification: PushNotification): Record<string, unkn
 /** One delivery request: the notify projection plus its target device token.
  * The environment comes from the device's own registration (its build kind),
  * so one client serves both sandbox and production devices. */
-export interface ApnsSendRequest extends PushNotification {
+export type ApnsSendRequest = PushDelivery & {
   deviceToken: string
   environment: ApnsEnvironment
 }
 
+export function pushHeaders(bundleId: string, notification: PushDelivery): Record<string, string> {
+  if ('kind' in notification && notification.kind === 'widget') {
+    return {
+      'apns-topic': bundleId + '.push-type.widgets',
+      'apns-push-type': 'widgets',
+      'apns-priority': '5',
+      'apns-collapse-id': 'widget-overview',
+    }
+  }
+  return {
+    'apns-topic': bundleId, 'apns-push-type': 'alert', 'apns-priority': '10',
+    'apns-collapse-id': collapseIdFor(notification as PushNotification),
+  }
+}
+
 /** collapse-id accepts ≤64 bytes of ASCII; keep it stable per session+event. */
 export function collapseIdFor(notification: PushNotification): string {
-  const raw = `${notification.category}:${notification.sessionId}`
+  const raw = `${notification.hostAudience ? notification.hostAudience + ':' : ''}${notification.category}:${notification.sessionId}`
   const readable = raw.replace(/[^a-zA-Z0-9.:-]/g, '')
   const digest = createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 12)
   return `${readable.slice(0, 51)}:${digest}`
@@ -192,12 +214,9 @@ export class ApnsClient {
           [':method']: 'POST',
           [':path']: '/3/device/' + deviceToken,
           authorization: 'bearer ' + token,
-          'apns-topic': this.opts.bundleId,
-          'apns-push-type': 'alert',
-          'apns-priority': '10',
+          ...pushHeaders(this.opts.bundleId, notification),
           // Stale approvals arriving hours later are worse than none.
           'apns-expiration': String(Math.floor(Date.now() / 1000) + 3600),
-          'apns-collapse-id': collapseIdFor(notification),
           'content-type': 'application/json',
           'content-length': String(Buffer.byteLength(body)),
         })

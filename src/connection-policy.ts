@@ -1,4 +1,5 @@
 import type { DeviceScope } from './device-auth.ts'
+import type { Envelope } from './protocol.ts'
 
 export const AUTH_TIMEOUT_MS = 35_000
 export const MAX_OUTBOUND_BUFFER_BYTES = 4 * 1024 * 1024
@@ -32,11 +33,35 @@ export function sanitizeDeviceField(value: unknown, maxChars: number): string {
   return raw.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, maxChars)
 }
 
+/**
+ * Runtime shape guard for a frame after JSON.parse. The old `as Envelope`
+ * cast alone let JSON `null` reach `env.v` and let a missing or mistyped
+ * `type` reach `requiredScope()`'s string operations — one anonymous frame
+ * could crash the host process. Reject anything that is not a plain object
+ * with a numeric version and a non-empty string type, so field access below
+ * is always safe. The payload is intentionally opaque here; each handler
+ * validates its own payload shape.
+ */
+export function isEnvelope(value: unknown): value is Envelope {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const frame = value as Record<string, unknown>
+  if (typeof frame.v !== 'number') return false
+  if (typeof frame.type !== 'string' || frame.type.length === 0) return false
+  if (frame.id !== undefined && typeof frame.id !== 'string') return false
+  if (frame.ts !== undefined && typeof frame.ts !== 'number') return false
+  if (frame.seq !== undefined && typeof frame.seq !== 'number') return false
+  return true
+}
+
 export function requiredScope(type: string): DeviceScope | undefined {
+  // Defense in depth: callers must pass the validated envelope's `type`, but
+  // a non-string value must never reach the startsWith checks below.
+  if (typeof type !== 'string') return undefined
   if (type === 'c2s.ping' || type === 'c2s.resume') return undefined
-  if (type === 'c2s.session.sendPrompt') return 'prompt.send'
+  if (type === 'c2s.session.sendPrompt' || type === 'c2s.session.delivery') return 'prompt.send'
+  if (type === 'c2s.pending.list') return 'interactions.respond'
   if (type === 'c2s.approval.respond' || type === 'c2s.question.respond') return 'interactions.respond'
-  if (type === 'c2s.push.register') return 'notifications.register'
+  if (type === 'c2s.push.register' || type === 'c2s.widget.push.register') return 'notifications.register'
   if (
     type === 'c2s.workspace.create' ||
     type === 'c2s.session.create' ||
@@ -46,6 +71,28 @@ export function requiredScope(type: string): DeviceScope | undefined {
     type === 'c2s.session.selectModel'
   ) return 'sessions.manage'
   if (type.startsWith('c2s.')) return 'sessions.read'
+  return undefined
+}
+
+/** Broadcast and replay authorization. Unknown frame types fail closed. */
+const PUSH_SCOPE_BY_TYPE: Partial<Record<string, DeviceScope>> = {
+  's2c.session.event': 'sessions.read',
+  's2c.sessions.delta': 'sessions.read',
+  's2c.session.tail': 'sessions.read',
+  's2c.history.page': 'sessions.read',
+  's2c.pending.approval': 'interactions.respond',
+  's2c.pending.question': 'interactions.respond',
+  's2c.pending.cleared': 'interactions.respond',
+}
+
+export function pushScopeFor(type: string, payload?: unknown): DeviceScope | undefined {
+  const fixed = PUSH_SCOPE_BY_TYPE[type]
+  if (fixed !== undefined) return fixed
+  if (type === 's2c.notify') {
+    const category = (payload as { category?: unknown } | undefined)?.category
+    if (category === 'approval.required' || category === 'question.asked') return 'interactions.respond'
+    if (category === 'turn.completed' || category === 'session.error') return 'sessions.read'
+  }
   return undefined
 }
 

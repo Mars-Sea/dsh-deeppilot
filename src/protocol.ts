@@ -31,12 +31,21 @@ export interface AuthChallengePayload {
 }
 
 export interface AuthProofPayload extends AuthChallengePayload {
+  /** Optional short-lived read-only client, excluded from alert suppression. */
+  clientRole?: 'widget'
   deviceId: string
   deviceName: string
   appVersion: string
   signature: string
   resumeCursor?: number
 }
+
+/** Content-free WidgetKit invalidation; never a user-visible alert. */
+export interface WidgetPushNotification {
+  kind: 'widget'
+}
+
+export type PushDelivery = PushNotification | WidgetPushNotification
 
 export interface SessionOpenPayload { sessionId: string; tailCount?: number }
 export interface SessionClosePayload { sessionId: string }
@@ -51,7 +60,7 @@ export interface DirectoryListPayload { path?: string }
 export interface WorkspaceCreatePayload { path: string }
 export interface PromptImagePayload { mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string; name?: string }
 export interface PromptDocumentPayload { mediaType: string; name: string; text: string; truncated?: boolean }
-export interface SendPromptPayload { sessionId: string; text: string; images?: PromptImagePayload[]; documents?: PromptDocumentPayload[] }
+export interface SendPromptPayload { clientSendId?: string; sessionId: string; text: string; images?: PromptImagePayload[]; documents?: PromptDocumentPayload[] }
 export interface ApprovalRespondPayload { requestId: string; decision: "allow" | "deny"; reason?: string }
 export interface QuestionAnswer {
   id: string
@@ -87,6 +96,9 @@ export interface PushRegisterPayload {
   enrollKey?: string
 }
 
+/** c2s.widget.push.register. Uses a separate WidgetKit token, not the alert token. */
+export type WidgetPushRegisterPayload = Omit<PushRegisterPayload, 'categories'>
+
 // ---------- s2c payloads ----------
 
 export interface WelcomeCapabilities {
@@ -96,6 +108,7 @@ export interface WelcomeCapabilities {
   questions: boolean
   /** Client can request the complete currently-pending approval/question set. */
   pendingSnapshot?: boolean
+  promptDelivery?: boolean
   /** Bridge emits s2c.notify for all four notification categories. */
   notifyAllCategories?: boolean
   models: boolean
@@ -103,6 +116,7 @@ export interface WelcomeCapabilities {
   projectSelection: boolean
   /** Bridge has APNs configured; clients may send c2s.push.register. */
   push?: boolean
+  widgetPush?: boolean
 }
 
 export interface WelcomePayload {
@@ -116,6 +130,43 @@ export interface WelcomePayload {
 }
 
 export type SessionStatus = "running" | "idle" | "error" | "unknown"
+
+/**
+ * Cumulative model/token statistics for one session, mirrored from the
+ * host's `sessionStats` (dsh-session-stats) + `tokenUsage` (dsh-token-meter)
+ * projections. Every counter is a non-negative integer; 0 means nothing
+ * recorded yet. Clients derive their display figures from the raw sums:
+ * average TTFT = ttftMs / ttftSteps; decode speed = decodeTokens /
+ * (decodeMs / 1000); cache hit ratio = cacheReadTokens / (inputTokens +
+ * cacheReadTokens + cacheWriteTokens); total prompt tokens = inputTokens +
+ * cacheReadTokens + cacheWriteTokens. Absent/null when the host exposes no
+ * stats projections (older DSH versions) or nothing has been measured —
+ * clients must tolerate missing stats and fall back.
+ */
+export interface SessionUsageStats {
+  turns: number
+  steps: number
+  /** Summed model wall time in ms. */
+  llmMs: number
+  /** Summed tool wall time in ms. */
+  toolMs: number
+  /** Summed first-token latency in ms over ttftSteps. */
+  ttftMs: number
+  /** Steps that recorded a first token. */
+  ttftSteps: number
+  /** Summed decode wall time in ms over the decode-timed steps. */
+  decodeMs: number
+  /** Provider output tokens over the same decode-timed steps. */
+  decodeTokens: number
+  /** Provider-reported uncached prompt tokens. */
+  inputTokens: number
+  /** Provider-reported output tokens (reasoning included). */
+  outputTokens: number
+  /** Prompt tokens served from the provider cache. */
+  cacheReadTokens: number
+  /** Prompt tokens written to the provider cache. */
+  cacheWriteTokens: number
+}
 
 export type SessionTodoStatus = "pending" | "in_progress" | "completed"
 
@@ -135,6 +186,9 @@ export interface SessionSummary {
   todoItems?: SessionTodoItem[] | null
   pendingApproval: boolean
   pendingQuestion: boolean
+  /** Optional cumulative usage stats (see SessionUsageStats); hosts without
+   * the stats projections omit it, and clients must tolerate its absence. */
+  stats?: SessionUsageStats | null
   workspaceLabel: string | null
   workspaceId?: string | null
   workspacePath?: string | null
@@ -309,6 +363,8 @@ export interface SessionEventPayload {
 export type NotifyCategory = 'turn.completed' | 'approval.required' | 'question.asked' | 'session.error'
 
 export interface NotifyPayload {
+  /** Stable paired Host audience, absent on older bridges. */
+  hostAudience?: string
   notificationId: string
   category: NotifyCategory
   sessionId: string
@@ -323,6 +379,7 @@ export interface NotifyPayload {
  * an APNs token and no live WebSocket.
  */
 export interface PushNotification {
+  hostAudience?: string
   notificationId: string
   category: NotifyCategory
   sessionId: string
@@ -367,3 +424,6 @@ export const ERROR_CODES = {
   E_UNSUPPORTED: 'protocol version or capability unsupported',
   E_INTERNAL: 'internal error',
 } as const
+
+export interface PromptDeliveryPayload { sessionId: string; clientSendId: string }
+export type { DeliveryReceipt } from "./prompt-delivery.ts"

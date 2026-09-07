@@ -41,6 +41,8 @@ export interface Config {
   push?: {
     /** `none` (default), `apns`, or `relay`. */
     provider?: 'none' | 'apns' | 'relay'
+    /** Generic mode removes conversation-derived titles and bodies before outbound push. */
+    contentMode?: 'preview' | 'generic'
     /** Apple Developer team id (JWT iss claim). */
     teamId?: string
     /** APNs auth key id (JWT kid header). */
@@ -98,6 +100,7 @@ export const Config = z.object({
   }),
   push: z.object({
     provider: z.union(['none', 'apns', 'relay'] as const).default('none'),
+    contentMode: z.union(['preview', 'generic'] as const).default('preview'),
     teamId: z.string().default(''),
     keyId: z.string().default(''),
     keyPath: z.string().default(join(bridgeDataDir(), 'apns', 'AuthKey.p8')),
@@ -106,6 +109,7 @@ export const Config = z.object({
     relayToken: z.string().default(''),
   }).default({
     provider: 'none',
+    contentMode: 'preview',
     teamId: '',
     keyId: '',
     keyPath: join(bridgeDataDir(), 'apns', 'AuthKey.p8'),

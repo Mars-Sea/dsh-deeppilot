@@ -1,9 +1,19 @@
+import type { PushNotification } from './protocol.ts'
+import { pushScopeFor } from './connection-policy.ts'
+
 /** Prune only when the provider supplies an authoritative token-lifecycle verdict. */
 export function shouldPrunePushToken(
   outcome: 'sent' | 'invalid-token' | 'failed',
   reason?: string,
 ): boolean {
   return outcome === 'invalid-token' && (reason === 'Unregistered' || reason === 'ExpiredToken')
+}
+
+/** APNs requires both registration and the same content permission as WS. */
+export function mayReceivePush(device: { scopes?: readonly string[] }, notification: unknown): boolean {
+  const scope = pushScopeFor('s2c.notify', notification)
+  return scope !== undefined && device.scopes?.includes('notifications.register') === true &&
+    device.scopes.includes(scope)
 }
 
 /**
@@ -26,4 +36,16 @@ export function shouldReEnrollRelayToken(
     opts.usedCellToken &&
     opts.tokenStillCurrent
   )
+}
+
+/** Apply before either transport receives the payload, including the Relay. */
+export function pushContent(notification: PushNotification, mode?: 'preview' | 'generic'): PushNotification {
+  if (mode !== 'generic') return notification
+  const bodies: Record<PushNotification['category'], string> = {
+    'turn.completed': 'A task has completed.',
+    'approval.required': 'An approval needs your attention.',
+    'question.asked': 'A question needs your answer.',
+    'session.error': 'A task needs your attention.',
+  }
+  return { ...notification, title: 'DeepPilot', body: bodies[notification.category] ?? 'Open DeepPilot for an update.' }
 }

@@ -81,13 +81,14 @@ interface Harness {
   logs: string[]
   closed: Promise<void>
   identity: TestIdentity
-  authenticate: (overrides?: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string }) => void
+  authenticate: (overrides?: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string; clientRole?: 'widget' }) => void
 }
 
 async function makeConnection(opts: {
   proxyOverrides?: Partial<ApiProxyLike>
   scopes?: DeviceScope[]
   onAuthenticationSettled?: (ok: boolean, reason: 'success' | 'invalid-proof' | 'timeout' | 'closed') => void
+  onPushEnrollKey?: (enrollKey: string) => Promise<void> | void
 } = {}): Promise<Harness> {
   const bridge = new HostBridge(makeProxy(opts.proxyOverrides), 100)
   // Each harness gets its own registry file so tests never share state.
@@ -107,6 +108,7 @@ async function makeConnection(opts: {
     audience: 'deeppilot:test-audience',
     log: (m) => logs.push(m),
     ...(opts.onAuthenticationSettled ? { onAuthenticationSettled: opts.onAuthenticationSettled } : {}),
+    ...(opts.onPushEnrollKey ? { onPushEnrollKey: opts.onPushEnrollKey } : {}),
     onClosed: () => {
       void (async () => {
         await store.drain()
@@ -121,6 +123,64 @@ async function makeConnection(opts: {
 }
 
 const lastFrame = (ws: FakeWebSocket) => ws.sent[ws.sent.length - 1]
+
+test('widget connection reads snapshots without changing device name, replaying or suppressing alerts', async () => {
+  const { ws, connection, store, bridge, authenticate, identity, closed } = await makeConnection()
+  authenticate({ clientRole: 'widget', deviceName: 'DeepPilot Widget', resumeCursor: 0 })
+  assert.equal(connection.suppressesAlertPush, false)
+  assert.equal(connection.connectedDeviceId, identity.deviceId, 'revocation can still locate widget sockets')
+  assert.equal(store.authorized(identity.deviceId)?.deviceName, 'iPhone')
+  assert.equal(lastFrame(ws).payload.capabilities.widgetPush, true)
+  assert.equal(lastFrame(ws).payload.resumed, false)
+  ws.receive({ v: 2, type: 'c2s.sessions.list', id: 'sessions', payload: {} })
+  assert.equal(lastFrame(ws).type, 's2c.sessions.snapshot')
+  ws.receive({ v: 2, type: 'c2s.pending.list', id: 'pending', payload: {} })
+  assert.equal(lastFrame(ws).type, 's2c.pending.snapshot')
+  const count = ws.sent.length
+  await bridge.refreshSummaries()
+  assert.equal(ws.sent.length, count, 'short-lived widget sockets do not subscribe to broadcasts')
+  for (const type of ['c2s.session.sendPrompt', 'c2s.approval.respond', 'c2s.resume', 'c2s.push.register']) {
+    ws.receive({ v: 2, type, id: type, payload: {} })
+    assert.equal(lastFrame(ws).payload.code, 'E_FORBIDDEN')
+  }
+  ws.close()
+  await closed
+})
+
+test('widget registration uses separate storage and rechecks revocation after enrollment', async () => {
+  let release!: () => void
+  const h = await makeConnection({ onPushEnrollKey: () => new Promise<void>(resolve => { release = resolve }) })
+  h.authenticate({ clientRole: 'widget' })
+  h.store.setPushToken(h.identity.deviceId, 'a'.repeat(64), 'development', undefined, Date.now())
+  h.ws.receive({ v: 2, type: 'c2s.widget.push.register', id: 'register', payload: {
+    deviceToken: 'b'.repeat(64), environment: 'production',
+  } })
+  assert.equal(h.store.authorized(h.identity.deviceId)?.widgetApns?.token, 'b'.repeat(64))
+  assert.equal(h.store.authorized(h.identity.deviceId)?.apns?.token, 'a'.repeat(64))
+  assert.equal(lastFrame(h.ws).payload.code, 'E_UNSUPPORTED', 'registration persists while push is unconfigured')
+  h.ws.receive({ v: 2, type: 'c2s.widget.push.register', id: 'revoked', payload: {
+    deviceToken: 'c'.repeat(64), enrollKey: 'test-enroll-key',
+  } })
+  h.store.revoke(h.identity.deviceId, Date.now())
+  release()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(lastFrame(h.ws).payload.code, 'E_FORBIDDEN')
+  assert.equal(h.store.list()[0]?.widgetApns, undefined)
+  h.ws.close()
+  await h.closed
+})
+
+test('widget registration requires registration and both overview content scopes', async () => {
+  for (const scopes of [['sessions.read'], ['notifications.register', 'sessions.read']] as DeviceScope[][]) {
+    const h = await makeConnection({ scopes })
+    h.authenticate({ clientRole: 'widget' })
+    h.ws.receive({ v: 2, type: 'c2s.widget.push.register', payload: { deviceToken: 'b'.repeat(64) } })
+    assert.equal(lastFrame(h.ws).payload.code, 'E_FORBIDDEN')
+    assert.equal(h.store.authorized(h.identity.deviceId)?.widgetApns, undefined)
+    h.ws.close()
+    await h.closed
+  }
+})
 
 // ---------- pre-auth behaviour ----------
 
@@ -454,6 +514,89 @@ test('protocol version mismatch closes with 4500 after an error frame', async ()
   assert.deepEqual(ws.closes.map((c) => c.code), [4500])
 })
 
+// ---------- frame shape hardening (R1/P1) ----------
+
+test('a JSON null frame is rejected as malformed instead of crashing the host', async () => {
+  const { ws } = await makeConnection()
+  // JSON.parse('null') returns null; the old `as Envelope` cast let `env.v`
+  // throw outside any try/catch and take the process down with it.
+  ws.receive(null)
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL')
+  assert.deepEqual(ws.closes, [], 'a malformed frame must not close the socket either')
+  // The connection must stay usable afterwards.
+  ws.receive({ v: 2, type: 'c2s.ping', id: 'after' })
+  assert.equal(lastFrame(ws).type, 's2c.pong')
+})
+
+test('array and primitive frames are rejected as malformed envelopes', async () => {
+  const { ws } = await makeConnection()
+  for (const frame of [[1, 2, 3], 42, true, 'hello']) {
+    ws.receive(frame)
+    assert.equal(lastFrame(ws).type, 's2c.error', String(frame))
+    assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL', String(frame))
+  }
+  assert.deepEqual(ws.closes, [])
+})
+
+test('mistyped envelope fields are rejected before they reach dispatch', async () => {
+  const { ws } = await makeConnection()
+  // v must be a number; type must be a non-empty string; id/ts/seq must have
+  // their declared types when present.
+  ws.receive({ v: '2', type: 'c2s.ping' })
+  assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL')
+  ws.receive({ v: 2, type: '' })
+  assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL')
+  ws.receive({ v: 2, type: 'c2s.ping', id: 7 })
+  assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL')
+  ws.receive({ v: 2, type: 'c2s.ping', ts: 'now' })
+  assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL')
+  ws.receive({ v: 2, type: 'c2s.ping', seq: 'later' })
+  assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL')
+  assert.deepEqual(ws.closes, [])
+})
+
+test('authenticated frames with a missing or non-string type are rejected, not crashed', async () => {
+  const { ws, authenticate } = await makeConnection()
+  authenticate()
+  ws.sent.length = 0
+
+  // Missing type: used to reach requiredScope(undefined) and throw on
+  // `undefined.startsWith`.
+  ws.receive({ v: 2, payload: {} })
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL')
+  // Non-string type: same unsafe string operation in requiredScope.
+  ws.receive({ v: 2, type: 42, payload: {} })
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL')
+  assert.deepEqual(ws.closes, [], 'the connection survives shape errors')
+})
+
+test('an unexpected host-callback error is contained to the offending connection', async () => {
+  // The outermost .catch on the message handler must stop a thrown host
+  // callback from escaping into the process: only this socket is dropped.
+  const { ws, closed, authenticate } = await makeConnection({
+    // The relay round-trip inside c2s.push.register is a host-provided
+    // callback that may throw; nothing downstream should see the rejection.
+    onPushEnrollKey: async () => { throw new Error('relay unreachable') },
+  })
+  authenticate()
+  ws.sent.length = 0
+
+  ws.receive({
+    v: 2,
+    type: 'c2s.push.register',
+    id: 'pr-1',
+    payload: { deviceToken: 'a'.repeat(64), environment: 'development', enrollKey: 's'.repeat(20) },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  assert.equal(ws.terminated, true, 'the socket must be hard-dropped')
+  assert.equal(ws.sent.length, 0, 'the failed handler must not emit a partial response')
+  await closed
+})
+
 test('prompt failures surface the host error kind, not a blanket E_BUSY', async () => {
   const { ws, authenticate } = await makeConnection({
     proxyOverrides: {
@@ -658,4 +801,190 @@ test('authenticated sessions keep the full 64 MiB frame budget for image prompts
   // No 1009 close: we passed the pre-auth gate, then hit the protocol's own
   // 256 KiB prompt-text cap. The cap we tightened is the pre-auth one.
   assert.equal(ws.closes.length, 0)
+})
+
+// ---------- S→C permission gating (R1/P2) ----------
+
+test('a device with no scopes receives no session content or replay during resume', async () => {
+  const { ws, bridge, authenticate } = await makeConnection({ scopes: [] })
+  const sessionId = 'perm-empty'
+  ;(bridge as any).onMuxFrame({
+    type: 'session/event', rpcId: 'rpc-ev', sessionId,
+    event: { type: 'assistant/message', seq: 5, data: { text: '会话内容' } },
+  })
+  ;(bridge as any).onMuxFrame({
+    type: 'session/projection', sessionId, key: 'title', value: '标题',
+  })
+  await new Promise((r) => setTimeout(r, 10))
+
+  authenticate({ resumeCursor: 0 })
+  const welcome = ws.sent.find(f => f.type === 's2c.welcome')!
+  assert.equal(welcome.payload.resumed, true)
+  assert.deepEqual(welcome.payload.scopes, [])
+  await new Promise((r) => setTimeout(r, 10))
+
+  const afterWelcome = ws.sent.filter((f) => f.type !== 's2c.welcome' && f.type !== 's2c.auth.challenge')
+  assert.deepEqual(
+    afterWelcome.map((f) => f.type),
+    ['s2c.resume.done'],
+    'no replayed session events, deltas or resync to a device without sessions.read',
+  )
+
+  // Live broadcasts must not arrive either.
+  ;(bridge as any).onMuxFrame({
+    type: 'session/event', rpcId: 'rpc-ev2', sessionId,
+    event: { type: 'assistant/message', seq: 6, data: { text: '更多内容' } },
+  })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(
+    ws.sent.filter((f) => f.type === 's2c.session.event').length,
+    0,
+    'no live session events to a device without sessions.read',
+  )
+  assert.deepEqual(ws.sent.filter((f) => f.type === 's2c.sessions.delta').length, 0)
+})
+
+test('a notifications-only device receives no content', async () => {
+  const { ws, bridge, authenticate } = await makeConnection({ scopes: ['notifications.register'] })
+  const sessionId = 'perm-notify'
+  authenticate()
+  ws.sent.length = 0
+
+  ;(bridge as any).onMuxFrame({
+    type: 'session/event', rpcId: 'rpc-ev', sessionId,
+    event: { type: 'turn/end', seq: 5, data: { reason: { kind: 'completed' } } },
+  })
+  ;(bridge as any).onMuxFrame({
+    type: 'approval/requested', rpcId: 'rpc-apr', approvalId: 'apr-1',
+    sessionId, toolName: 'bash', reason: 'run tests',
+  })
+  await new Promise((r) => setTimeout(r, 10))
+
+  const types = ws.sent.map((f) => f.type)
+  assert.ok(!types.includes('s2c.session.event'), 'no session content without sessions.read')
+  assert.ok(!types.includes('s2c.pending.approval'), 'no approval state without interactions.respond')
+  assert.ok(!types.includes('s2c.notify'), 'registration alone grants no content access')
+})
+
+test('zero-scope devices never receive assistant content through notifications or unknown frames', async () => {
+  const { ws, bridge, authenticate } = await makeConnection({ scopes: [] })
+  authenticate()
+  ws.sent.length = 0
+  ;(bridge as any).onMuxFrame({type: 'session/event', sessionId: 'secret',
+    event: {type: 'assistant/message', seq: 1, data: {text: 'CONFIDENTIAL'}}})
+  ;(bridge as any).onMuxFrame({type: 'session/event', sessionId: 'secret',
+    event: {type: 'turn/end', seq: 2, data: {reason: {kind: 'completed'}}}})
+  ;(bridge as any).record('s2c.future.private', {text: 'CONFIDENTIAL'})
+  assert.equal(ws.sent.length, 0)
+  bridge.resumeFrom(0, (bridge as any).sinks.values().next().value)
+  assert.deepEqual(ws.sent.map(f => f.type), ['s2c.resume.done'])
+})
+
+test('responders recover pending requests by replay and snapshot; readers cannot fetch them', async () => {
+  for (const scopes of [['interactions.respond'], ['sessions.read']] as DeviceScope[][]) {
+    const { ws, bridge, authenticate } = await makeConnection({ scopes })
+    ;(bridge as any).onMuxFrame({type: 'approval/requested', rpcId: 'r', approvalId: 'a',
+      sessionId: 's', toolName: 'bash', reason: 'private'})
+    authenticate({resumeCursor: 0})
+    const responder = scopes.includes('interactions.respond')
+    assert.equal(ws.sent.some(f => f.type === 's2c.pending.approval'), responder)
+    ws.receive({v: 2, type: 'c2s.pending.list', id: 'pending', payload: {}})
+    const response = lastFrame(ws)
+    assert.equal(response.type, responder ? 's2c.pending.snapshot' : 's2c.error')
+    if (responder) assert.equal(response.payload.approvals[0].requestId, 'a')
+    else assert.equal(response.payload.code, 'E_FORBIDDEN')
+  }
+})
+
+test('an interactions-only device gets approval frames but no session content', async () => {
+  const { ws, bridge, authenticate } = await makeConnection({ scopes: ['interactions.respond'] })
+  const sessionId = 'perm-approval'
+  authenticate()
+  ws.sent.length = 0
+
+  ;(bridge as any).onMuxFrame({
+    type: 'approval/requested', rpcId: 'rpc-apr', approvalId: 'apr-2',
+    sessionId, toolName: 'bash', reason: 'approve me',
+  })
+  ;(bridge as any).onMuxFrame({
+    type: 'session/event', rpcId: 'rpc-ev', sessionId,
+    event: { type: 'assistant/message', seq: 5, data: { text: '隐私内容' } },
+  })
+  await new Promise((r) => setTimeout(r, 10))
+
+  const types = ws.sent.map((f) => f.type)
+  assert.ok(types.includes('s2c.pending.approval'), 'approval state reaches the responder')
+  const reqId = ws.sent.find((f) => f.type === 's2c.pending.approval')!.payload.requestId
+  assert.equal(reqId, 'apr-2')
+  assert.ok(types.includes('s2c.notify'), 'approval.required notify accompanies the state')
+  assert.equal(ws.sent.find((f) => f.type === 's2c.notify')!.payload.hostAudience, 'deeppilot:test-audience')
+  assert.ok(!types.includes('s2c.session.event'), 'no session content without sessions.read')
+})
+
+test('a reader-without-interactions device gets session content but never approval state', async () => {
+  const { ws, bridge, authenticate } = await makeConnection({ scopes: ['sessions.read'] })
+  const sessionId = 'perm-reader'
+  authenticate()
+  ws.sent.length = 0
+
+  ;(bridge as any).onMuxFrame({
+    type: 'approval/requested', rpcId: 'rpc-apr', approvalId: 'apr-3',
+    sessionId, toolName: 'bash', reason: 'approve me',
+  })
+  await new Promise((r) => setTimeout(r, 10))
+
+  const types = ws.sent.map((f) => f.type)
+  assert.ok(!types.includes('s2c.pending.approval'), 'no approval state without interactions.respond')
+  assert.ok(!types.includes('s2c.notify'), 'approval.required notify is interaction-scoped and withheld')
+  // The approval should not leave a dangling pending flag for this device.
+  assert.deepEqual(ws.sent.filter((f) => f.type === 's2c.pending.cleared').length, 0)
+})
+
+test('invalid request fields are rejected before Host methods can run', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate()
+  let calls = 0
+  for (const name of ['createSession', 'cancelSession', 'selectSessionModel', 'sendPrompt', 'respondQuestion', 'historyPage']) {
+    ;(bridge as any)[name] = async () => { calls++; throw new Error('invalid input reached Host') }
+  }
+  const cases: Array<[string, unknown]> = [
+    ['c2s.session.create', { workspaceId: 42 }],
+    ['c2s.session.cancel', { sessionId: {} }],
+    ['c2s.session.selectModel', { sessionId: 's', provider: 7, model: 'm' }],
+    ['c2s.session.sendPrompt', { sessionId: 's', text: 'hi', images: {} }],
+    ['c2s.session.history', { sessionId: 's', beforeSeq: 10, limit: -1 }],
+    ['c2s.session.open', { sessionId: 's', tailCount: 1.5 }],
+    ['c2s.question.respond', { requestId: 'r', answers: [{ id: 'q', selected: [false] }] }],
+    ['c2s.push.register', { deviceToken: 'a'.repeat(64), environment: 'typo' }],
+  ]
+  for (const [type, payload] of cases) {
+    ws.receive({ v: 2, type, id: 'invalid', payload })
+    await new Promise(r => setTimeout(r, 1))
+    assert.equal(lastFrame(ws).payload.code, 'E_PROTOCOL', type)
+  }
+  assert.equal(calls, 0)
+  ws.receive({ v: 2, type: 'c2s.ping', id: 'still-alive' })
+  assert.equal(lastFrame(ws).type, 's2c.pong')
+})
+
+test('stable prompt ID deduplicates dispatch and receipt lookup uses prompt scope', async () => {
+  const { randomUUID } = await import('node:crypto')
+  const { ws, bridge, authenticate } = await makeConnection({ scopes: ['prompt.send'] })
+  authenticate()
+  let calls = 0
+  ;(bridge as any).sendPrompt = async () => { calls++; return { ok: true, value: 99 } }
+  const clientSendId = `${Date.now()}-${randomUUID()}`
+  const payload = { sessionId: 's', text: 'hello', clientSendId }
+  ws.receive({ v: 2, type: 'c2s.session.sendPrompt', id: 'first', payload })
+  ws.receive({ v: 2, type: 'c2s.session.sendPrompt', id: 'retry', payload })
+  await new Promise(r => setTimeout(r, 10))
+  assert.equal(calls, 1)
+  assert.equal(lastFrame(ws).payload.status, 'accepted')
+  ws.receive({ v: 2, type: 'c2s.session.delivery', id: 'lookup', payload: { sessionId: 's', clientSendId } })
+  assert.equal(lastFrame(ws).payload.status, 'accepted')
+  assert.equal(lastFrame(ws).payload.clientSendId, clientSendId)
+  const reader = await makeConnection({ scopes: ['sessions.read'] })
+  reader.authenticate()
+  reader.ws.receive({ v: 2, type: 'c2s.session.delivery', id: 'denied', payload: { sessionId: 's', clientSendId } })
+  assert.equal(lastFrame(reader.ws).payload.code, 'E_FORBIDDEN')
 })

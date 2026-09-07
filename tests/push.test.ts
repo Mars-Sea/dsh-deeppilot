@@ -1,3 +1,4 @@
+import { mayReceivePush } from '../src/push-policy.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash, generateKeyPairSync, verify as cryptoVerify } from 'node:crypto'
@@ -334,6 +335,7 @@ test('turn end fans out one push per event with the same facts as s2c.notify', a
       replay: () => {},
       replayDone: () => {},
       resync: () => {},
+      canReceive: () => true,
     })
     h.getFeed()({
       type: 'session/event', rpcId: 'r1', sessionId: 'session-x',
@@ -517,6 +519,7 @@ test('approval and question requests also emit s2c.notify frames (N1 protocol pa
       replay: () => {},
       replayDone: () => {},
       resync: () => {},
+      canReceive: () => true,
     })
     h.getFeed()({
       type: 'approval/requested', rpcId: 'rpc-apr-n', approvalId: 'apr-n1',
@@ -572,10 +575,12 @@ test('notify is suppressed for the device that is currently viewing the session'
     const viewer = {
       push: (type: string, payload: any) => viewerCollected.push({ type, payload }),
       lastCursor: () => 0, replay: () => {}, replayDone: () => {}, resync: () => {},
+      canReceive: () => true,
     }
     const away = {
       push: (type: string, payload: any) => awayCollected.push({ type, payload }),
       lastCursor: () => 0, replay: () => {}, replayDone: () => {}, resync: () => {},
+      canReceive: () => true,
     }
     h.bridge.addSink(viewer)
     h.bridge.addSink(away)
@@ -598,4 +603,43 @@ test('notify is suppressed for the device that is currently viewing the session'
   } finally {
     h.cleanup()
   }
+})
+
+ test('offline notifications require registration and category content permission', () => {
+  for (const category of ['turn.completed', 'session.error', 'approval.required', 'question.asked', 'unknown']) {
+    for (const scopes of [[], ['notifications.register'], ['sessions.read'], ['interactions.respond'],
+      ['notifications.register', 'sessions.read'], ['notifications.register', 'interactions.respond']]) {
+      const needed = category === 'turn.completed' || category === 'session.error' ? 'sessions.read'
+        : category === 'approval.required' || category === 'question.asked' ? 'interactions.respond' : undefined
+      assert.equal(mayReceivePush({scopes}, {category, body: 'private'}),
+        needed !== undefined && scopes.includes('notifications.register') && scopes.includes(needed),
+        JSON.stringify({category, scopes}))
+    }
+  }
+})
+
+test('APNs preserves Host identity and isolates collapse and thread identifiers', () => {
+  const base: PushNotification = { notificationId: 'apr-r1', category: 'approval.required',
+    sessionId: 'same-session', title: 'approval', body: 'details' }
+  const a = { ...base, hostAudience: 'deeppilot:' + 'a'.repeat(22) }
+  const b = { ...base, hostAudience: 'deeppilot:' + 'b'.repeat(22) }
+  assert.equal(apnsPayload(a).hostAudience, a.hostAudience)
+  assert.equal(apnsPayload(a).notificationId, 'apr-r1')
+  assert.notEqual(collapseIdFor(a), collapseIdFor(b))
+  assert.notDeepEqual(apnsPayload(a).aps, apnsPayload(b).aps)
+  assert.equal(apnsPayload(base).hostAudience, undefined)
+})
+
+
+test('generic push content removes previews before transport while retaining routing', async () => {
+  const { pushContent } = await import('../src/push-policy.ts')
+  const original = { notificationId: 'apr-1', category: 'approval.required' as const,
+    sessionId: 's', hostAudience: 'deeppilot:abcdefghijklmnopqrstuv', title: 'Secret project', body: 'Secret command' }
+  const generic = pushContent(original, 'generic')
+  assert.equal(generic.title, 'DeepPilot')
+  assert.equal(generic.body, 'An approval needs your attention.')
+  assert.equal(generic.sessionId, original.sessionId)
+  assert.equal(generic.hostAudience, original.hostAudience)
+  assert.equal(original.body, 'Secret command')
+  assert.deepEqual(pushContent(original), original)
 })

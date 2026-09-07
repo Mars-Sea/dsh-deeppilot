@@ -1,7 +1,76 @@
 import { Context } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
+//#region src/prompt-delivery.d.ts
+type DeliveryStatus = 'accepted' | 'rejected' | 'unknown' | 'notFound' | 'expired';
+interface DeliveryReceipt {
+  clientSendId: string;
+  status: DeliveryStatus;
+  userSeq?: number;
+  code?: string;
+}
+/** Durable at-most-once dispatch. Unknown outcomes are never automatically retried. */
+declare class PromptDeliveryJournal {
+  private readonly path?;
+  private readonly capacity;
+  private entries;
+  private inFlight;
+  private healthy;
+  constructor(path?: string | undefined, capacity?: number);
+  private key;
+  private expired;
+  private save;
+  lookup(deviceId: string, sessionId: string, id: string): DeliveryReceipt;
+  dispatch(deviceId: string, sessionId: string, id: string, content: unknown, operation: () => Promise<{
+    ok: true;
+    value: number;
+  } | {
+    ok: false;
+    kind: string;
+  }>): Promise<DeliveryReceipt>;
+}
+//#endregion
+//#region src/device-auth.d.ts
+declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register'];
+type DeviceScope = (typeof DEVICE_SCOPES)[number];
+//#endregion
 //#region src/protocol.d.ts
 type SessionStatus = "running" | "idle" | "error" | "unknown";
+/**
+ * Cumulative model/token statistics for one session, mirrored from the
+ * host's `sessionStats` (dsh-session-stats) + `tokenUsage` (dsh-token-meter)
+ * projections. Every counter is a non-negative integer; 0 means nothing
+ * recorded yet. Clients derive their display figures from the raw sums:
+ * average TTFT = ttftMs / ttftSteps; decode speed = decodeTokens /
+ * (decodeMs / 1000); cache hit ratio = cacheReadTokens / (inputTokens +
+ * cacheReadTokens + cacheWriteTokens); total prompt tokens = inputTokens +
+ * cacheReadTokens + cacheWriteTokens. Absent/null when the host exposes no
+ * stats projections (older DSH versions) or nothing has been measured —
+ * clients must tolerate missing stats and fall back.
+ */
+interface SessionUsageStats {
+  turns: number;
+  steps: number;
+  /** Summed model wall time in ms. */
+  llmMs: number;
+  /** Summed tool wall time in ms. */
+  toolMs: number;
+  /** Summed first-token latency in ms over ttftSteps. */
+  ttftMs: number;
+  /** Steps that recorded a first token. */
+  ttftSteps: number;
+  /** Summed decode wall time in ms over the decode-timed steps. */
+  decodeMs: number;
+  /** Provider output tokens over the same decode-timed steps. */
+  decodeTokens: number;
+  /** Provider-reported uncached prompt tokens. */
+  inputTokens: number;
+  /** Provider-reported output tokens (reasoning included). */
+  outputTokens: number;
+  /** Prompt tokens served from the provider cache. */
+  cacheReadTokens: number;
+  /** Prompt tokens written to the provider cache. */
+  cacheWriteTokens: number;
+}
 type SessionTodoStatus = "pending" | "in_progress" | "completed";
 /** One checklist entry of the session todo projection. */
 interface SessionTodoItem {
@@ -21,6 +90,9 @@ interface SessionSummary {
   todoItems?: SessionTodoItem[] | null;
   pendingApproval: boolean;
   pendingQuestion: boolean;
+  /** Optional cumulative usage stats (see SessionUsageStats); hosts without
+   * the stats projections omit it, and clients must tolerate its absence. */
+  stats?: SessionUsageStats | null;
   workspaceLabel: string | null;
   workspaceId?: string | null;
   workspacePath?: string | null;
@@ -78,6 +150,7 @@ type NotifyCategory = 'turn.completed' | 'approval.required' | 'question.asked' 
  * an APNs token and no live WebSocket.
  */
 interface PushNotification {
+  hostAudience?: string;
   notificationId: string;
   category: NotifyCategory;
   sessionId: string;
@@ -386,6 +459,12 @@ interface BridgeSink {
   }>): void;
   replayDone(): void;
   resync(): void;
+  /**
+   * S→C permission gate (R1/P2): whether this sink may receive broadcast or
+   * replayed frames that require `scope`. The bridge consults this before
+   * every push/replay delivery; unknown broadcast types are denied.
+   */
+  canReceive(scope: DeviceScope): boolean;
 }
 /**
  * Offline push fan-out (F-9 离线推送). The bridge forwards every
@@ -394,6 +473,7 @@ interface BridgeSink {
  */
 interface PushOutlet {
   fanOut(notification: PushNotification): void;
+  widgetChanged?(): void;
   /**
    * Whether offline push is currently configured and usable. Drives the
    * welcome capability bit: advertising push while no APNs credentials are
@@ -428,8 +508,10 @@ declare class HostBridge {
   private abort;
   private started;
   private disposed;
-  constructor(apiProxy: ApiProxyLike, historyBufferMax?: number);
+  readonly promptDeliveries: PromptDeliveryJournal;
+  constructor(apiProxy: ApiProxyLike, historyBufferMax?: number, deliveryJournalPath?: string);
   private pushOutlet;
+  private widgetFingerprint;
   /**
    * Wire the offline-push fan-out. Present ⇒ welcome advertises the `push`
    * capability and notify-worthy events are mirrored to APNs.
@@ -441,11 +523,13 @@ declare class HostBridge {
     approvals: boolean;
     questions: boolean;
     pendingSnapshot: boolean;
+    promptDelivery: boolean;
     notifyAllCategories: boolean;
     models: boolean;
     sessionManagement: boolean;
     projectSelection: boolean;
     push: boolean;
+    widgetPush: boolean;
   };
   diagnostic(message: string): void;
   currentCursor(): number;
@@ -479,6 +563,9 @@ declare class HostBridge {
    * Replay buffered pushes after the given cursor; false when the gap is
    * unrecoverable. Frames go to `target` only — replaying into every sink
    * duplicated the whole window onto devices that never asked for it.
+   * Each frame is filtered by the S→C permission policy per sink, so a
+   * reader without interactions.respond never gets the missed approval
+   * frames back (R1/P2).
    */
   resumeFrom(cursor: number, target?: BridgeSink): boolean;
   private record;
@@ -586,6 +673,8 @@ interface Config {
   push?: {
     /** `none` (default), `apns`, or `relay`. */
     provider?: 'none' | 'apns' | 'relay';
+    /** Generic mode removes conversation-derived titles and bodies before outbound push. */
+    contentMode?: 'preview' | 'generic';
     /** Apple Developer team id (JWT iss claim). */
     teamId?: string;
     /** APNs auth key id (JWT kid header). */
@@ -631,6 +720,7 @@ declare const Config: z<Schemastery.ObjectS<{
   }>>;
   push: z<Schemastery.ObjectS<{
     provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay">;
+    contentMode: z<"generic" | "preview", "generic" | "preview">;
     teamId: z<string, string>;
     keyId: z<string, string>;
     keyPath: z<string, string>;
@@ -639,6 +729,7 @@ declare const Config: z<Schemastery.ObjectS<{
     relayToken: z<string, string>;
   }>, Schemastery.ObjectT<{
     provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay">;
+    contentMode: z<"generic" | "preview", "generic" | "preview">;
     teamId: z<string, string>;
     keyId: z<string, string>;
     keyPath: z<string, string>;
@@ -677,6 +768,7 @@ declare const Config: z<Schemastery.ObjectS<{
   }>>;
   push: z<Schemastery.ObjectS<{
     provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay">;
+    contentMode: z<"generic" | "preview", "generic" | "preview">;
     teamId: z<string, string>;
     keyId: z<string, string>;
     keyPath: z<string, string>;
@@ -685,6 +777,7 @@ declare const Config: z<Schemastery.ObjectS<{
     relayToken: z<string, string>;
   }>, Schemastery.ObjectT<{
     provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay">;
+    contentMode: z<"generic" | "preview", "generic" | "preview">;
     teamId: z<string, string>;
     keyId: z<string, string>;
     keyPath: z<string, string>;
@@ -697,6 +790,10 @@ declare const Config: z<Schemastery.ObjectS<{
 //#region src/push-policy.d.ts
 /** Prune only when the provider supplies an authoritative token-lifecycle verdict. */
 declare function shouldPrunePushToken(outcome: 'sent' | 'invalid-token' | 'failed', reason?: string): boolean;
+/** APNs requires both registration and the same content permission as WS. */
+declare function mayReceivePush(device: {
+  scopes?: readonly string[];
+}, notification: unknown): boolean;
 /**
  * Zero-touch relay self-heal: HTTP 401 means the relay no longer honors the
  * cached credential. Only auto-enrolled cells with a still-current token may
@@ -729,5 +826,5 @@ declare const name = "deeppilot";
 declare const inject: string[];
 declare function apply(ctx: Context, options: unknown): void;
 //#endregion
-export { Config, HostBridge, apply, inject, name, shouldPrunePushToken, shouldReEnrollRelayToken };
+export { Config, HostBridge, apply, inject, mayReceivePush, name, shouldPrunePushToken, shouldReEnrollRelayToken };
 //# sourceMappingURL=index.d.ts.map

@@ -38,7 +38,9 @@ import { Config, DEFAULT_RELAY_URL, normalizeOptions } from './config.ts'
 import type { Config as PluginConfig } from './config.ts'
 import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
-import { shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
+import { pushContent, mayReceivePush, shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
+import { WidgetPushScheduler } from './widget-push.ts'
+import type { PushDelivery } from './protocol.ts'
 import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
 import { DEFAULT_LOCAL_PORT, localEndpointURLs, localListenError, normalizeLocalPort } from './local-policy.ts'
 import { closeServer, createPhoneServer, listen } from './phone-server.ts'
@@ -62,7 +64,7 @@ export const name = 'deeppilot'
 
 export { HostBridge } from './host-bridge.ts'
 export { Config } from './config.ts'
-export { shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
+export { mayReceivePush, shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
 
 /** No eager web-service requirement: independent transports start on their own. */
 export const inject: string[] = []
@@ -435,7 +437,7 @@ export function apply(ctx: Context, options: unknown): void {
 
   interface SendOutcome { outcome: 'sent' | 'invalid-token' | 'failed'; reason?: string }
   type PushSender = (
-    request: { deviceToken: string; environment: ApnsEnvironment; notification: Parameters<PushOutlet['fanOut']>[0] },
+    request: { deviceToken: string; environment: ApnsEnvironment; notification: PushDelivery },
   ) => Promise<SendOutcome>
 
   interface CachedSender {
@@ -519,13 +521,50 @@ export function apply(ctx: Context, options: unknown): void {
    * token. Rules:
    *  - devices with a live WebSocket are skipped (they already got the WS
    *    frame and will raise the local notification themselves);
+   *  - only devices granted `notifications.register` are candidates — a
+   *    device whose scope was revoked must not receive offline pushes
+   *    (R1/P2 S→C permission policy);
    *  - each device is delivered on ITS registered environment (the build
    *    kind it self-reported), so sandbox and production devices coexist;
    *  - the device's per-category switches suppress muted categories;
    *  - only APNs' terminal Unregistered/ExpiredToken verdicts prune storage;
    *    BadDeviceToken may be an environment mismatch and stays diagnosable.
    */
+  const widgetPush = new WidgetPushScheduler(async () => {
+    if (!enabledNow()) return
+    const resolved = resolvePushConfig(currentConfig())
+    if (!resolved.ok) return
+    const devices = auth.devices
+    const send = await senderFor(resolved.value)
+    if (!devices || !send) return
+    const sent = new Set<string>()
+    for (const device of devices.list()) {
+      const registration = device.widgetApns
+      if (!registration || device.revokedAt !== undefined ||
+          !(['notifications.register', 'sessions.read', 'interactions.respond'] as const).every(scope =>
+            device.scopes?.includes(scope)) ||
+          Date.now() - registration.updatedAt > 7 * 24 * 60 * 60 * 1000) continue
+      const key = registration.environment + ':' + registration.token
+      if (sent.has(key)) continue
+      sent.add(key)
+      const { outcome, reason } = await send({
+        deviceToken: registration.token, environment: registration.environment,
+        notification: { kind: 'widget' },
+      })
+      if (shouldPrunePushToken(outcome, reason)) {
+        devices.clearWidgetPushToken(device.deviceId, registration.token)
+      }
+      if (resolved.value.kind === 'relay' && reason === 'HTTP 401' &&
+          enrollmentCell.token === resolved.value.token && enrollmentCell.enrollKey) {
+        enrollmentCell.token = undefined
+        persistEnrollment()
+        await ensureRelayEnrolled(resolved.value.url)
+      }
+    }
+  })
+
   const makePushOutlet = (): PushOutlet => ({
+    widgetChanged: () => widgetPush.changed(),
     // The capability bit must tell the truth: only advertise push when the
     // provider is fully configured, otherwise clients would suppress their
     // local banners expecting a delivery that never happens.
@@ -538,7 +577,8 @@ export function apply(ctx: Context, options: unknown): void {
       if (resolved.value.kind === 'relay' && !resolved.value.token) return false
       return true
     },
-    fanOut: (notification) => {
+    fanOut: (sourceNotification) => {
+      const notification = pushContent({ ...sourceNotification, hostAudience: auth.audience ?? undefined }, currentConfig().push?.contentMode)
       void (async () => {
         let resolved = resolvePushConfig(currentConfig())
         if (!resolved.ok && resolved.reason === 'relay token not enrolled yet') {
@@ -557,7 +597,7 @@ export function apply(ctx: Context, options: unknown): void {
         const connectedIds = new Set<string>()
         for (const connection of connections) {
           const id = connection.connectedDeviceId
-          if (id) connectedIds.add(id)
+          if (id && connection.suppressesAlertPush) connectedIds.add(id)
         }
         // Observability first: push failures used to be completely silent
         // (outcomes were debug-gated), which made field diagnosis impossible.
@@ -567,6 +607,12 @@ export function apply(ctx: Context, options: unknown): void {
           const registration = device.apns
           if (!registration) return false
           if (connectedIds.has(device.deviceId)) return false
+          if (!mayReceivePush(device, notification)) {
+            if (currentConfig().debug === true) {
+              log(`push skip "${device.deviceName}": notification permission not granted`)
+            }
+            return false
+          }
           if (registration.categories?.[notification.category] === false) {
             if (currentConfig().debug === true) {
               log(`push skip "${device.deviceName}": category ${notification.category} muted`)
@@ -1135,7 +1181,7 @@ export function apply(ctx: Context, options: unknown): void {
         log('dsh 0.1.2 session bridge unavailable: ' + String(error))
         return
       }
-      const bridge = new HostBridge(proxy, cfg.historyBufferMax)
+      const bridge = new HostBridge(proxy, cfg.historyBufferMax, join(dataDir, 'prompt-deliveries-v1.json'))
       bridge.setPushOutlet(makePushOutlet())
       state.bridge = bridge
       bridge.start()
@@ -1208,6 +1254,7 @@ export function apply(ctx: Context, options: unknown): void {
     const sender = cachedSender
     cachedSender = undefined
     updateChecker.dispose()
+    widgetPush.dispose()
     const wssClosed = new Promise<void>((resolve) => wss.close(() => resolve()))
     await Promise.allSettled([
       enrollmentWriteTail,

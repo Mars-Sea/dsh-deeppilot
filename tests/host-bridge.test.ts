@@ -71,6 +71,7 @@ function makeSinkInto(store: Array<{ type: string; payload: any }>): BridgeSink 
     replay: () => {},
     replayDone: () => {},
     resync: () => {},
+    canReceive: () => true,
   }
 }
 
@@ -81,6 +82,7 @@ function makeSink(collected: Array<{ type: string; payload: any }>): BridgeSink 
     replay: () => {},
     replayDone: () => {},
     resync: () => {},
+    canReceive: () => true,
   }
 }
 
@@ -418,6 +420,7 @@ test('replay buffers frames and honors cursor gaps', async () => {
     replay: (entries) => { for (const e of entries) received.push(e.seq) },
     replayDone: () => {},
     resync: () => {},
+    canReceive: () => true,
   }
   ;(bridge as any).record('s2c.sessions.delta', { upserted: [], removedIds: [] })
   ;(bridge as any).record('s2c.sessions.delta', { upserted: [], removedIds: [] })
@@ -916,7 +919,7 @@ test('wrapped legacy payloads classify through the inner message source', () => 
 
 // ---------- replay targeting ----------
 
-function makeRecordingSink() {
+function makeRecordingSink(receive: (scope: string) => boolean = () => true) {
   const frames: Array<{ type: string; seq?: number }> = []
   let done = 0
   return {
@@ -927,6 +930,7 @@ function makeRecordingSink() {
     replay: (entries: Array<{ seq: number; type: string }>) => { for (const e of entries) frames.push({ type: e.type, seq: e.seq }) },
     replayDone: () => { done += 1 },
     resync: () => {},
+    canReceive: receive,
   }
 }
 
@@ -936,9 +940,9 @@ test('resumeFrom replays only into the requesting sink, not every connected devi
   bridge.start()
 
   // Fill the ring with three pushes.
-  ;(bridge as any).record('s2c.a', {})
-  ;(bridge as any).record('s2c.b', {})
-  ;(bridge as any).record('s2c.c', {})
+  ;(bridge as any).record('s2c.session.event', {})
+  ;(bridge as any).record('s2c.pending.approval', {})
+  ;(bridge as any).record('s2c.pending.cleared', {})
 
   const requester = makeRecordingSink()
   const bystander = makeRecordingSink()
@@ -949,11 +953,45 @@ test('resumeFrom replays only into the requesting sink, not every connected devi
   assert.equal(ok, true)
 
   const replayedTypes = requester.frames.map((f) => f.type).sort().join(',')
-  assert.ok(replayedTypes.includes('s2c.b') && replayedTypes.includes('s2c.c'), 'requester gets the missed window')
-  assert.ok(!replayedTypes.includes('s2c.a'), 'frames at or before the cursor are not resent')
+  assert.ok(replayedTypes.includes('s2c.pending.approval') && replayedTypes.includes('s2c.pending.cleared'), 'requester gets the missed window')
+  assert.ok(!replayedTypes.includes('s2c.session.event'), 'frames at or before the cursor are not resent')
   assert.equal(requester.doneCount(), 1, 'exactly one replayDone for the requester')
   assert.deepEqual(bystander.frames, [], 'bystander devices receive no replay traffic')
   assert.equal(bystander.doneCount(), 0, 'no spurious replayDone on bystanders')
+  bridge.dispose()
+})
+
+test('resumeFrom filters replayed frames by the S→C permission policy per sink', () => {
+  // A reconnecting reader without interactions.respond must not get the
+  // buffered approval/question frames replayed back (R1/P2).
+  const { proxy } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+
+  ;(bridge as any).record('s2c.session.event', { sessionId: 's1', kind: 'message.start', seq: 1, data: {} })
+  ;(bridge as any).record('s2c.pending.approval', { requestId: 'apr-x', sessionId: 's1', toolName: 'bash', summary: 'run' })
+  ;(bridge as any).record('s2c.notify', { category: 'turn.completed', sessionId: 's1', title: '任务完成', body: '', notificationId: 'n1', ts: 1 })
+
+  const reader = makeRecordingSink((scope) => scope === 'sessions.read')
+  const responder = makeRecordingSink((scope) => scope === 'interactions.respond')
+  bridge.addSink(reader)
+  bridge.addSink(responder)
+
+  bridge.resumeFrom(0, reader as any)
+  assert.deepEqual(
+    reader.frames.map((f) => f.type),
+    ['s2c.session.event', 's2c.notify'],
+    'reader gets session content and non-interaction notify, never approval state',
+  )
+  assert.equal(reader.doneCount(), 1, 'reader still gets its replayDone marker')
+
+  bridge.resumeFrom(0, responder as any)
+  const responderTypes = responder.frames.map((f) => f.type)
+  assert.ok(responderTypes.includes('s2c.pending.approval'), 'responder receives the missed approval frame')
+  assert.ok(
+    !responderTypes.includes('s2c.session.event'),
+    'responder without sessions.read never gets session content replay',
+  )
   bridge.dispose()
 })
 
@@ -1144,6 +1182,66 @@ test('session summary carries the full todo checklist for conversation views', a
   bridge.dispose()
 })
 
+test('session summaries carry usage stats from both stats projections', async () => {
+  const { proxy } = makeFakeProxy()
+  proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
+    {
+      sessionId: 'session-stats',
+      updatedAt: 300,
+      running: true,
+      blank: false,
+      projections: { values: {
+        title: 'Stats 会话',
+        sessionStats: { turns: 12, steps: 34, llmMs: 680000, toolMs: 210000, ttftMs: 15980, ttftSteps: 34, decodeMs: 262000, decodeTokens: 29700 },
+        tokenUsage: { uncachedInputTokens: 169000, outputTokens: 29700, cacheReadTokens: 1131000, cacheWriteTokens: 0 },
+      } },
+    },
+  ] } } })
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  const collected: Array<{ type: string; payload: any }> = []
+  bridge.addSink(makeSink(collected))
+  await new Promise((r) => setTimeout(r, 20))
+
+  const listDelta = collected.find((f) => f.type === 's2c.sessions.delta')
+  assert.ok(listDelta, 'initial sessions.delta missing')
+  const listed = listDelta.payload.upserted.find((s: any) => s.id === 'session-stats')
+  assert.ok(listed, 'session summary missing from initial delta')
+  assert.deepEqual(listed.stats, {
+    turns: 12, steps: 34, llmMs: 680000, toolMs: 210000,
+    ttftMs: 15980, ttftSteps: 34, decodeMs: 262000, decodeTokens: 29700,
+    inputTokens: 169000, outputTokens: 29700, cacheReadTokens: 1131000, cacheWriteTokens: 0,
+  })
+
+  // Live projections arrive as independent per-key mux frames and merge into
+  // the same summary row without wiping fields carried by the other key.
+  ;(bridge as any).onMuxFrame({
+    type: 'session/projection',
+    sessionId: 'session-stats',
+    key: 'sessionStats',
+    value: { turns: 13, steps: 35, llmMs: 700000, toolMs: 210000, ttftMs: 16470, ttftSteps: 35, decodeMs: 262000, decodeTokens: 29700 },
+  })
+  await new Promise((r) => setTimeout(r, 20))
+  ;(bridge as any).onMuxFrame({
+    type: 'session/projection',
+    sessionId: 'session-stats',
+    key: 'tokenUsage',
+    value: { uncachedInputTokens: 'bogus', outputTokens: 30100, cacheReadTokens: 1200000, cacheWriteTokens: 2000 },
+  })
+  await new Promise((r) => setTimeout(r, 20))
+
+  const delta = [...collected].reverse().find((f) => f.type === 's2c.sessions.delta')
+  assert.ok(delta, 'sessions.delta missing after projection update')
+  const upserted = delta.payload.upserted.find((s: any) => s.id === 'session-stats')
+  assert.ok(upserted, 'session summary missing from delta')
+  assert.deepEqual(upserted.stats, {
+    turns: 13, steps: 35, llmMs: 700000, toolMs: 210000,
+    ttftMs: 16470, ttftSteps: 35, decodeMs: 262000, decodeTokens: 29700,
+    inputTokens: 0, outputTokens: 30100, cacheReadTokens: 1200000, cacheWriteTokens: 2000,
+  })
+  bridge.dispose()
+})
+
 test('user message projection carries the durable attachment reference', async () => {
   const { proxy } = makeFakeProxy()
   proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
@@ -1205,6 +1303,48 @@ test('user message projection carries the durable attachment reference', async (
       height: 1536,
     },
   ])
+  bridge.dispose()
+})
+
+test('widgetChanged fires only when the widget fingerprint actually changes', async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
+    { sessionId: 'session-a', updatedAt: 100, running: false, blank: false, projections: { values: { title: 'A' } } },
+  ] } } })
+  const bridge = new HostBridge(proxy, 100)
+  let widgetSignals = 0
+  bridge.setPushOutlet({
+    fanOut: () => {},
+    widgetChanged: () => { widgetSignals += 1 },
+    isAvailable: () => true,
+  })
+  bridge.start()
+  // Initial refreshSummaries records the first sessions.delta: fingerprint
+  // moves off the empty initial value and signals once.
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(widgetSignals, 1)
+
+  // Re-recording an identical delta is a no-op (lastActivityTs is stable
+  // here because refreshSummaries rebuilds from the same fixture row).
+  await bridge.refreshSummaries()
+  assert.equal(widgetSignals, 1)
+
+  // Unrelated frames (session.event, notify) never touch the widget signal.
+  ;(bridge as any).record('s2c.session.event', { sessionId: 'session-a', kind: 'message.start', seq: 1, data: {} })
+  ;(bridge as any).record('s2c.notify', { category: 'turn.completed', sessionId: 'session-a', title: 't', body: '', notificationId: 'n1', ts: 1 })
+  assert.equal(widgetSignals, 1)
+
+  // A new pending approval changes the fingerprint exactly once (the second
+  // signal comes from bumpPendingFlags flipping the row flag).
+  getPush()({ type: 'approval/requested', rpcId: 'rpc-w1', sessionId: 'session-a', approvalId: 'apr-w1', toolName: 'bash', reason: 'run' })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.ok(widgetSignals > 1, 'pending approval must signal the widget')
+  const afterApproval = widgetSignals
+
+  // Resolving it back to the pre-approval state changes the fingerprint again.
+  getPush()({ type: 'approval/resolved', approvalId: 'apr-w1' })
+  await new Promise((r) => setTimeout(r, 30))
+  assert.ok(widgetSignals > afterApproval, 'approval resolution must signal the widget')
   bridge.dispose()
 })
 

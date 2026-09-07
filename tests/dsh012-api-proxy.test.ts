@@ -50,6 +50,7 @@ test('dsh 0.1.2 non-empty raw history opens through the stable bridge shape', as
     replay: () => {},
     replayDone: () => {},
     resync: () => {},
+    canReceive: () => true,
   }
 
   assert.equal(await bridge.openSession(sink, 'legacy-session', 100), true)

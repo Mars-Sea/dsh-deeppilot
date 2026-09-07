@@ -1,5 +1,6 @@
+import { PromptDeliveryJournal, openDeliveryJournal } from './prompt-delivery.ts'
 import { randomUUID } from 'node:crypto'
-import type { Envelope, MessageProjection, NotifyCategory, PendingSnapshotPayload, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus } from './protocol.ts'
+import type { Envelope, MessageProjection, NotifyCategory, PendingSnapshotPayload, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus, SessionUsageStats } from './protocol.ts'
 import {
   isSubagentRow,
   unwrapStreamItem,
@@ -32,6 +33,7 @@ import {
   projectHistory,
 } from './host-event-projection.ts'
 import { documentPromptBlock, type PromptDocument } from './document-payload.ts'
+import { pushScopeFor } from './connection-policy.ts'
 
 export {
   MAX_MESSAGE_PROJECTION_BYTES,
@@ -80,12 +82,16 @@ export class HostBridge {
   private started = false
   private disposed = false
 
+  readonly promptDeliveries: PromptDeliveryJournal
+
   constructor(
     private readonly apiProxy: ApiProxyLike,
     private readonly historyBufferMax: number = MAX_RING_DEFAULT,
-  ) {}
+    deliveryJournalPath?: string,
+  ) { this.promptDeliveries = openDeliveryJournal(deliveryJournalPath) }
 
   private pushOutlet: PushOutlet | undefined;
+  private widgetFingerprint = ''
 
   /**
    * Wire the offline-push fan-out. Present ⇒ welcome advertises the `push`
@@ -102,6 +108,7 @@ export class HostBridge {
       approvals: true,
       questions: true,
       pendingSnapshot: true,
+      promptDelivery: true,
       notifyAllCategories: true,
       models: typeof this.apiProxy.sessions.models === 'function' &&
         typeof this.apiProxy.sessions.selectModel === 'function',
@@ -110,6 +117,7 @@ export class HostBridge {
       projectSelection: typeof this.apiProxy.workspace?.list === 'function' &&
         typeof this.apiProxy.workspace?.create === 'function',
       push: this.pushOutlet?.isAvailable() === true,
+      widgetPush: true,
     };
   }
 
@@ -239,6 +247,9 @@ export class HostBridge {
    * Replay buffered pushes after the given cursor; false when the gap is
    * unrecoverable. Frames go to `target` only — replaying into every sink
    * duplicated the whole window onto devices that never asked for it.
+   * Each frame is filtered by the S→C permission policy per sink, so a
+   * reader without interactions.respond never gets the missed approval
+   * frames back (R1/P2).
    */
   resumeFrom(cursor: number, target?: BridgeSink): boolean {
     const oldest = this.ring.length > 0 ? this.ring[0]!.seq : this.cursor + 1;
@@ -246,7 +257,11 @@ export class HostBridge {
     const receivers = target !== undefined ? [target] : [...this.sinks];
     for (const entry of this.ring) {
       if (entry.seq > cursor) {
-        for (const sink of receivers) sink.replay([entry]);
+        for (const sink of receivers) {
+          const need = pushScopeFor(entry.type, entry.payload)
+          if (need === undefined || !sink.canReceive(need)) continue
+          sink.replay([entry]);
+        }
       }
     }
     for (const sink of receivers) sink.replayDone();
@@ -255,14 +270,27 @@ export class HostBridge {
 
   private record(type: string, payload: unknown, except?: (sink: BridgeSink) => boolean): void {
     if (this.disposed) return
+    if (type === 's2c.sessions.delta' || type.startsWith('s2c.pending.')) {
+      const fingerprint = JSON.stringify([
+        this.listSessions().map(({ id, title, status, lastActivityTs, todos, pendingApproval, pendingQuestion }) =>
+          ({ id, title, status, lastActivityTs, todos, pendingApproval, pendingQuestion })),
+        this.approvals.size, this.questions.size,
+      ])
+      if (fingerprint !== this.widgetFingerprint) {
+        this.widgetFingerprint = fingerprint
+        try { this.pushOutlet?.widgetChanged?.() } catch { /* push cannot break the data plane */ }
+      }
+    }
     this.cursor += 1;
     const entry = { seq: this.cursor, type, payload };
     this.ring.push(entry);
     if (this.ring.length > this.historyBufferMax) {
       this.ring.splice(0, this.ring.length - this.historyBufferMax);
     }
+    const need = pushScopeFor(type, payload)
     for (const sink of this.sinks) {
-      if (except && except(sink)) continue;
+      if (need === undefined || !sink.canReceive(need)) continue
+      if (except && except(sink)) continue
       sink.push(type, payload, entry.seq);
     }
   }
@@ -534,6 +562,13 @@ export class HostBridge {
     } else if (key === 'sessionListMetadata') {
       const meta = value as { lastPromptAt?: number } | null;
       if (meta?.lastPromptAt) row.lastActivityTs = Math.max(row.lastActivityTs, meta.lastPromptAt);
+    } else if (key === 'sessionStats' || key === 'tokenUsage') {
+      // Host usage projections arrive as two independent keys over the mux
+      // stream; merge each patch into the summary's stats snapshot so a
+      // sessionStats-only or tokenUsage-only host still shows partial data.
+      const patch = sanitizeUsageStatsPatch(key, value);
+      if (!patch) return;
+      row.stats = { ...emptyUsageStats, ...(row.stats ?? {}), ...patch };
     } else {
       return;
     }
@@ -1091,6 +1126,70 @@ function sanitizeTodoItems(items: Array<{ content?: unknown; status?: unknown }>
     .map(i => ({ content: i.content, status: i.status as SessionTodoStatus }));
 }
 
+/** Zero-value stats snapshot used as the merge base for partial patches. */
+const emptyUsageStats: SessionUsageStats = {
+  turns: 0,
+  steps: 0,
+  llmMs: 0,
+  toolMs: 0,
+  ttftMs: 0,
+  ttftSteps: 0,
+  decodeMs: 0,
+  decodeTokens: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+};
+
+/** Coerce one host counter to a non-negative integer; junk becomes 0. */
+function usageCounter(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.floor(n);
+}
+
+const SESSION_STATS_COUNTERS = [
+  'turns', 'steps', 'llmMs', 'toolMs',
+  'ttftMs', 'ttftSteps', 'decodeMs', 'decodeTokens',
+] as const;
+
+const TOKEN_USAGE_COUNTERS = [
+  'outputTokens', 'cacheReadTokens', 'cacheWriteTokens',
+] as const;
+
+/** Sanitize one `sessionStats` / `tokenUsage` projection value into the wire
+ * stats fields; undefined when the payload carries nothing readable. Host
+ * field names differ between the two projections (tokenUsage reports
+ * `uncachedInputTokens`, the wire mirrors it as `inputTokens`). */
+function sanitizeUsageStatsPatch(key: string, value: unknown): Partial<SessionUsageStats> | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const patch: Partial<SessionUsageStats> = {};
+  if (key === 'sessionStats') {
+    for (const field of SESSION_STATS_COUNTERS) {
+      if (field in raw) patch[field] = usageCounter(raw[field]);
+    }
+  } else {
+    if ('uncachedInputTokens' in raw) patch.inputTokens = usageCounter(raw.uncachedInputTokens);
+    for (const field of TOKEN_USAGE_COUNTERS) {
+      if (field in raw) patch[field] = usageCounter(raw[field]);
+    }
+  }
+  return Object.keys(patch).length > 0 ? patch : undefined;
+}
+
+/** Combine one session's `sessionStats` + `tokenUsage` projection values into
+ * a complete wire stats object; undefined when neither carries anything. */
+function usageStatsOf(sessionStats: unknown, tokenUsage: unknown): SessionUsageStats | undefined {
+  const patches = [
+    sanitizeUsageStatsPatch('sessionStats', sessionStats),
+    sanitizeUsageStatsPatch('tokenUsage', tokenUsage),
+  ].filter((patch): patch is Partial<SessionUsageStats> => patch !== undefined);
+  if (patches.length === 0) return undefined;
+  return Object.assign({}, emptyUsageStats, ...patches);
+}
+
 function toSummary(
   row: PhoneSessionRow,
   approvals: Map<string, PendingApproval>,
@@ -1110,6 +1209,7 @@ function toSummary(
   const cwd = typeof row.cwd === 'string' ? row.cwd : '';
   const label = workspace?.title ?? (cwd ? cwd.split('/').filter(Boolean).pop() : undefined);
   const todoItems = sanitizeTodoItems(todos);
+  const stats = usageStatsOf(values.sessionStats, values.tokenUsage);
   return {
     id: row.sessionId,
     title: typeof values.title === 'string' ? values.title : '',
@@ -1129,6 +1229,7 @@ function toSummary(
     todoItems: todoItems.length > 0 ? todoItems : null,
     pendingApproval,
     pendingQuestion,
+    ...(stats ? { stats } : {}),
     workspaceLabel: label ?? null,
     workspaceId: workspace?.workspaceId ?? null,
     workspacePath: workspace?.path ?? (cwd || null),

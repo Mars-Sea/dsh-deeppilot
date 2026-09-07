@@ -1,3 +1,4 @@
+import type { DeviceScope } from './device-auth.ts'
 import type { PushNotification } from './protocol.ts'
 
 /* Minimal structural faces over the host apiProxy service. The real types
@@ -216,6 +217,12 @@ export interface BridgeSink {
   replay(entries: Array<{ seq: number; type: string; payload: unknown }>): void
   replayDone(): void
   resync(): void
+  /**
+   * S→C permission gate (R1/P2): whether this sink may receive broadcast or
+   * replayed frames that require `scope`. The bridge consults this before
+   * every push/replay delivery; unknown broadcast types are denied.
+   */
+  canReceive(scope: DeviceScope): boolean
 }
 
 /**
@@ -225,6 +232,7 @@ export interface BridgeSink {
  */
 export interface PushOutlet {
   fanOut(notification: PushNotification): void
+  widgetChanged?(): void
   /**
    * Whether offline push is currently configured and usable. Drives the
    * welcome capability bit: advertising push while no APNs credentials are

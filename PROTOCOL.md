@@ -93,9 +93,18 @@ App 扫码时必须确认响应 `audience` 与二维码一致。配对码无效�
   "deviceName": "iPhone 15 Pro",
   "appVersion": "0.1.0",
   "resumeCursor": 1042,
+  "clientRole": "widget",
   "signature": "<ASN.1 DER ECDSA P-256/SHA-256 signature, base64url>"
 } }
 ```
+
+- `clientRole` 可选，缺省为普通客户端。`"widget"` 声明这是一个短生命周期的
+  只读概览客户端（如 iOS 主屏幕小组件）：完成认证后只允许发送
+  `c2s.ping`、`c2s.sessions.list`、`c2s.pending.list` 与
+  `c2s.widget.push.register`，其余请求一律回 `E_FORBIDDEN`；该连接不注册为
+  广播 sink、不参与 seq 重放（`resumeCursor` 被忽略）、不更新设备
+  lastSeen，也**不**抑制离线 APNs 告警推送（小组件连接不算"设备在线"）。
+  签名输入不含 `clientRole`，v2 签名规范不变。
 
 签名输入必须是下列 UTF-8 字节。文本字段先做无 padding 的 base64url；时间戳和游标
 必须是十进制有限整数，缺失游标写 `-`：
@@ -120,15 +129,35 @@ scope 与操作映射：
 
 | scope | 允许的操作 |
 |---|---|
-| `sessions.read` | 会话/工作区/目录读取、会话打开与历史、模型目录读取、pending 快照 |
+| `sessions.read` | 会话/工作区/目录读取、会话打开与历史、模型目录读取 |
 | `prompt.send` | `c2s.session.sendPrompt` |
 | `sessions.manage` | 创建/重命名/归档/取消会话，创建工作区，切换模型 |
-| `interactions.respond` | 回答 approval 与 question |
+| `interactions.respond` | pending 快照、回答 approval 与 question |
 | `notifications.register` | 注册 APNs token 与通知偏好 |
 
 缺少所需 scope 时服务端回 `E_FORBIDDEN`，连接保持打开。当前产品默认配对授予
 全部 scope，普通设置页不提供逐项权限控制，只提供全局连接开关和逐设备删除。
 `c2s.ping` 与 `c2s.resume` 是已认证连接的控制帧，不额外要求业务 scope。
+
+#### 下行（S→C）广播权限
+
+scope 同样约束服务端**推送**给已认证连接的内容。桥在每次广播与重放时按帧类型
+执行下行权限判定；未满足 scope 的帧不下发，但计入 seq 游标并加入重放环，使
+权限收紧不影响其他设备的投递。
+
+| 下行帧类型 | 需要的 scope |
+|---|---|
+| `s2c.session.event`、`s2c.sessions.delta`、`s2c.session.tail`、`s2c.history.page` | `sessions.read` |
+| `s2c.pending.approval`、`s2c.pending.question`、`s2c.pending.cleared` | `interactions.respond` |
+| `s2c.notify`（`category` 为 `approval.required` / `question.asked`） | `interactions.respond` |
+| `s2c.notify`（`category` 为 `turn.completed` / `session.error`） | `sessions.read`（正文可能包含助手输出） |
+| welcome / ack / error / challenge 及对已通过 scope 检查的 c2s 请求的点对点响应 | 无 |
+
+未知广播类型默认不下发。重放按每帧权限过滤，不要求设备拥有 sessions.read；
+有效 cursor 的重放以 s2c.resume.done 结束，过期 cursor 下发 s2c.resync。
+这些控制帧不携带业务内容。仅 interactions.respond 的设备可通过 pending 快照恢复。
+APNs 必须同时具备 notifications.register 和对应通知类别的内容权限；
+单独的注册权限不授予通知正文读取权限。点对点响应由对应请求权限保护。
 
 ### s2c.welcome
 
@@ -138,7 +167,7 @@ scope 与操作映射：
   "serverVersion": "0.1.0",
   "deviceId": "<authenticated device id>",
   "scopes": ["sessions.read", "prompt.send"],
-  "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "pendingSnapshot": true, "notifyAllCategories": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true },
+  "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "pendingSnapshot": true, "notifyAllCategories": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true, "widgetPush": true },
   "cursor": 1042,
   "resumed": true
 } }
@@ -168,6 +197,12 @@ SessionSummary：
   ],
   "pendingApproval": false,
   "pendingQuestion": true,
+  "stats": {
+    "turns": 12, "steps": 34, "llmMs": 680000, "toolMs": 210000,
+    "ttftMs": 15980, "ttftSteps": 34, "decodeMs": 262000, "decodeTokens": 29700,
+    "inputTokens": 169000, "outputTokens": 29700,
+    "cacheReadTokens": 1131000, "cacheWriteTokens": 0
+  },
   "workspaceLabel": "deeppilot-demo",
   "workspaceId": "workspace-…",
   "workspacePath": "/Users/sea/Development/deeppilot-demo"
@@ -179,6 +214,15 @@ running/idle，error/unknown 为 Host 状态扩展保留；`todos` 无则为 nul
 `todoItems` 为完整清单条目（`content` 非空字符串；`status` 取值 pending | in_progress |
 completed），供会话详情页渲染任务进度；无任务时为 null 或缺省。该字段为可选字段，
 客户端必须容忍缺失。
+
+`stats` 为会话累计用量统计，由 Bridge 镜像 Host 的 `sessionStats` 与 `tokenUsage`
+两个 projection 合并而来（分别来自 dsh-session-stats / dsh-token-meter）。所有字段为
+非负整数（0 表示尚未记录），随 `s2c.sessions.delta` 实时更新。客户端展示派生值：
+首 token 平均 = `ttftMs / ttftSteps`；输出速度 = `decodeTokens / decodeMs × 1000`
+（tok/s）；缓存命中率 = `cacheReadTokens / (inputTokens + cacheReadTokens +
+cacheWriteTokens)`；输入总量 = `inputTokens + cacheReadTokens + cacheWriteTokens`。
+该字段为可选字段：未安装统计 projection 的旧版 Host 或尚未产生任何统计的会话
+会缺省或为 null，客户端必须容忍并回退。
 
 列表变更推送（握手后自动开始，无需订阅）：
 
@@ -542,6 +586,8 @@ token 后发送：
   （调试=sandbox，TestFlight/App Store=production），Bridge 按设备逐一路由。
 - `categories` 可选：设备端按类别的开关镜像；缺省视为全开。Bridge 对离线设备
   推送时必须尊重该开关。
+- 投递前提：目标设备必须持有 `notifications.register` scope——即使持有 APNs
+  token，scope 被撤销的设备也不接收离线推送；同时必须满足上述通知类别的内容权限。
 - `enrollKey` 可选：分发者内置到 App 的共享注册密钥。Bridge 在
   未配置任何推送 provider 时收到它，会自动切换为 relay 模式并向中继执行
   自动注册（零配置接入）；已显式配置 provider 的 Bridge 忽略该字段。
@@ -552,6 +598,39 @@ token 后发送：
 对「已持有 token 且当前无活跃 WebSocket 连接」的设备经 APNs 下发；在线设备的
 通知仍走 WS 帧 + 本地通知路径，两条通道互斥以避免重复横幅。推送不计入 seq
 游标、不参与重放（重连后的离线事件由 resume 重放覆盖）。
+
+### 小组件刷新推送（WidgetKit）
+
+`welcome.capabilities.widgetPush=true` 表示 Bridge 支持小组件内容失效推送。
+小组件扩展（iOS 26+）经系统拿到 WidgetKit 专属推送 token 后，用
+`clientRole:"widget"` 的短连接发送：
+
+```json
+{ "type": "c2s.widget.push.register", "id": "wp-1", "payload": {
+  "deviceToken": "<64 位 hex WidgetKit token>",
+  "environment": "development",
+  "enrollKey": "<可选，同 c2s.push.register>"
+} }
+{ "type": "s2c.ack", "id": "wp-1", "payload": { "enabled": true } }
+```
+
+- 该 token 与告警推送 token **相互独立**：两者类型不同、生命周期不同，分别
+  存储，吊销设备时一并清除；重新配对/重复注册幂等，token 轮换会覆盖旧值。
+- 注册除 `notifications.register` 外还要求设备持有 `sessions.read` 与
+  `interactions.respond` scope（小组件概览同时包含会话与待处理计数）。
+- **载荷完全无内容**：APNs 帧体固定为 `{ "aps": { "content-changed": true } }`，
+  头为 `apns-push-type: widgets`、topic 追加 `.push-type.widgets` 后缀、
+  `apns-priority: 5`、`apns-collapse-id: widget-overview`。它不含会话、
+  标题或任何业务字段，只表达"概览已变化，请重新拉取"。
+- **触发与节流**：Bridge 在概览投影（会话摘要 + 待处理集合）的指纹实际变化
+  时触发，服务端按每 Host 30 秒合并/节流（保留尾沿状态，不饿死持续更新）。
+  在线/离线都发送；小组件收到推送后自行以 `clientRole:"widget"` 短连接
+  拉取 `sessions.list` + `pending.list` 并断开。
+- WidgetKit token 由系统管理且预算受限，Bridge 侧超 7 天未刷新的 token 视为
+  过期不再发送；APNs 返回终态失效（Unregistered/ExpiredToken）时立即清除，
+  BadDeviceToken 可能只是环境不匹配，保留以便诊断。
+- 能力为 false/缺失时客户端不得发送该请求（服务端回 `E_UNSUPPORTED` 或
+  `E_PROTOCOL`）。Relay 分发模式同样透传该推送，中继只做转发与限流。
 
 
 ## 7. 断线重放
@@ -593,3 +672,52 @@ token 后发送：
 - v2 同版本新增可选字段时双方必须忽略未知字段。
 - v1 不受支持；服务端不得接受 Bearer、`c2s.hello.auth` 或通过错误重试降级。
 - 后续破坏性变更必须升级 `v`，不能静默重新解释 v2 字段。
+
+### 通知 Host 路由（向后兼容扩展）
+
+`s2c.notify` 与 APNs/Relay notification 可携带可选 `hostAudience`，值为配对时
+登记的稳定 Host audience（`deeppilot:` 加 22 位 base64url）。Bridge 在发送时填写，
+Relay 校验并原样转发。App 根据该值匹配本地实例，不能用当前选中实例代替来源。
+多个本地配置匹配时，通知点击由用户选择；后台审批必须唯一匹配并重新获取 pending。
+旧 Bridge/Relay 没有该字段时，仅单实例可自动路由，多实例点击需选择；未知或已删除
+Host 不自动回退。旧客户端可忽略新增字段，协议版本及其他字段保持不变。
+APNs collapse/thread 标识在存在 hostAudience 时按 Host 隔离；通知原始 notificationId
+保持不变，以继续解析旧审批的 `apr-<requestId>`。
+
+### 客户端请求字段验证
+
+已认证的请求在业务调用前验证 payload 必须为对象；无参数请求允许省略 payload。
+可选字段若提供则必须符合声明类型，不把错误类型当作未提供。新增未知字段仍忽略。
+标识符最多 4096 字符，路径最多 32768 字符，标题最多 4096 字符；模型 provider/model/
+reasoningEffort 分别最多 256/1024/128 字符。history.beforeSeq 必须为非负安全整数，
+limit 为 1–500 的整数；tailCount 为 1–10000 的整数。审批 reason 和提问 custom
+最多 65536 字符；answers 及每项 selected 最多 100 项，answer id 不能重复。
+APNs environment 若提供只接受 development/production，categories 的值必须为布尔值。
+非法字段返回 E_PROTOCOL；权限不足仍优先返回 E_FORBIDDEN。既有附件及正文预算继续生效。
+
+### 稳定发送身份与投递回执（可选 v2 扩展）
+
+`welcome.capabilities.promptDelivery = true` 表示支持以下契约。旧客户端仍可省略
+`clientSendId`，沿用旧 ack；新客户端对不支持该能力的 Bridge 保留兼容路径。
+
+- `c2s.session.sendPrompt` 可增加 `clientSendId`，格式为 13 位毫秒时间戳、连字符、UUID。
+  同一发送的 ID、会话、正文和附件在重试时必须保持不变。
+- ID 以已认证设备为命名空间，不能用帧 `id` 代替。相同设备＋ID＋内容只调度一次；
+  并发重复请求复用回执。同 ID 不同内容返回 rejected/E_PROTOCOL。
+- 携带该字段时 `s2c.ack` payload 为 `{clientSendId, status, userSeq?, code?}`。
+  status 为 accepted/rejected/unknown/notFound/expired。accepted 表示上游已受理，
+  不表示 turn 完成；userSeq 仍仅为回执标记，不能与消息 seq 对账。
+- `c2s.session.delivery` payload 为 `{sessionId, clientSendId}`，返回相同回执结构，
+  要求 `prompt.send` 权限且只能查询本设备的记录。查询没有副作用。
+- Bridge 在调度上游前原子写入并同步本地 journal，再保存最终结果。中断、内部错误或
+  存储异常均保留 unknown，不重放可能已经执行的请求。journal 不应被手动删除；
+  数据目录由单一 Host 进程拥有，同进程 Bridge 重建共享 journal。
+- 新 ID 允许至多 5 分钟未来时钟偏移和 7 天回溯。超过 7 天的旧 ID 不再触发新调度。
+  journal 最多保留 10000 项；未过期项不会为腾出空间被淘汰，容量满时拒绝新发送。
+- App 在网络请求前保存待确认 ID、显示正文和附件数量，最多每实例 100 项；不保存
+  自动重试所需的图片原始数据。重连、前台会话轮询会查询回执；accepted 清除待确认
+  记录，rejected 显示明确拒绝，notFound/expired/unknown 均不自动重发。
+  新路径不以相同正文或附件数量认定投递成功。
+
+此契约提供有持久化记录时的至多一次调度，不宣称在上游不支持幂等键的情况下实现
+崩溃后的 exactly-once。若上游已接收而 Bridge 来不及记录结果，需用户核对会话。

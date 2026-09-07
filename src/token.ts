@@ -83,6 +83,7 @@ export interface DeviceRecord {
   firstSeenTs: number
   lastSeenTs: number
   apns?: DeviceApnsInfo
+  widgetApns?: DeviceApnsInfo
 }
 
 /** Hex shape of an APNs device token as delivered by iOS (usually 64 chars). */
@@ -149,6 +150,7 @@ export class DeviceStore {
       firstSeenTs: existing?.firstSeenTs ?? now,
       lastSeenTs: now,
       ...(existing?.apns ? { apns: existing.apns } : {}),
+      ...(existing?.widgetApns ? { widgetApns: existing.widgetApns } : {}),
     }
     this.devices.set(deviceId, next)
     void this.flush()
@@ -176,6 +178,7 @@ export class DeviceStore {
     if (!record || record.revokedAt !== undefined) return false
     record.revokedAt = now
     delete record.apns
+    delete record.widgetApns
     void this.flush()
     return true
   }
@@ -234,6 +237,24 @@ export class DeviceStore {
     const record = this.devices.get(deviceId)
     if (!record?.apns) return
     delete record.apns
+    void this.flush()
+  }
+
+  setWidgetPushToken(deviceId: string, token: string, environment: ApnsEnvironment, now: number): void {
+    const record = this.authorized(deviceId)
+    if (!record || !isValidApnsToken(token)) return
+    const previous = record.widgetApns
+    if (previous?.token === token && previous.environment === environment &&
+        now - previous.updatedAt < 60 * 60 * 1000) return
+    record.widgetApns = { token, environment, updatedAt: now }
+    void this.flush()
+  }
+
+  /** Compare-and-clear protects a rotated token from a delayed APNs rejection. */
+  clearWidgetPushToken(deviceId: string, token: string): void {
+    const record = this.devices.get(deviceId)
+    if (record?.widgetApns?.token !== token) return
+    delete record.widgetApns
     void this.flush()
   }
 

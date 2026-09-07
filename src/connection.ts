@@ -1,3 +1,4 @@
+import { validateRequest } from './request-validation.ts'
 import type { WebSocket } from 'ws'
 import {
   PROTOCOL_VERSION,
@@ -35,6 +36,7 @@ import {
   sanitizeImageName,
   sanitizeDocumentField,
   requiredScope,
+  isEnvelope,
 } from './connection-policy.ts'
 
 export {
@@ -92,6 +94,7 @@ export class BridgeConnection implements BridgeSink {
   /** Sanitized device identity from hello; needed for push registration. */
   private deviceId: string | undefined
   private scopes = new Set<DeviceScope>()
+  private widgetClient = false
   private readonly authChallenge: AuthChallenge
 
   constructor(
@@ -100,7 +103,14 @@ export class BridgeConnection implements BridgeSink {
   ) {
     this.authChallenge = createAuthChallenge(deps.audience)
     ws.on('message', (data) => {
-      void this.onMessage(String(data))
+      void this.onMessage(String(data)).catch((error) => {
+        // A frame must never take down the host process: fail only this
+        // socket. Protocol-shape mistakes are handled inside onMessage; this
+        // is the last line of defense for unexpected handler errors.
+        if (this.deps.debug === true) this.deps.log('frame handler failed: ' + String(error))
+        if (this.closed) return
+        this.terminate()
+      })
     })
     ws.on('close', () => {
       this.onClose()
@@ -145,9 +155,18 @@ export class BridgeConnection implements BridgeSink {
     return this.authenticated ? this.deviceId : undefined
   }
 
+  get suppressesAlertPush(): boolean { return !this.widgetClient }
+
   // ---------- BridgeSink ----------
 
+  /** S→C permission gate consulted by the bridge for every broadcast/replay
+   *  frame: a device only receives what its scopes grant (R1/P2). */
+  canReceive(scope: DeviceScope): boolean {
+    return this.scopes.has(scope)
+  }
+
   push(type: string, payload: unknown, seq?: number): void {
+    if (type === 's2c.notify') payload = { ...(payload as object), hostAudience: this.deps.audience }
     if (type === 's2c.session.event') {
       const sessionId = (payload as { sessionId?: unknown } | undefined)?.sessionId
       if (typeof sessionId === 'string') {
@@ -251,7 +270,12 @@ export class BridgeConnection implements BridgeSink {
       }
       let env: Envelope
     try {
-      env = JSON.parse(raw) as Envelope
+      const parsed: unknown = JSON.parse(raw)
+      if (!isEnvelope(parsed)) {
+        this.fail(undefined, 'E_PROTOCOL', 'malformed frame')
+        return
+      }
+      env = parsed
     } catch {
       this.fail(undefined, 'E_PROTOCOL', 'frame is not valid JSON')
       return
@@ -273,11 +297,18 @@ export class BridgeConnection implements BridgeSink {
       this.fail(env.id, 'E_PROTOCOL', 'authenticate first')
       return
     }
+    if (this.widgetClient && ![
+      'c2s.ping', 'c2s.sessions.list', 'c2s.pending.list', 'c2s.widget.push.register',
+    ].includes(env.type)) {
+      return this.fail(env.id, 'E_FORBIDDEN', 'widget connection is read-only')
+    }
     const required = requiredScope(env.type)
     if (required !== undefined && !this.scopes.has(required)) {
       this.fail(env.id, 'E_FORBIDDEN', `scope ${required} required`)
       return
     }
+    const invalid = validateRequest(env.type, env.payload)
+    if (invalid) return this.fail(env.id, 'E_PROTOCOL', invalid)
     switch (env.type) {
       case 'c2s.ping': {
         this.send('s2c.pong', { serverTime: Date.now() }, env.id)
@@ -496,10 +527,16 @@ export class BridgeConnection implements BridgeSink {
         this.send('s2c.session.modelSelected', { sessionId: p.sessionId, selected: result.value }, env.id)
         return
       }
+      case 'c2s.session.delivery': {
+        const p = env.payload as { sessionId: string; clientSendId: string }
+        this.send('s2c.ack', this.deps.bridge.promptDeliveries.lookup(this.deviceId!, p.sessionId, p.clientSendId), env.id)
+        return
+      }
       case 'c2s.session.sendPrompt': {
         const p = env.payload as {
           sessionId?: string
           text?: string
+          clientSendId?: string
           images?: Array<{ mediaType?: string; data?: string; name?: string }>
           documents?: Array<{ mediaType?: string; name?: string; text?: string; truncated?: boolean }>
         }
@@ -551,6 +588,12 @@ export class BridgeConnection implements BridgeSink {
           }
           documents.push({ name, mediaType, text: document.text, ...(document.truncated === true ? { truncated: true } : {}) })
         }
+        if (p.clientSendId) {
+          const receipt = await this.deps.bridge.promptDeliveries.dispatch(this.deviceId!, p.sessionId, p.clientSendId,
+            { text, images, documents }, () => this.deps.bridge.sendPrompt(p.sessionId!, text, images, documents))
+          this.send('s2c.ack', receipt, env.id)
+          return
+        }
         const userSeq = await this.deps.bridge.sendPrompt(p.sessionId, text, images, documents)
         if (!userSeq.ok) return this.fail(env.id, managementErrorCode(userSeq.kind), userSeq.message)
         this.send('s2c.ack', { userSeq: userSeq.value }, env.id)
@@ -582,7 +625,9 @@ export class BridgeConnection implements BridgeSink {
         this.send('s2c.ack', {}, env.id)
         return
       }
+      case 'c2s.widget.push.register':
       case 'c2s.push.register': {
+        const widget = env.type === 'c2s.widget.push.register'
         const p = env.payload as { deviceToken?: unknown; environment?: unknown; categories?: unknown; enrollKey?: unknown }
         const token = typeof p?.deviceToken === 'string' ? p.deviceToken.trim() : ''
         if (!isValidApnsToken(token)) {
@@ -608,7 +653,19 @@ export class BridgeConnection implements BridgeSink {
         // Store the registration BEFORE the readiness gate: if push is still
         // mid-bootstrap (or the relay is temporarily down), the token is
         // already on file for when it recovers — no extra register needed.
-        this.deps.devices.setPushToken(this.deviceId, token, environment, categories, Date.now())
+        // Enrollment is asynchronous. Re-check authority after awaiting it.
+        const record = this.deps.devices.authorized(this.deviceId)
+        if (this.closed || !record?.scopes?.includes('notifications.register')) {
+          return this.fail(env.id, 'E_FORBIDDEN', 'device authorization changed')
+        }
+        if (widget) {
+          if (!record.scopes.includes('sessions.read') || !record.scopes.includes('interactions.respond')) {
+            return this.fail(env.id, 'E_FORBIDDEN', 'widget overview permissions required')
+          }
+          this.deps.devices.setWidgetPushToken(this.deviceId, token, environment, Date.now())
+        } else {
+          this.deps.devices.setPushToken(this.deviceId, token, environment, categories, Date.now())
+        }
         if (!this.deps.bridge.capabilities.push) {
           if (this.deps.debug === true) this.deps.log('push register held: bridge not ready')
           return this.fail(env.id, 'E_UNSUPPORTED', 'push is not configured on this bridge')
@@ -668,12 +725,14 @@ export class BridgeConnection implements BridgeSink {
     this.settleAuthentication(true, 'success')
     this.authenticated = true
     this.deviceId = deviceId
+    this.widgetClient = p.clientRole === 'widget'
     this.scopes = new Set(record.scopes ?? [])
     if (this.helloTimer !== undefined) clearTimeout(this.helloTimer)
-    this.deps.devices.markAuthenticated(deviceId, deviceName, appVersion, Date.now())
+    if (!this.widgetClient) this.deps.devices.markAuthenticated(deviceId, deviceName, appVersion, Date.now())
     this.deps.onDeviceAuthenticated?.(deviceId)
 
-    const cursor = resumeCursor
+    const cursor = this.widgetClient ? undefined : resumeCursor
+    // Each replayed business frame is authorized separately by HostBridge.
     const canResume = cursor !== undefined && this.deps.bridge.canResumeFrom(cursor)
     // Welcome strictly precedes any replayed pushes.
     this.send('s2c.welcome', {
@@ -685,7 +744,7 @@ export class BridgeConnection implements BridgeSink {
       cursor: this.deps.bridge.currentCursor(),
       resumed: canResume,
     }, env.id)
-    this.deps.bridge.addSink(this)
+    if (!this.widgetClient) this.deps.bridge.addSink(this)
     if (cursor !== undefined) {
       if (canResume) {
         this.deps.bridge.resumeFrom(cursor, this)

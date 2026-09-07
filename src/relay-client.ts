@@ -10,7 +10,7 @@
  */
 
 import type { ApnsEnvironment } from './token.ts'
-import type { PushNotification } from './protocol.ts'
+import type { PushDelivery } from './protocol.ts'
 import { normalizeRelayBaseUrl } from './relay-url.ts'
 
 export interface RelayClientOptions {
@@ -26,7 +26,7 @@ export interface RelayClientOptions {
 export interface RelaySendRequest {
   deviceToken: string
   environment: ApnsEnvironment
-  notification: PushNotification
+  notification: PushDelivery
 }
 
 export class RelayClient {
