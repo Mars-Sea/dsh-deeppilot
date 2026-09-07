@@ -37,21 +37,21 @@ does not require the helper.
 
 | Plugin version | Required DSH | How to install |
 |---|---|---|
-| `0.6.0-alpha.4` (new, `alpha` tag) | DSH `0.1.2-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot@alpha` |
-| `0.5.x` (previous stable, `latest`) | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot` |
+| `0.6.x` (current stable, `latest`) | DSH `0.1.2-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot` |
+| `0.5.x` (previous stable) | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot@0.5.0` |
 
-`0.6.0-alpha.4` is built and typechecked against the DSH
+`0.6.x` is built and typechecked against the DSH
 [0.1.2-rc.1](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.2-rc.1)
 Host and client package family. It uses the Gateway multi-client Remote Events
 routing that keeps Web and DeepPilot independently answerable. Earlier plugin
-alphas remain historical artifacts; users installing the current `alpha` tag
-should update DSH to `0.1.2-rc.1` or newer.
+alphas remain historical artifacts; users installing the `alpha` tag for
+pre-release testing should update DSH to `0.1.2-rc.1` or newer.
 
 ```sh
 # DSH 0.1.2-rc.1 or newer (recommended):
-dsh plugin --profile web add dsh-deeppilot@alpha
-# DSH 0.1.1-rc.2 through 0.1.2-alpha.1 (previous stable):
 dsh plugin --profile web add dsh-deeppilot
+# DSH 0.1.1-rc.2 through 0.1.2-alpha.1 (previous stable):
+dsh plugin --profile web add dsh-deeppilot@0.5.0
 dsh web
 ```
 
@@ -78,7 +78,7 @@ DeepPilot state under `$DSH_HOME/deeppilot/`.
 
 ## Publishing (maintainers)
 
-`0.6.0-alpha.4` targets DSH `0.1.2-rc.1`+; `0.5.x` stays compatible with
+`0.6.x` targets DSH `0.1.2-rc.1`+; `0.5.x` stays compatible with
 DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep both published:
 
 1. Bump `version` in `package.json` and in the root `""` entry of
@@ -88,23 +88,23 @@ DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep both published:
    ranges).
 2. Commit the release and push it. `npm publish` runs `prepack` (build) and
    `prepublishOnly` (test + typecheck) automatically.
-3. Publish the alpha line without touching `latest`:
+3. Publish pre-releases without touching `latest`:
 
    ```sh
    npm publish --tag alpha
    ```
 
    After a successful publish, `npm view dsh-deeppilot dist-tags --json` shows
-   `"latest": "0.5.x"` and `"alpha": "0.6.0-alpha.x"`. Verify the published
+   `"latest": "0.6.x"` and `"alpha": "0.6.x-alpha.y"`. Verify the published
    package by installing it into a DSH `0.1.2-rc.1` profile before pointing
    users at it.
-4. Tag the release commit `v0.6.0-alpha.x` and prepare a GitHub Release
+4. Tag the release commit `vX.Y.Z` and prepare a GitHub Release
    (English + 简体中文 notes) that links this README section.
-5. When the alpha graduates to stable, bump to `0.6.0` and publish with
-   `npm publish --tag latest`, which moves `latest` to the new line. Stable
-   releases must never be published with `--tag alpha`.
+5. Publish stable releases with `npm publish --tag latest`, which moves
+   `latest` to the new version. Stable releases must never be published
+   with `--tag alpha`.
 
-Never run `npm publish` from a copy that still has the old `0.5.x` version.
+Never run `npm publish` from a copy that still has an older version.
 
 
 ## Connection and privacy

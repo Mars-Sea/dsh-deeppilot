@@ -34,20 +34,20 @@
 
 | 插件版本 | 所需 DSH | 安装命令 |
 |---|---|---|
-| `0.6.0-alpha.4`（新版，`alpha` tag） | DSH `0.1.2-rc.1` 或更高 | `dsh plugin --profile web add dsh-deeppilot@alpha` |
-| `0.5.x`（旧版稳定版，`latest`） | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot` |
+| `0.6.x`（当前稳定版，`latest`） | DSH `0.1.2-rc.1` 或更高 | `dsh plugin --profile web add dsh-deeppilot` |
+| `0.5.x`（旧版稳定版） | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot@0.5.0` |
 
-`0.6.0-alpha.4` 基于 DSH
+`0.6.x` 基于 DSH
 [0.1.2-rc.1](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.2-rc.1)
 的 Host 与 client 包族构建并完成类型检查。它使用 Gateway 多 Client Remote Events
 路由，使 Web 与 DeepPilot 能独立处理同一交互。旧 alpha 仅保留为历史产物；安装
-当前 `alpha` tag 的用户应先把 DSH 更新到 `0.1.2-rc.1` 或更高版本。
+`alpha` tag 进行预发布测试的用户应先把 DSH 更新到 `0.1.2-rc.1` 或更高版本。
 
 ```sh
 # DSH 0.1.2-rc.1 或更高（推荐）：
-dsh plugin --profile web add dsh-deeppilot@alpha
-# DSH 0.1.1-rc.2 至 0.1.2-alpha.1（旧版稳定）：
 dsh plugin --profile web add dsh-deeppilot
+# DSH 0.1.1-rc.2 至 0.1.2-alpha.1（旧版稳定）：
+dsh plugin --profile web add dsh-deeppilot@0.5.0
 dsh web
 ```
 
@@ -71,7 +71,7 @@ dsh plugin --profile web remove dsh-deeppilot
 
 ## 发布说明（维护者）
 
-`0.6.0-alpha.4` 面向 DSH `0.1.2-rc.1`+；`0.5.x` 保持兼容 DSH
+`0.6.x` 面向 DSH `0.1.2-rc.1`+；`0.5.x` 保持兼容 DSH
 `0.1.1-rc.2`–`0.1.2-alpha.1`，两个版本线都要保持发布：
 
 1. 同步修改 `package.json` 与 `package-lock.json` 根 `""` 条目中的
@@ -80,21 +80,21 @@ dsh plugin --profile web remove dsh-deeppilot
    会强制校验 `^0.1.2-rc.1` 的 peer 范围）。
 2. 提交发布并推送。`npm publish` 会自动执行 `prepack`（构建）与
    `prepublishOnly`（测试 + 类型检查）。
-3. 发布 alpha 版本线，不要动 `latest`：
+3. 发布预发布版本，不要动 `latest`：
 
    ```sh
    npm publish --tag alpha
    ```
 
    发布成功后，`npm view dsh-deeppilot dist-tags --json` 应显示
-   `"latest": "0.5.x"` 与 `"alpha": "0.6.0-alpha.x"`。向用户推荐前，请先在
+   `"latest": "0.6.x"` 与 `"alpha": "0.6.x-alpha.y"`。向用户推荐前，请先在
    DSH `0.1.2-rc.1` profile 中安装验证发布的包。
-4. 为发布提交打 `v0.6.0-alpha.x` tag，并准备包含英文与简体中文说明的
+4. 为发布提交打 `vX.Y.Z` tag，并准备包含英文与简体中文说明的
    GitHub Release，链接本 README 的发布说明。
-5. alpha 转正时升级到 `0.6.0`，用 `npm publish --tag latest` 发布，使
-   `latest` 切换到新版线。稳定版绝不使用 `--tag alpha` 发布。
+5. 稳定版用 `npm publish --tag latest` 发布，使 `latest` 切换到新版本。
+   稳定版绝不使用 `--tag alpha` 发布。
 
-绝不要从仍是旧 `0.5.x` 版本的副本执行 `npm publish`。
+绝不要从仍是旧版本的副本执行 `npm publish`。
 
 
 ## 连接与隐私
