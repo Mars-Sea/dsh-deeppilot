@@ -1,10 +1,16 @@
 # Contributing
 
-Issues and focused pull requests are welcome. Before changing behavior, open an
-issue describing the DSH version, user-visible problem, and proposed
-compatibility boundary.
+Issues and focused pull requests are welcome. For major behavior or compatibility
+changes, discuss the DSH version, user-visible problem, and proposed boundary
+in an issue or the existing task first. Small fixes can go directly to a pull
+request with the relevant context and validation.
 
 ## Local checks
+
+For documentation-only changes, check links, examples, and `git diff --check`.
+For TypeScript changes, run tests, typecheck, and build. Run Go tests when the
+helper changes. The following is the full release validation checklist; use
+`npm ci` when a clean dependency install is needed.
 
 ```bash
 npm ci

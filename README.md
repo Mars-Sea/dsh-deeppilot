@@ -37,18 +37,18 @@ does not require the helper.
 
 | Plugin version | Required DSH | How to install |
 |---|---|---|
-| `0.6.x` (current stable, `latest`) | DSH `0.1.2-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot` |
+| `0.6.x` (current stable, `latest`) | DSH `0.1.5-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot` |
 | `0.5.x` (previous stable) | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot@0.5.0` |
 
 `0.6.x` is built and typechecked against the DSH
-[0.1.2-rc.1](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.2-rc.1)
+[0.1.5-rc.1](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.5-rc.1)
 Host and client package family. It uses the Gateway multi-client Remote Events
 routing that keeps Web and DeepPilot independently answerable. Earlier plugin
 alphas remain historical artifacts; users installing the `alpha` tag for
-pre-release testing should update DSH to `0.1.2-rc.1` or newer.
+pre-release testing should update DSH to `0.1.5-rc.1` or newer.
 
 ```sh
-# DSH 0.1.2-rc.1 or newer (recommended):
+# DSH 0.1.5-rc.1 or newer (recommended):
 dsh plugin --profile web add dsh-deeppilot
 # DSH 0.1.1-rc.2 through 0.1.2-alpha.1 (previous stable):
 dsh plugin --profile web add dsh-deeppilot@0.5.0
@@ -78,13 +78,13 @@ DeepPilot state under `$DSH_HOME/deeppilot/`.
 
 ## Publishing (maintainers)
 
-`0.6.x` targets DSH `0.1.2-rc.1`+; `0.5.x` stays compatible with
+`0.6.x` targets DSH `0.1.5-rc.1`+; `0.5.x` stays compatible with
 DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep both published:
 
 1. Bump `version` in `package.json` and in the root `""` entry of
    `package-lock.json`, then run `npm test && npm run typecheck && npm run build`
    and inspect `npm pack --dry-run --json` (the check
-   `tests/compatibility-metadata.test.ts` enforces the `^0.1.2-rc.1` peer
+   `tests/compatibility-metadata.test.ts` enforces the `^0.1.5-rc.1` peer
    ranges).
 2. Commit the release and push it. `npm publish` runs `prepack` (build) and
    `prepublishOnly` (test + typecheck) automatically.
@@ -96,7 +96,7 @@ DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep both published:
 
    After a successful publish, `npm view dsh-deeppilot dist-tags --json` shows
    `"latest": "0.6.x"` and `"alpha": "0.6.x-alpha.y"`. Verify the published
-   package by installing it into a DSH `0.1.2-rc.1` profile before pointing
+   package by installing it into a DSH `0.1.5-rc.1` profile before pointing
    users at it.
 4. Tag the release commit `vX.Y.Z` and prepare a GitHub Release
    (English + 简体中文 notes) that links this README section.

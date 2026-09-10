@@ -917,6 +917,89 @@ test('wrapped legacy payloads classify through the inner message source', () => 
   assert.equal(rows[1].role, 'user')
 })
 
+// ---------- DSH 0.1.5 session format V3: native system/message events ----------
+
+test('V3 system/message never reaches the phone: live push skips it', async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  const collected: Array<{ type: string; payload: any }> = []
+  bridge.start()
+  bridge.addSink(makeSink(collected))
+
+  getPush()({
+    type: 'session/event', rpcId: 'r-sys', sessionId: 'session-v3',
+    event: {
+      type: 'system/message', seq: 0, time: 1,
+      data: {
+        turn: 0, step: 0,
+        message: {
+          id: 'message-sys', role: 'system',
+          content: [{ type: 'text', text: 'You are a coding agent powered by the model.' }],
+          source: { kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt' },
+        },
+      },
+    },
+  })
+  await new Promise((r) => setTimeout(r, 20))
+  bridge.dispose()
+
+  assert.equal(
+    collected.filter((x) => x.type === 's2c.session.event').length,
+    0,
+    'system prompt prose must not emit a live session.event push',
+  )
+  assert.equal(
+    collected.filter((x) => x.type === 's2c.notify').length,
+    0,
+    'system prompt must not trigger any notification',
+  )
+})
+
+test('V3 system/message never reaches the phone: history drops it', () => {
+  const rows = projectHistory([
+    // V3 session head: the system prompt recorded as a native surface event.
+    { event: { type: 'system/message', seq: 0, time: 1, data: {
+      turn: 0, step: 0,
+      message: {
+        id: 'message-sys', role: 'system',
+        content: [{ type: 'text', text: 'You are a coding agent.' }],
+        source: { kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt' },
+      },
+    } } },
+    // Empty "no system prompt" head must also stay invisible.
+    { event: { type: 'system/message', seq: 5, time: 2, data: {
+      turn: 2, step: 0,
+      message: { id: 'message-empty', role: 'system', content: [],
+        source: { kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt' } },
+    } } },
+    { event: { type: 'user/message', seq: 6, time: 3, data: {
+      id: 'm1', role: 'user',
+      content: [{ type: 'text', text: '真人在说话' }],
+      source: { kind: 'user' },
+    } } },
+  ] as any)
+
+  assert.deepEqual(rows.map((r) => r.seq), [6])
+  assert.equal(rows[0].role, 'user')
+})
+
+test('projectEvent skips V3 system/message in both nonempty and empty shapes', () => {
+  const full = projectEvent('s1', {
+    type: 'system/message', seq: 0, time: 1,
+    data: { turn: 0, step: 0, message: { role: 'system',
+      content: [{ type: 'text', text: 'prompt' }],
+      source: { kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt' } } },
+  } as any)
+  assert.equal(full, null, 'nonempty system prompt must not project')
+
+  const empty = projectEvent('s1', {
+    type: 'system/message', seq: 3, time: 2,
+    data: { turn: 1, step: 0, message: { role: 'system', content: [],
+      source: { kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt' } } },
+  } as any)
+  assert.equal(empty, null, 'empty system head must not project')
+})
+
 // ---------- replay targeting ----------
 
 function makeRecordingSink(receive: (scope: string) => boolean = () => true) {
@@ -1345,6 +1428,21 @@ test('widgetChanged fires only when the widget fingerprint actually changes', as
   getPush()({ type: 'approval/resolved', approvalId: 'apr-w1' })
   await new Promise((r) => setTimeout(r, 30))
   assert.ok(widgetSignals > afterApproval, 'approval resolution must signal the widget')
+
+  const setTodo = (content: string, status: string) => (bridge as any).onMuxFrame({
+    type: 'session/projection', sessionId: 'session-a', key: 'todos',
+    value: [{ content, status }],
+  })
+  setTodo('Implement widget', 'pending')
+  const afterTodo = widgetSignals
+  setTodo('Implement widget', 'in_progress')
+  assert.equal(widgetSignals, afterTodo + 1, 'status changes must signal even with identical done/total')
+  setTodo('Verify widget', 'in_progress')
+  assert.equal(widgetSignals, afterTodo + 2, 'text changes must signal even with identical done/total')
+  setTodo('Verify widget', 'in_progress')
+  assert.equal(widgetSignals, afterTodo + 2, 'identical todo projections must not signal again')
+  ;(bridge as any).onMuxFrame({ type: 'session/projection', sessionId: 'session-a', key: 'todos', value: [] })
+  assert.equal(widgetSignals, afterTodo + 3, 'clearing todos must refresh the widget')
   bridge.dispose()
 })
 

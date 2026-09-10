@@ -1,3 +1,4 @@
+import type { LiveActivityState } from './protocol.ts'
 import { randomBytes } from 'node:crypto'
 import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -70,6 +71,13 @@ export interface DeviceApnsInfo {
   categories?: Record<string, boolean>
 }
 
+export interface LiveActivityRegistration extends DeviceApnsInfo {
+  activityId: string
+  sessionId: string
+  expiresAt: number
+  endedState?: LiveActivityState
+}
+
 export interface DeviceRecord {
   deviceId: string
   deviceName: string
@@ -84,6 +92,7 @@ export interface DeviceRecord {
   lastSeenTs: number
   apns?: DeviceApnsInfo
   widgetApns?: DeviceApnsInfo
+  liveActivity?: LiveActivityRegistration
 }
 
 /** Hex shape of an APNs device token as delivered by iOS (usually 64 chars). */
@@ -151,6 +160,7 @@ export class DeviceStore {
       lastSeenTs: now,
       ...(existing?.apns ? { apns: existing.apns } : {}),
       ...(existing?.widgetApns ? { widgetApns: existing.widgetApns } : {}),
+      ...(existing?.liveActivity ? { liveActivity: existing.liveActivity } : {}),
     }
     this.devices.set(deviceId, next)
     void this.flush()
@@ -179,6 +189,7 @@ export class DeviceStore {
     record.revokedAt = now
     delete record.apns
     delete record.widgetApns
+    delete record.liveActivity
     void this.flush()
     return true
   }
@@ -237,6 +248,32 @@ export class DeviceStore {
     const record = this.devices.get(deviceId)
     if (!record?.apns) return
     delete record.apns
+    void this.flush()
+  }
+
+  setLiveActivity(deviceId: string, registration: LiveActivityRegistration): void {
+    const record = this.authorized(deviceId)
+    if (!record || !isValidApnsToken(registration.token)) return
+    const old = record.liveActivity
+    // Rotation/reconnect cannot extend a round or erase its terminal state.
+    record.liveActivity = old?.activityId === registration.activityId
+      ? { ...registration, expiresAt: old.expiresAt, endedState: old.endedState }
+      : registration
+    void this.flush()
+  }
+
+  endLiveActivity(deviceId: string, token: string, state: LiveActivityState): void {
+    const registration = this.devices.get(deviceId)?.liveActivity
+    if (!registration || registration.token !== token || registration.endedState) return
+    registration.endedState = state
+    void this.flush()
+  }
+
+  clearLiveActivity(deviceId: string, activityId: string, token?: string): void {
+    const record = this.devices.get(deviceId)
+    if (record?.liveActivity?.activityId !== activityId ||
+        (token !== undefined && record.liveActivity.token !== token)) return
+    delete record.liveActivity
     void this.flush()
   }
 

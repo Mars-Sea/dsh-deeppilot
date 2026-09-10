@@ -95,6 +95,8 @@ export class BridgeConnection implements BridgeSink {
   private deviceId: string | undefined
   private scopes = new Set<DeviceScope>()
   private widgetClient = false
+  private liveActivityRegistrationGeneration = 0
+  private pendingLiveActivityId?: string
   private readonly authChallenge: AuthChallenge
 
   constructor(
@@ -623,6 +625,47 @@ export class BridgeConnection implements BridgeSink {
         const outcome = await this.deps.bridge.respondQuestion(p.requestId, p.answers)
         if (!outcome.ok) return this.fail(env.id, pendingResponseErrorCode(outcome.reason), pendingResponseMessage('question', outcome.reason))
         this.send('s2c.ack', {}, env.id)
+        return
+      }
+      case 'c2s.liveActivity.unregister': {
+        const p = env.payload as { activityId: string }
+        if (this.pendingLiveActivityId === p.activityId) {
+          this.liveActivityRegistrationGeneration += 1
+          this.pendingLiveActivityId = undefined
+        }
+        this.deps.devices.clearLiveActivity(this.deviceId!, p.activityId)
+        this.send('s2c.ack', {}, env.id)
+        return
+      }
+      case 'c2s.liveActivity.register': {
+        const p = env.payload as { activityId: string; sessionId: string; deviceToken: string; environment: ApnsEnvironment; enrollKey?: string }
+        const initial = this.deviceId && this.deps.devices.authorized(this.deviceId)
+        if (!initial || !['notifications.register', 'sessions.read', 'interactions.respond'].every(scope => initial.scopes?.includes(scope as DeviceScope))) {
+          return this.fail(env.id, 'E_FORBIDDEN', 'live activity permissions required')
+        }
+        const generation = ++this.liveActivityRegistrationGeneration
+        this.pendingLiveActivityId = p.activityId
+        if (p.enrollKey) await this.deps.onPushEnrollKey?.(p.enrollKey)
+        if (generation !== this.liveActivityRegistrationGeneration) {
+          return this.fail(env.id, 'E_BUSY', 'live activity registration superseded')
+        }
+        const record = this.deviceId && this.deps.devices.authorized(this.deviceId)
+        if (this.closed || !record || !['notifications.register', 'sessions.read', 'interactions.respond'].every(scope => record.scopes?.includes(scope as DeviceScope))) {
+          return this.fail(env.id, 'E_FORBIDDEN', 'live activity permissions required')
+        }
+        if (!this.deps.bridge.listSessions().some(row => row.id === p.sessionId)) {
+          return this.fail(env.id, 'E_NOT_FOUND', 'session not found')
+        }
+        const previous = record.liveActivity
+        if (previous?.activityId === p.activityId && previous.sessionId !== p.sessionId) {
+          return this.fail(env.id, 'E_PROTOCOL', 'activity is bound to another session')
+        }
+        this.deps.devices.setLiveActivity(record.deviceId, {
+          activityId: p.activityId, sessionId: p.sessionId, token: p.deviceToken.toLowerCase(),
+          environment: p.environment, updatedAt: Date.now(), expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+        })
+        this.deps.bridge.refreshLiveActivities()
+        this.send('s2c.ack', { enabled: this.deps.bridge.capabilities.push }, env.id)
         return
       }
       case 'c2s.widget.push.register':

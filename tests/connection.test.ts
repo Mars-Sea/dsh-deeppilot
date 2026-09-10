@@ -988,3 +988,45 @@ test('stable prompt ID deduplicates dispatch and receipt lookup uses prompt scop
   reader.ws.receive({ v: 2, type: 'c2s.session.delivery', id: 'denied', payload: { sessionId: 's', clientSendId } })
   assert.equal(lastFrame(reader.ws).payload.code, 'E_FORBIDDEN')
 })
+
+test('live activity registration binds one session and rechecks permissions after enrollment', async () => {
+  let release!: () => void
+  const h = await makeConnection({ onPushEnrollKey: () => new Promise<void>(resolve => { release = resolve }) })
+  h.authenticate()
+  ;(h.bridge as any).summaries.set('s', { id: 's', title: 'Test', status: 'running', lastActivityTs: 1, todos: null, pendingApproval: false, pendingQuestion: false })
+  ;(h.bridge as any).summaries.set('other', { id: 'other', title: 'Other', status: 'running', lastActivityTs: 1, todos: null, pendingApproval: false, pendingQuestion: false })
+  const payload = { activityId: 'activity', sessionId: 's', deviceToken: 'a'.repeat(64), environment: 'development' }
+  h.ws.receive({ v: 2, type: 'c2s.liveActivity.register', id: 'r', payload })
+  assert.equal(lastFrame(h.ws).type, 's2c.ack')
+  assert.equal(h.store.authorized(h.identity.deviceId)?.liveActivity?.sessionId, 's')
+  h.ws.receive({ v: 2, type: 'c2s.liveActivity.register', id: 'other', payload: { ...payload, sessionId: 'other' } })
+  assert.equal(lastFrame(h.ws).payload.code, 'E_PROTOCOL')
+  h.ws.receive({ v: 2, type: 'c2s.liveActivity.unregister', payload: { activityId: 'old-activity' } })
+  assert.ok(h.store.authorized(h.identity.deviceId)?.liveActivity)
+  h.ws.receive({ v: 2, type: 'c2s.liveActivity.register', id: 'revoked', payload: { ...payload, enrollKey: 'test-enroll-key' } })
+  h.store.revoke(h.identity.deviceId, Date.now())
+  release()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(lastFrame(h.ws).payload.code, 'E_FORBIDDEN')
+  assert.equal(h.store.list()[0]?.liveActivity, undefined)
+  h.ws.close(); await h.closed
+})
+
+test('delayed activity enrollment cannot overwrite a newer registration or undo unregister', async () => {
+  let release!: () => void
+  const h = await makeConnection({ onPushEnrollKey: () => new Promise<void>(resolve => { release = resolve }) })
+  h.authenticate()
+  ;(h.bridge as any).summaries.set('s', { id: 's', title: 'Test', status: 'running', lastActivityTs: 1, todos: null, pendingApproval: false, pendingQuestion: false })
+  const payload = { activityId: 'old', sessionId: 's', deviceToken: 'a'.repeat(64), environment: 'development' }
+  h.ws.receive({ v: 2, type: 'c2s.liveActivity.register', payload: { ...payload, enrollKey: 'test-enroll-key' } })
+  h.ws.receive({ v: 2, type: 'c2s.liveActivity.register', payload: { ...payload, activityId: 'new', deviceToken: 'b'.repeat(64) } })
+  release(); await new Promise(resolve => setImmediate(resolve))
+  assert.equal(h.store.authorized(h.identity.deviceId)?.liveActivity?.activityId, 'new')
+  assert.equal(lastFrame(h.ws).payload.code, 'E_BUSY')
+  h.ws.receive({ v: 2, type: 'c2s.liveActivity.register', payload: { ...payload, enrollKey: 'test-enroll-key' } })
+  h.ws.receive({ v: 2, type: 'c2s.liveActivity.unregister', payload: { activityId: 'old' } })
+  release(); await new Promise(resolve => setImmediate(resolve))
+  assert.equal(h.store.authorized(h.identity.deviceId)?.liveActivity?.activityId, 'new')
+  assert.equal(lastFrame(h.ws).payload.code, 'E_BUSY')
+  h.ws.close(); await h.closed
+})

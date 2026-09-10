@@ -45,6 +45,12 @@ export function validateRequest(type: string, value: unknown): string | undefine
       ids.add(answer.id)
     }
   }
+  if (type === 'c2s.liveActivity.register' || type === 'c2s.liveActivity.unregister') {
+    if (!text(p.activityId, 128)) return 'invalid activityId'
+    if (type === 'c2s.liveActivity.register' &&
+        (!text(p.sessionId) || typeof p.deviceToken !== 'string' || !/^[0-9a-fA-F]{32,512}$/.test(p.deviceToken) ||
+         !['development', 'production'].includes(p.environment as string) || !optional('enrollKey', v => text(v, 128)))) return 'invalid live activity registration'
+  }
   if (type === 'c2s.push.register' || type === 'c2s.widget.push.register') {
     if (p.environment !== undefined && p.environment !== 'production' && p.environment !== 'development') return 'invalid APNs environment'
     if (!optional('enrollKey', v => text(v, 128))) return 'invalid enrollKey'

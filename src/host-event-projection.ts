@@ -41,6 +41,16 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
       const data = event.data as { reason?: { kind?: string } } | undefined;
       return { kind: 'turn.end', data: { ok: data?.reason?.kind === 'completed' } };
     }
+    case 'system/message': {
+      // DSH 0.1.5 (session format V3) records the system prompt in message
+      // history as a native surface event: {turn, step, message: SystemMessage}.
+      // The SystemMessage content is model-facing prompt prose, not
+      // conversation content — projecting it onto the phone's message list
+      // would duplicate it on every page and leak prompt internals the user
+      // never typed. Skip it explicitly (rather than via `default`) so a
+      // future shape change forces a deliberate decision here.
+      return null;
+    }
     case 'user/message':
       return {
         kind: 'message.final',
@@ -376,6 +386,12 @@ export function projectHistory(events: Array<{ event: SessionEventLike; view?: u
     const event = entry.event;
     const base = { seq: event.seq, ts: tsOf(event) };
     switch (event.type) {
+      // DSH 0.1.5 (session format V3) records the system prompt in message
+      // history as a native `system/message` surface event. It is
+      // model-facing prompt prose, not conversation content — see
+      // projectEvent for the rationale. Skip explicitly.
+      case 'system/message':
+        break;
       case 'user/message':
         messages.push({
           ...base,

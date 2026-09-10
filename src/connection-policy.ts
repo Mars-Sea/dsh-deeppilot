@@ -61,6 +61,7 @@ export function requiredScope(type: string): DeviceScope | undefined {
   if (type === 'c2s.session.sendPrompt' || type === 'c2s.session.delivery') return 'prompt.send'
   if (type === 'c2s.pending.list') return 'interactions.respond'
   if (type === 'c2s.approval.respond' || type === 'c2s.question.respond') return 'interactions.respond'
+  if (type === 'c2s.liveActivity.register' || type === 'c2s.liveActivity.unregister') return 'notifications.register'
   if (type === 'c2s.push.register' || type === 'c2s.widget.push.register') return 'notifications.register'
   if (
     type === 'c2s.workspace.create' ||

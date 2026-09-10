@@ -45,7 +45,25 @@ export interface WidgetPushNotification {
   kind: 'widget'
 }
 
-export type PushDelivery = PushNotification | WidgetPushNotification
+export interface LiveActivityState {
+  title: string
+  task: string
+  done: number
+  total: number
+  phase: 'running' | 'approval' | 'question' | 'ended' | 'unavailable'
+}
+export interface LiveActivityPushNotification {
+  kind: 'liveactivity'
+  event: 'update' | 'end'
+  timestamp: number
+  contentState: LiveActivityState
+}
+export interface LiveActivityRegisterPayload extends WidgetPushRegisterPayload {
+  activityId: string
+  sessionId: string
+}
+export interface LiveActivityUnregisterPayload { activityId: string }
+export type PushDelivery = PushNotification | WidgetPushNotification | LiveActivityPushNotification
 
 export interface SessionOpenPayload { sessionId: string; tailCount?: number }
 export interface SessionClosePayload { sessionId: string }
@@ -117,6 +135,7 @@ export interface WelcomeCapabilities {
   /** Bridge has APNs configured; clients may send c2s.push.register. */
   push?: boolean
   widgetPush?: boolean
+  liveActivityPush?: boolean
 }
 
 export interface WelcomePayload {

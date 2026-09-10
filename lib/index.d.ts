@@ -474,6 +474,7 @@ interface BridgeSink {
 interface PushOutlet {
   fanOut(notification: PushNotification): void;
   widgetChanged?(): void;
+  liveActivityChanged?(sessions: SessionSummary[]): void;
   /**
    * Whether offline push is currently configured and usable. Drives the
    * welcome capability bit: advertising push while no APNs credentials are
@@ -530,6 +531,7 @@ declare class HostBridge {
     projectSelection: boolean;
     push: boolean;
     widgetPush: boolean;
+    liveActivityPush: boolean;
   };
   diagnostic(message: string): void;
   currentCursor(): number;
@@ -568,6 +570,7 @@ declare class HostBridge {
    * frames back (R1/P2).
    */
   resumeFrom(cursor: number, target?: BridgeSink): boolean;
+  refreshLiveActivities(): void;
   private record;
   /** Start consuming host + mux streams. Idempotent; aborts on dispose(). */
   start(): void;

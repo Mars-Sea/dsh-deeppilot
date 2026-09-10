@@ -721,3 +721,41 @@ APNs environment 若提供只接受 development/production，categories 的值�
 
 此契约提供有持久化记录时的至多一次调度，不宣称在上游不支持幂等键的情况下实现
 崩溃后的 exactly-once。若上游已接收而 Bridge 来不及记录结果，需用户核对会话。
+
+## Live Activity updates (optional protocol-v2 extension)
+
+`WelcomeCapabilities.liveActivityPush: true` advertises registration support;
+`push` still indicates whether the configured delivery provider is ready.
+Older clients ignore the new capability; new clients omit these requests when
+it is absent and may retain foreground-only ActivityKit updates.
+
+- `c2s.liveActivity.register` → `s2c.ack { enabled: boolean }`: payload contains
+  `activityId` (1–128 characters), `sessionId`, `deviceToken` (32–512 hex
+  characters), `environment` (`development` or `production`), and optional
+  `enrollKey`. This is the individual ActivityKit **update** token, never an
+  alert, WidgetKit, or push-to-start token. Requires `notifications.register`,
+  `sessions.read`, and `interactions.respond`; authorization is rechecked after
+  enrollment. The session must exist. An activity cannot change sessions.
+- `c2s.liveActivity.unregister` → `s2c.ack {}`: `{ activityId }`, scoped to the
+  authenticated device. A stale activity ID cannot remove a newer registration.
+- One registration per device; a new activity replaces the old registration.
+  Registrations expire after eight hours. Token rotation preserves expiry and
+  the terminal state. Revocation clears the registration. Terminal state is
+  persisted before batching and cannot be revived by a subsequent round.
+
+Push delivery adds `kind: "liveactivity"`, `event: "update" | "end"`, `timestamp`
+(Unix seconds), and `contentState: { title, task, done, total, phase }`. Title and
+current-task text are limited to 100 and 160 Unicode code points. Counts are
+nonnegative integers, with `done <= total`; phase is `running`, `approval`,
+`question`, `ended`, or `unavailable`. End does not imply all todos completed.
+APNs uses the main app topic suffixed `.push-type.liveactivity`, push type
+`liveactivity`, and `aps.content-state`. Updates have a 180-second stale date;
+end events dismiss after 300 seconds. Bursts coalesce with a 15-second minimum
+interval; failed sends retry while the registration remains valid. There is
+no push-to-start and no continuous network connection inside the activity.
+
+Relay mode carries only this bounded progress projection, never conversation
+history, attachments, or full todo lists. It rejects unknown content-state
+fields, oversized text, invalid counts, stale timestamps, and event/phase
+mismatches. The updated Relay must be deployed before background Live Activity
+updates work through relay mode. System delivery and refresh budgets still apply.

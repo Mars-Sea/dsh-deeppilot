@@ -1,3 +1,4 @@
+import type { SessionSummary } from './protocol.ts'
 import type { DeviceScope } from './device-auth.ts'
 import type { PushNotification } from './protocol.ts'
 
@@ -233,6 +234,7 @@ export interface BridgeSink {
 export interface PushOutlet {
   fanOut(notification: PushNotification): void
   widgetChanged?(): void
+  liveActivityChanged?(sessions: SessionSummary[]): void
   /**
    * Whether offline push is currently configured and usable. Drives the
    * welcome capability bit: advertising push while no APNs credentials are

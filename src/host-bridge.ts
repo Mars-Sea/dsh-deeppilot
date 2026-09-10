@@ -118,6 +118,7 @@ export class HostBridge {
         typeof this.apiProxy.workspace?.create === 'function',
       push: this.pushOutlet?.isAvailable() === true,
       widgetPush: true,
+      liveActivityPush: true,
     };
   }
 
@@ -268,12 +269,17 @@ export class HostBridge {
     return true;
   }
 
+  refreshLiveActivities(): void {
+    try { this.pushOutlet?.liveActivityChanged?.(this.listSessions()) } catch { /* independent delivery */ }
+  }
+
   private record(type: string, payload: unknown, except?: (sink: BridgeSink) => boolean): void {
     if (this.disposed) return
+    if (type === 's2c.sessions.delta') this.refreshLiveActivities()
     if (type === 's2c.sessions.delta' || type.startsWith('s2c.pending.')) {
       const fingerprint = JSON.stringify([
-        this.listSessions().map(({ id, title, status, lastActivityTs, todos, pendingApproval, pendingQuestion }) =>
-          ({ id, title, status, lastActivityTs, todos, pendingApproval, pendingQuestion })),
+        this.listSessions().map(({ id, title, status, lastActivityTs, todos, todoItems, pendingApproval, pendingQuestion }) =>
+          ({ id, title, status, lastActivityTs, todos, todoItems, pendingApproval, pendingQuestion })),
         this.approvals.size, this.questions.size,
       ])
       if (fingerprint !== this.widgetFingerprint) {

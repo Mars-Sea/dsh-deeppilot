@@ -76,6 +76,11 @@ export interface LoadedKey {
 
 /** Pure payload builder so tests can assert the wire format without sockets. */
 export function apnsPayload(notification: PushDelivery): Record<string, unknown> {
+  if ('kind' in notification && notification.kind === 'liveactivity') return { aps: {
+    timestamp: notification.timestamp, event: notification.event,
+    'content-state': notification.contentState,
+    ...(notification.event === 'end' ? { 'dismissal-date': notification.timestamp + 300 } : { 'stale-date': notification.timestamp + 180 }),
+  } }
   if ('kind' in notification && notification.kind === 'widget') return { aps: { 'content-changed': true } }
   const alert = notification as PushNotification
   return alertPayload(alert)
@@ -110,6 +115,11 @@ export type ApnsSendRequest = PushDelivery & {
 }
 
 export function pushHeaders(bundleId: string, notification: PushDelivery): Record<string, string> {
+  if ('kind' in notification && notification.kind === 'liveactivity') return {
+    'apns-topic': bundleId + '.push-type.liveactivity',
+    'apns-push-type': 'liveactivity', 'apns-priority': notification.event === 'end' ? '10' : '5',
+    'apns-expiration': String(notification.timestamp + 180),
+  }
   if ('kind' in notification && notification.kind === 'widget') {
     return {
       'apns-topic': bundleId + '.push-type.widgets',

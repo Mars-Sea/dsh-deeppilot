@@ -39,6 +39,7 @@ import type { Config as PluginConfig } from './config.ts'
 import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import { pushContent, mayReceivePush, shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
+import { LiveActivityPushManager } from './live-activity.ts'
 import { WidgetPushScheduler } from './widget-push.ts'
 import type { PushDelivery } from './protocol.ts'
 import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
@@ -563,8 +564,25 @@ export function apply(ctx: Context, options: unknown): void {
     }
   })
 
+  const liveActivityPush = new LiveActivityPushManager(() => auth.devices ?? undefined, async (deviceToken, environment, notification) => {
+    if (!enabledNow()) return { outcome: 'failed' }
+    const resolved = resolvePushConfig(currentConfig())
+    if (!resolved.ok) return { outcome: 'failed' }
+    const send = await senderFor(resolved.value)
+    if (!send) return { outcome: 'failed' }
+    const result = await send({ deviceToken, environment, notification })
+    if (resolved.value.kind === 'relay' && result.reason === 'HTTP 401' &&
+        enrollmentCell.token === resolved.value.token && enrollmentCell.enrollKey) {
+      enrollmentCell.token = undefined
+      persistEnrollment()
+      await ensureRelayEnrolled(resolved.value.url)
+    }
+    return result
+  })
+
   const makePushOutlet = (): PushOutlet => ({
     widgetChanged: () => widgetPush.changed(),
+    liveActivityChanged: sessions => liveActivityPush.changed(sessions),
     // The capability bit must tell the truth: only advertise push when the
     // provider is fully configured, otherwise clients would suppress their
     // local banners expecting a delivery that never happens.
@@ -1255,6 +1273,7 @@ export function apply(ctx: Context, options: unknown): void {
     cachedSender = undefined
     updateChecker.dispose()
     widgetPush.dispose()
+    liveActivityPush.dispose()
     const wssClosed = new Promise<void>((resolve) => wss.close(() => resolve()))
     await Promise.allSettled([
       enrollmentWriteTail,
