@@ -21,7 +21,8 @@
 - 发送提示词、切换模型、创建会话，并处理审批与提问；
 - 使用 5 分钟有效的单次配对码与设备级 P-256 密钥；iPhone 真机私钥保存在
   Secure Enclave；
-- 使用可信局域网，或可选的内嵌 Tailscale Funnel 远程连接；
+- 局域网连接全程 TLS：插件自签证书，App 按配对二维码中的指纹固定信任；
+  也可选用内嵌 Tailscale Funnel 远程连接；
 - 接收在线通知，以及可选的离线 APNs 推送；
 - 更新提示：设置页底部显示当前插件版本，并在有新版本时附加一个指向
   对应 GitHub Release 的链接（后台静默检查，仅比较稳定版，不引入第
@@ -34,10 +35,11 @@
 
 | 插件版本 | 所需 DSH | 安装命令 |
 |---|---|---|
-| `0.6.x`（当前稳定版，`latest`） | DSH `0.1.5-rc.1` 或更高 | `dsh plugin --profile web add dsh-deeppilot` |
-| `0.5.x`（旧版稳定版） | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot@0.5.0` |
+| `0.7.x`（当前稳定版，`latest`） | DSH `0.1.5-rc.1` 或更高 | `dsh plugin --profile web add dsh-deeppilot` |
+| `0.6.x`（旧版稳定版） | DSH `0.1.5-rc.1` 或更高 | `dsh plugin --profile web add dsh-deeppilot@0.6.2` |
+| `0.5.x`（历史版本） | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot@0.5.0` |
 
-`0.6.x` 基于 DSH
+`0.7.x` 基于 DSH
 [0.1.5-rc.1](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.5-rc.1)
 的 Host 与 client 包族构建并完成类型检查。它使用 Gateway 多 Client Remote Events
 路由，使 Web 与 DeepPilot 能独立处理同一交互。旧 alpha 仅保留为历史产物；安装
@@ -54,9 +56,14 @@ dsh web
 DSH 重启后，打开 **设置 → DeepPilot**，启用连接并显示配对二维码，然后在
 DeepPilot App 中扫码。同一面板也会显示可复制的配对码，供模拟器或手动输入使用。
 
-局域网连接默认使用插件独立的 TCP `3098` 端口。DSH 可以继续只监听
-`127.0.0.1:3080`，无需向局域网暴露完整 DSH Web 服务。启用系统防火墙时，请仅在
-可信私有网络放行入站 TCP `3098`；端口可在“高级设置”中修改。
+局域网连接默认使用插件独立的 TCP `3098` 端口，且只提供 TLS。插件首次启动时生成
+自签证书（私钥位于 `$DSH_HOME/deeppilot/lan-tls/`），配对二维码携带其公钥指纹，
+App 只信任与该指纹一致的主机。DSH 可以继续只监听 `127.0.0.1:3080`；插件不再在
+DSH Web 服务上注册任何 `/phone` 路由。启用系统防火墙时，请仅在你使用的网络放行
+入站 TCP `3098`；端口可在“高级设置”中修改。
+
+从仍在局域网提供明文 `ws://` 的旧版本插件升级：通过局域网配对的设备需要重新扫码
+配对，以接收证书指纹；经 Funnel 配对的设备不受影响。
 
 npm 包：[npmjs.com/package/dsh-deeppilot](https://www.npmjs.com/package/dsh-deeppilot)
 
@@ -71,13 +78,14 @@ dsh plugin --profile web remove dsh-deeppilot
 
 ## 发布说明（维护者）
 
-`0.6.x` 面向 DSH `0.1.5-rc.1`+；`0.5.x` 保持兼容 DSH
-`0.1.1-rc.2`–`0.1.2-alpha.1`，两个版本线都要保持发布：
+`0.7.x` 面向 DSH `0.1.5-rc.1`+；`0.6.x` 在同一 DSH 版本族上保留 TLS 化之前的
+局域网传输，供迁移期使用；`0.5.x` 保持兼容 DSH
+`0.1.1-rc.2`–`0.1.2-alpha.1`，各版本线都要保持发布：
 
 1. 同步修改 `package.json` 与 `package-lock.json` 根 `""` 条目中的
    `version`，然后运行 `npm test && npm run typecheck && npm run build`，
    并检查 `npm pack --dry-run --json`（`tests/compatibility-metadata.test.ts`
-   会强制校验 `^0.1.5-rc.1` 的 peer 范围）。
+   会强制校验 peer 范围，并断言它同时接纳 `0.1.5-rc.*` 与 `0.1.6-*` 两条线）。
 2. 提交发布并推送。`npm publish` 会自动执行 `prepack`（构建）与
    `prepublishOnly`（测试 + 类型检查）。
 3. 发布预发布版本，不要动 `latest`：
@@ -87,7 +95,7 @@ dsh plugin --profile web remove dsh-deeppilot
    ```
 
    发布成功后，`npm view dsh-deeppilot dist-tags --json` 应显示
-   `"latest": "0.6.x"` 与 `"alpha": "0.6.x-alpha.y"`。向用户推荐前，请先在
+   `"latest": "0.7.x"` 与 `"alpha": "0.7.x-alpha.y"`。向用户推荐前，请先在
    DSH `0.1.5-rc.1` profile 中安装验证发布的包。
 4. 为发布提交打 `vX.Y.Z` tag，并准备包含英文与简体中文说明的
    GitHub Release，链接本 README 的发布说明。
@@ -99,8 +107,9 @@ dsh plugin --profile web remove dsh-deeppilot
 
 ## 连接与隐私
 
-完整会话流量由 iPhone 直接连接用户自己的 DSH Host。插件独立 `3098` 端口上的
-可信局域网 `ws://` 是明文流量，只应在可信网络使用。局域网监听器和可选 Funnel
+完整会话流量由 iPhone 直接连接用户自己的 DSH Host，且始终加密：独立 `3098`
+端口的局域网监听器使用自签证书提供 TLS，指纹在配对时下发给 App；Funnel 模式
+使用 Tailscale 签发的证书。App 拒绝明文 `ws://`。局域网监听器和可选 Funnel
 模式都只暴露经过认证的 DeepPilot 连接、单次配对与健康检查端点，不会暴露完整
 DSH Web UI。
 

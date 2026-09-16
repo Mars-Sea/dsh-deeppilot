@@ -365,13 +365,14 @@ test('a phone approval is sent through Gateway and resolves the local pending ca
 
   harness.push({
     type: 'waterfall', event: 'approval/request', eventId: 'approval-1', agentId: 'session-a',
-    request: { toolName: 'write', reason: 'edit' },
+    request: { toolName: 'write', reason: 'edit', callId: 'call-approval' },
   })
   const streamItem = await firstFrame
   assert.equal(streamItem.done, false)
   const frame = unwrapStreamItem(streamItem.value!)
   assert.equal(frame.type, 'approval/requested')
   assert.equal(frame.sessionId, 'session-a')
+  assert.equal(frame.callId, 'call-approval')
 
   assert.deepEqual(await proxy.respond({
     type: 'client-response',
@@ -437,4 +438,83 @@ test('a throwing phone-surface decision delegates this Gateway delivery', async 
   controller.abort()
   assert.equal((await firstFrame).done, true)
   await iterator.return?.()
+})
+
+for (const listed of [true, false]) {
+  test(`adapter and bridge suppress worker completion pushes (${listed ? 'listed' : 'before list refresh'})`, async () => {
+    const harness = new RemoteEventHarness()
+    const ctx = new Context()
+    let rows: Array<Record<string, unknown>> = [
+      { sessionId: 'main', updatedAt: 1, running: true },
+      ...(listed ? [
+        { sessionId: 'worker-origin', origin: 'subagent', updatedAt: 1, running: true },
+        { sessionId: 'worker-parent', parentSessionId: 'main', updatedAt: 1, running: true },
+      ] : []),
+    ]
+    ctx.provide('sessionController', { list: async () => ({ items: rows }) })
+    ctx.provide('connection', harness.connection)
+    ctx.provide('typertGateway', harness.gateway)
+    const bridge = new HostBridge(new Dsh012ApiProxy(ctx), 100)
+    const frames: Array<{ type: string; payload: any }> = []
+    const pushes: Array<{ sessionId: string; category: string }> = []
+    bridge.addSink({
+      push: (type, payload) => frames.push({ type, payload }),
+      lastCursor: () => 0, replay: () => {}, replayDone: () => {},
+      resync: () => {}, canReceive: () => true,
+    })
+    bridge.setPushOutlet({ fanOut: value => pushes.push(value), isAvailable: () => true })
+    const emit = (id: string, header: Record<string, unknown>, failed = false) => {
+      (ctx as unknown as { emit(event: string, ...args: unknown[]): void }).emit(
+        'session/event', { id, header },
+        { type: 'turn/end', seq: 1, data: { reason: { kind: failed ? 'error' : 'completed' } } },
+      )
+    }
+    const waitForMain = async (count: number) => {
+      for (let i = 0; i < 100 && pushes.length < count; i++) {
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
+      assert.equal(pushes.length, count)
+    }
+    bridge.start()
+    try {
+      await harness.waitUntilOpened()
+      await bridge.refreshSummaries()
+      assert.deepEqual(bridge.listSessions().map(row => row.id), ['main'])
+      // Listed workers can have older event sources without identity hints.
+      // Newly created workers must be recognized from the live Session header.
+      emit('worker-origin', listed ? {} : { origin: 'subagent' })
+      emit('worker-parent', listed ? {} : { origin: 'subagent' }, true)
+      // Ordinary fork lineage must still notify, including before list refresh.
+      emit('main', { parentSession: 'fork-source' })
+      await waitForMain(1)
+      assert.deepEqual(pushes.map(p => [p.sessionId, p.category]), [['main', 'turn.completed']])
+
+      // A stale/shorter list must not forget a worker identified earlier.
+      rows = [rows[0]!]
+      await bridge.refreshSummaries()
+      emit('worker-origin', {})
+      emit('worker-parent', {}, true)
+      emit('main', {}, true)
+      await waitForMain(2)
+      assert.deepEqual(pushes.map(p => [p.sessionId, p.category]), [
+        ['main', 'turn.completed'], ['main', 'session.error'],
+      ])
+      assert.deepEqual(frames.filter(f => f.type === 's2c.notify').map(f => f.payload.sessionId), ['main', 'main'])
+      assert.equal(frames.some(f => f.type === 's2c.session.event' && f.payload.sessionId.startsWith('worker-')), false)
+    } finally {
+      bridge.dispose()
+    }
+  })
+}
+
+test('restore capability reflects the controller instead of the facade wrapper', () => {
+  for (const available of [false, true]) {
+    const workspace = available ? { unarchiveSession: async () => ({ archivedSessionIds: [] }) } : {}
+    const proxy = new Dsh012ApiProxy({ get: (key: string) =>
+      key === 'sessionController' ? {} : key === 'workspaceController' ? workspace : undefined,
+    } as never)
+    const bridge = new HostBridge(proxy, 100)
+    assert.equal(bridge.capabilities.sessionRestore, available)
+    bridge.dispose()
+  }
 })

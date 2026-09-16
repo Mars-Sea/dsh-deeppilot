@@ -79,15 +79,17 @@ const TABLES: LocaleTables = {
 
     // ---- local connection ----
     'local.title': '局域网连接',
-    'local.on': '已开启：手机可通过独立端口 {port} 连接。',
+    'local.on': '已开启：手机可通过独立端口 {port} 以 TLS 加密连接。',
     'local.off': '已关闭：不接受局域网连接。',
+    'local.tlsFingerprint': '证书指纹',
+    'local.tlsRegenerated': '局域网 TLS 身份已重新生成：此前通过内网配对的设备需要重新扫码配对。',
     'local.phaseDisabled': '局域网连接未启用',
     'local.phaseStarting': '局域网连接正在启动',
     'local.phaseOnline': '局域网连接已就绪',
     'local.phaseError': '局域网连接失败',
     'local.phaseStopped': '局域网连接已停止',
     'local.portTitle': '局域网端口',
-    'local.portDescription': '默认 3098，范围 1024–65535。该端口只提供 DeepPilot 的三个连接端点，不会开放完整 DSH。',
+    'local.portDescription': '默认 3098，范围 1024–65535。该端口只以 TLS 提供 DeepPilot 的三个连接端点，不会开放完整 DSH。',
     'local.portApplied': '局域网端口已保存，监听器正在重新加载。',
     'local.portInvalid': '请输入 1024–65535 之间的整数。',
     'local.portFailed': '局域网端口保存失败：',
@@ -157,7 +159,7 @@ const TABLES: LocaleTables = {
     'pair.publicCopyDone': '连接地址已复制',
     'pair.publicCopyFailed': '复制失败：',
     // `{kind}`: public | lan
-    'pair.qrHint': '二维码包含{kind}地址和一次性配对码；配对码 5 分钟后失效，二维码将在 60 秒后自动隐藏。',
+    'pair.qrHint': '二维码包含{kind}地址、一次性配对码以及（内网时）证书指纹；配对码 5 分钟后失效，二维码将在 60 秒后自动隐藏。',
 
     // ---- advanced info ----
     'advanced.summary': '高级信息',
@@ -292,15 +294,17 @@ const TABLES: LocaleTables = {
 
     // ---- local connection ----
     'local.title': 'LAN connection',
-    'local.on': 'On: phones can connect through the independent port {port}.',
+    'local.on': 'On: phones connect over TLS through the independent port {port}.',
     'local.off': 'Off: LAN connections are not accepted.',
+    'local.tlsFingerprint': 'Certificate fingerprint',
+    'local.tlsRegenerated': 'The LAN TLS identity was regenerated: devices previously paired over LAN must scan a new pairing QR.',
     'local.phaseDisabled': 'LAN connection disabled',
     'local.phaseStarting': 'LAN connection starting',
     'local.phaseOnline': 'LAN connection ready',
     'local.phaseError': 'LAN connection failed',
     'local.phaseStopped': 'LAN connection stopped',
     'local.portTitle': 'LAN port',
-    'local.portDescription': 'Default 3098; range 1024–65535. This port exposes only the three DeepPilot endpoints, never the full DSH server.',
+    'local.portDescription': 'Default 3098; range 1024–65535. This port serves only the three DeepPilot endpoints over TLS, never the full DSH server.',
     'local.portApplied': 'LAN port saved; the listener is reloading.',
     'local.portInvalid': 'Enter an integer from 1024 to 65535.',
     'local.portFailed': 'Failed to save LAN port: ',
@@ -369,7 +373,7 @@ const TABLES: LocaleTables = {
     'pair.codeCopyFailed': 'Failed to copy pairing code: ',
     'pair.publicCopyDone': 'Connection address copied',
     'pair.publicCopyFailed': 'Copy failed: ',
-    'pair.qrHint': 'The QR contains a {kind} address and a single-use pairing code. The code expires after 5 minutes; the QR auto-hides after 60 seconds.',
+    'pair.qrHint': 'The QR contains a {kind} address, a single-use pairing code and, for LAN, the certificate fingerprint. The code expires after 5 minutes; the QR auto-hides after 60 seconds.',
 
     // ---- advanced info ----
     'advanced.summary': 'Advanced info',

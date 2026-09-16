@@ -15,10 +15,10 @@ test('local port normalization keeps a stable cross-platform default', () => {
   assert.equal(normalizeLocalPort(3098.5), DEFAULT_LOCAL_PORT)
 })
 
-test('local endpoints use the independent port and remove duplicate addresses', () => {
+test('local endpoints are TLS-only, use the independent port and remove duplicate addresses', () => {
   assert.deepEqual(
     localEndpointURLs(['192.168.1.149', '10.0.0.8', '192.168.1.149'], 3098),
-    ['http://192.168.1.149:3098', 'http://10.0.0.8:3098'],
+    ['https://192.168.1.149:3098', 'https://10.0.0.8:3098'],
   )
 })
 

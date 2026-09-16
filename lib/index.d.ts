@@ -88,6 +88,8 @@ interface SessionSummary {
   } | null;
   /** Full checklist so a conversation view can render progress, not just counts. Absent/null when the session has none. */
   todoItems?: SessionTodoItem[] | null;
+  /** Current tool operation, bounded to 160 Unicode code points. */
+  activity?: string | null;
   pendingApproval: boolean;
   pendingQuestion: boolean;
   /** Optional cumulative usage stats (see SessionUsageStats); hosts without
@@ -96,6 +98,10 @@ interface SessionSummary {
   workspaceLabel: string | null;
   workspaceId?: string | null;
   workspacePath?: string | null;
+  /** Present only on rows served by `c2s.sessions.archived`; the live session
+   * list never contains archived rows. Clients restore one with
+   * `c2s.session.unarchive`. */
+  archived?: boolean;
 }
 type MessageRole = 'user' | 'assistant' | 'tool' | 'system' | 'error';
 type ToolState = 'running' | 'ok' | 'error';
@@ -162,6 +168,7 @@ interface PendingApprovalPayload {
   sessionId: string;
   toolName: string;
   summary: string;
+  toolArguments?: string;
   riskLevel: 'read' | 'write' | 'destructive';
 }
 interface PendingQuestionOption {
@@ -270,6 +277,11 @@ interface WorkspaceApiLike {
     created: boolean;
   }>>;
   archiveSession?(req: RpcRequestLike<{
+    sessionId: string;
+  }>): Promise<RpcResponseLike<{
+    archivedSessionIds: string[];
+  }>>;
+  unarchiveSession?(req: RpcRequestLike<{
     sessionId: string;
   }>): Promise<RpcResponseLike<{
     archivedSessionIds: string[];
@@ -396,6 +408,8 @@ interface SessionEventLike {
   data?: unknown;
 }
 interface MuxFrameLike {
+  /** Internal Host identity hint; never serialized into the phone protocol. */
+  isSubagent?: boolean;
   type: string;
   rpcId?: string;
   payload?: any;
@@ -404,6 +418,7 @@ interface MuxFrameLike {
   key?: string;
   value?: unknown;
   approvalId?: string;
+  callId?: string;
   toolName?: string;
   reason?: string;
   questions?: unknown;
@@ -498,9 +513,13 @@ declare class HostBridge {
   private readonly historyBufferMax;
   readonly id: number;
   private summaries;
+  private activeTools;
   private approvals;
   private questions;
   private archivedSessionIds;
+  /** Mirrors archived rows from the last sessions.list so the phone can browse
+   * and restore them. Excluded from `summaries` and from the live broadcast. */
+  private archivedSummaries;
   private subagentSessionIds;
   private sinks;
   private ring;
@@ -528,6 +547,7 @@ declare class HostBridge {
     notifyAllCategories: boolean;
     models: boolean;
     sessionManagement: boolean;
+    sessionRestore: boolean;
     projectSelection: boolean;
     push: boolean;
     widgetPush: boolean;
@@ -582,17 +602,26 @@ declare class HostBridge {
   refreshSummaries(): Promise<void>;
   /** Cold sessions may lack a title projection; fall back to first user text. */
   private deriveTitleFallback;
+  private captureActivity;
   private noteActivity;
   private applyProjection;
   private bumpPendingFlags;
   private pushSummary;
   listSessions(): SessionSummary[];
   /**
+   * Archived rows from the last sessions.list, newest first. Served only on
+   * demand so the live session list and its broadcast keep their shape for
+   * clients that predate `c2s.sessions.archived`.
+   */
+  listArchivedSessions(): SessionSummary[];
+  /**
    * Complete transient interaction state. Unlike the replay ring, this remains
    * authoritative after a long disconnect and is rehydrated by apiProxy's mux
    * stream when the bridge itself restarts.
    */
   pendingSnapshot(): PendingSnapshotPayload;
+  /** Resolve only the exact invocation in this session; never guess from the latest tool. */
+  private loadApprovalArguments;
   /** Tail history for an opened session; pushes s2c.session.tail to the sink. */
   openSession(sink: BridgeSink, sessionId: string, tailCount: number): Promise<boolean>;
   historyPage(sessionId: string, beforeSeq: number, limit: number): Promise<{
@@ -609,6 +638,7 @@ declare class HostBridge {
   selectSessionModel(sessionId: string, selection: HostModelSelection): Promise<ModelBridgeResult<HostModelSelection>>;
   renameSession(sessionId: string, title: string): Promise<SessionManagementResult<string>>;
   archiveSession(sessionId: string): Promise<SessionManagementResult<true>>;
+  unarchiveSession(sessionId: string): Promise<SessionManagementResult<true>>;
   cancelSession(sessionId: string): Promise<SessionManagementResult<true>>;
   listWorkspaces(): Promise<SessionManagementResult<Array<{
     id: string;
@@ -812,9 +842,9 @@ declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 
 //#region src/index.d.ts
 /**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
- * clients. Owns independent, narrowly routed LAN and Funnel-origin listeners;
- * temporary compatibility routes remain on the existing DSH web server. The
- * web UI and the rest of DSH's API are never exposed by these listeners.
+ * clients. Owns independent, narrowly routed LAN (TLS-only, pinned by paired
+ * devices) and loopback Funnel-origin listeners. The web UI and the rest of
+ * DSH's API are never exposed by these listeners.
  *
  * Data plane: an in-process HostBridge consumes a local compatibility façade
  * over DSH 0.1.2 Session/Workspace controllers, mirrors session summaries,
@@ -825,7 +855,7 @@ declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 
  * Swift models mirror that v2 contract.
  */
 declare const name = "deeppilot";
-/** No eager web-service requirement: independent transports start on their own. */
+/** No web-service requirement: the plugin owns its own transport listeners. */
 declare const inject: string[];
 declare function apply(ctx: Context, options: unknown): void;
 //#endregion

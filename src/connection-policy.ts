@@ -68,6 +68,7 @@ export function requiredScope(type: string): DeviceScope | undefined {
     type === 'c2s.session.create' ||
     type === 'c2s.session.rename' ||
     type === 'c2s.session.archive' ||
+    type === 'c2s.session.unarchive' ||
     type === 'c2s.session.cancel' ||
     type === 'c2s.session.selectModel'
   ) return 'sessions.manage'

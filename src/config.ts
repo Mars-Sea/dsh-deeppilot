@@ -72,7 +72,7 @@ export const Config = z.object({
       .min(MIN_LOCAL_PORT)
       .max(MAX_LOCAL_PORT)
       .default(DEFAULT_LOCAL_PORT)
-      .description('DeepPilot 局域网独立端口（默认 3098，修改后本地连接会短暂重连）'),
+      .description('DeepPilot 局域网独立端口（仅 TLS；默认 3098，修改后本地连接会短暂重连）'),
   }).default({
     enabled: true,
     port: DEFAULT_LOCAL_PORT,

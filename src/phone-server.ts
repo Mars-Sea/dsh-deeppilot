@@ -1,4 +1,5 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer as createHttpsServer } from 'node:https'
 import type { Duplex } from 'node:stream'
 
 export interface PhoneServerHandlers {
@@ -7,13 +8,22 @@ export interface PhoneServerHandlers {
   upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void
 }
 
+export interface PhoneServerTls {
+  key: string
+  cert: string
+}
+
 /**
  * A deliberately narrow transport listener. Both the LAN endpoint and the
  * loopback-only Funnel origin use this factory, so neither can accidentally
  * inherit DSH's wider web/API route surface.
+ *
+ * With `tls` the listener speaks HTTPS/WSS only (the LAN posture); without
+ * it the listener is plain HTTP, which is reserved for the loopback Funnel
+ * origin where tailscaled terminates TLS.
  */
-export function createPhoneServer(handlers: PhoneServerHandlers): Server {
-  const server = createServer((req, res) => {
+export function createPhoneServer(handlers: PhoneServerHandlers, tls?: PhoneServerTls): Server {
+  const onRequest = (req: IncomingMessage, res: ServerResponse): void => {
     const path = requestPath(req)
     if (path === '/phone/health') {
       void handlers.health(req, res)
@@ -23,7 +33,10 @@ export function createPhoneServer(handlers: PhoneServerHandlers): Server {
       res.statusCode = 404
       res.end('not found')
     }
-  })
+  }
+  const server: Server = tls === undefined
+    ? createHttpServer(onRequest)
+    : createHttpsServer({ key: tls.key, cert: tls.cert, minVersion: 'TLSv1.2' }, onRequest)
   server.on('upgrade', (req, socket, head) => {
     if (requestPath(req) !== '/phone') {
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')

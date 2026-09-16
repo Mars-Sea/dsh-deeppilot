@@ -21,7 +21,8 @@ function validReport(extra: Record<string, unknown> = {}) {
     local: {
       phase: 'online' as const,
       port: 3098,
-      endpoints: ['http://192.168.1.149:3098'],
+      endpoints: ['https://192.168.1.149:3098'],
+      tlsFingerprint: 'sha256:' + 'A'.repeat(43),
       updatedAt: 0,
     },
     remote: {
@@ -38,6 +39,25 @@ test('reportSchema accepts a healthy report', () => {
   const parsed = reportSchema.parse(validReport())
   assert.equal(parsed.protocolVersion, 2)
   assert.equal(parsed.activeConnections, 0)
+  assert.equal(parsed.local.tlsFingerprint, 'sha256:' + 'A'.repeat(43))
+  assert.equal(parsed.local.tlsIdentityRegenerated, undefined)
+})
+
+test('reportSchema carries the LAN TLS identity fields and rejects wrong types', () => {
+  const regenerated = reportSchema.parse(validReport({
+    local: { phase: 'online', port: 3098, endpoints: [], tlsFingerprint: 'sha256:x', tlsIdentityRegenerated: true, updatedAt: 0 },
+  }))
+  assert.equal(regenerated.local.tlsIdentityRegenerated, true)
+  const plain = reportSchema.parse(validReport({
+    local: { phase: 'disabled', port: 3098, endpoints: [], updatedAt: 0 },
+  }))
+  assert.equal(plain.local.tlsFingerprint, undefined)
+  assert.throws(() => reportSchema.parse(validReport({
+    local: { phase: 'online', port: 3098, endpoints: [], tlsFingerprint: 42, updatedAt: 0 },
+  })), /local\.tlsFingerprint/)
+  assert.throws(() => reportSchema.parse(validReport({
+    local: { phase: 'online', port: 3098, endpoints: [], tlsIdentityRegenerated: 'yes', updatedAt: 0 },
+  })), /local\.tlsIdentityRegenerated/)
 })
 
 test('reportSchema rejects non-integer and negative counters', () => {

@@ -4,14 +4,14 @@ import type { ApnsSendResult } from './apns.ts'
 import { WidgetPushScheduler } from './widget-push.ts'
 
 export function liveActivityState(session?: SessionSummary): LiveActivityState {
-  const total = Math.max(0, session?.todos?.total ?? 0)
+  const total = Math.max(0, session?.todos?.total ?? session?.todoItems?.length ?? 0)
   const done = Math.min(total, Math.max(0, session?.todos?.done ?? 0))
   const task = session?.todoItems?.find(item => item.status === 'in_progress') ??
     session?.todoItems?.find(item => item.status === 'pending')
   return {
     title: Array.from(session?.title ?? '').slice(0, 100).join(''),
-    task: Array.from(task?.content ?? '').slice(0, 160).join(''), done, total,
-    phase: !session ? 'unavailable' : session.pendingApproval ? 'approval' :
+    task: Array.from(session?.activity?.trim() || task?.content || '').slice(0, 160).join(''), done, total,
+    phase: !session || total === 0 ? 'unavailable' : session.pendingApproval ? 'approval' :
       session.pendingQuestion ? 'question' : session.status === 'running' ? 'running' :
       session.status === 'idle' ? 'ended' : 'unavailable',
   }

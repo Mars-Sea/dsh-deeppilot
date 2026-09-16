@@ -12,8 +12,8 @@ async function makeTempDir(): Promise<string> {
 
 test('device registry is capped and refuses silent identity eviction', async () => {
   const dir = await makeTempDir()
+  const store = await DeviceStore.load(join(dir, 'devices.json'))
   try {
-    const store = await DeviceStore.load(join(dir, 'devices.json'))
     for (let i = 0; i < MAX_DEVICES; i++) {
       const identity = createTestIdentity()
       store.register({ publicKey: identity.publicKey, deviceName: `Phone ${i}`, appVersion: '0.1.0' }, i + 1)
@@ -27,6 +27,7 @@ test('device registry is capped and refuses silent identity eviction', async () 
     )
     assert.deepEqual(store.list().map((row) => row.deviceId), rows.map((row) => row.deviceId))
   } finally {
+    await store.drain()
     await rm(dir, { recursive: true, force: true })
   }
 })

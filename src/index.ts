@@ -45,12 +45,13 @@ import type { PushDelivery } from './protocol.ts'
 import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
 import { DEFAULT_LOCAL_PORT, localEndpointURLs, localListenError, normalizeLocalPort } from './local-policy.ts'
 import { closeServer, createPhoneServer, listen } from './phone-server.ts'
+import { loadOrCreateLanTlsIdentity, type LanTlsIdentity } from './lan-tls.ts'
 
 /**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
- * clients. Owns independent, narrowly routed LAN and Funnel-origin listeners;
- * temporary compatibility routes remain on the existing DSH web server. The
- * web UI and the rest of DSH's API are never exposed by these listeners.
+ * clients. Owns independent, narrowly routed LAN (TLS-only, pinned by paired
+ * devices) and loopback Funnel-origin listeners. The web UI and the rest of
+ * DSH's API are never exposed by these listeners.
  *
  * Data plane: an in-process HostBridge consumes a local compatibility façade
  * over DSH 0.1.2 Session/Workspace controllers, mirrors session summaries,
@@ -67,21 +68,8 @@ export { HostBridge } from './host-bridge.ts'
 export { Config } from './config.ts'
 export { mayReceivePush, shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
 
-/** No eager web-service requirement: independent transports start on their own. */
+/** No web-service requirement: the plugin owns its own transport listeners. */
 export const inject: string[] = []
-
-
-interface WebServerLike {
-  register(route: {
-    kind: 'exact' | 'prefix'
-    path: string
-    handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
-  }): () => void
-  registerUpgrade(route: {
-    path: string
-    handler: (req: IncomingMessage, socket: Duplex, head: Buffer) => void
-  }): () => void
-}
 
 type SubContext = {
   effect: (setup: () => unknown, name?: string) => unknown
@@ -698,9 +686,32 @@ export function apply(ctx: Context, options: unknown): void {
     endpoints: [],
     updatedAt: Date.now(),
   }
+  // The LAN TLS identity is loaded once per plugin lifetime: port or enable
+  // toggles reuse it so paired devices keep their pin. `tlsIdentityRegenerated`
+  // stays raised for the settings page until the next restart because it
+  // means every previously paired LAN device must pair again.
+  let lanTlsIdentity: Promise<LanTlsIdentity> | undefined
+  let tlsIdentityRegenerated = false
+  const loadLanTls = (): Promise<LanTlsIdentity> => {
+    lanTlsIdentity ??= (async () => {
+      await ready
+      const identity = await loadOrCreateLanTlsIdentity(join(dataDir, 'lan-tls'))
+      if (identity.regenerated) {
+        tlsIdentityRegenerated = true
+        log(`LAN TLS identity created: fingerprint=${identity.fingerprint}; previously paired LAN devices must pair again`)
+      } else if (identity.resigned) {
+        log(`LAN TLS certificate renewed (fingerprint unchanged: ${identity.fingerprint})`)
+      }
+      return identity
+    })()
+    // A failed load (disk error) must not poison later reconciles.
+    lanTlsIdentity.catch(() => { lanTlsIdentity = undefined })
+    return lanTlsIdentity
+  }
   const localStatus = (addresses: readonly string[]): DeepPilotReport['local'] => ({
     ...localState,
     endpoints: localState.phase === 'online' ? localEndpointURLs(addresses, localState.port) : [],
+    ...(tlsIdentityRegenerated ? { tlsIdentityRegenerated: true } : {}),
   })
   const remoteStatus = (): RemoteStatus => remoteSupervisor?.status() ?? {
     provider: 'tailscale-funnel',
@@ -899,6 +910,10 @@ export function apply(ctx: Context, options: unknown): void {
       }, Date.now())
       authRateLimiter.recordSuccess(source)
       log(`device paired id=${auditLabel(record.deviceId)} source=${auditLabel(source)}`)
+      // Only a request that arrived over the LAN TLS listener echoes the pin;
+      // Funnel pairings terminate TLS at tailscaled with a public CA cert.
+      const overLanTls = (req.socket as { encrypted?: boolean }).encrypted === true
+      const tlsFingerprint = overLanTls ? (await lanTlsIdentity)?.fingerprint : undefined
       res.statusCode = 201
       res.end(JSON.stringify({
         ok: true,
@@ -906,6 +921,7 @@ export function apply(ctx: Context, options: unknown): void {
         deviceId: record.deviceId,
         audience,
         scopes: record.scopes ?? [],
+        ...(tlsFingerprint ? { tlsFingerprint } : {}),
       }))
     } catch (error) {
       res.statusCode = error instanceof SyntaxError || error instanceof TypeError ? 400 : 503
@@ -1056,19 +1072,30 @@ export function apply(ctx: Context, options: unknown): void {
     }
 
     localState = { phase: 'starting', port: next.port, endpoints: [], updatedAt: Date.now() }
-    const server = createPhoneServer(phoneHandlers)
-    localServer = server
+    let server: ReturnType<typeof createPhoneServer> | undefined
     try {
+      const tls = await loadLanTls()
+      if (localDisposed || appliedLocalKey !== nextKey) return
+      server = createPhoneServer(phoneHandlers, { key: tls.key, cert: tls.cert })
+      localServer = server
       await listen(server, next.port, '0.0.0.0')
       if (localDisposed || localServer !== server) {
         await closeServer(server)
         return
       }
-      localState = { phase: 'online', port: next.port, endpoints: [], updatedAt: Date.now() }
-      log(`local transport listening on 0.0.0.0:${next.port}`)
+      localState = {
+        phase: 'online',
+        port: next.port,
+        endpoints: [],
+        tlsFingerprint: tls.fingerprint,
+        updatedAt: Date.now(),
+      }
+      log(`local transport listening on https://0.0.0.0:${next.port} (tls fingerprint ${tls.fingerprint})`)
     } catch (error) {
-      if (localServer === server) localServer = undefined
-      await closeServer(server)
+      if (server !== undefined) {
+        if (localServer === server) localServer = undefined
+        await closeServer(server)
+      }
       const message = localListenError(error, next.port)
       localState = { phase: 'error', port: next.port, endpoints: [], message, updatedAt: Date.now() }
       log('local transport failed: ' + message)
@@ -1209,58 +1236,6 @@ export function apply(ctx: Context, options: unknown): void {
         if (state.bridge === bridge) state.bridge = undefined
         bridge.dispose()
       }, 'deeppilot: host streams')
-    },
-  )
-
-  // Temporary 3080 compatibility plane. New clients use the independent LAN
-  // listener above; these DSH routes remain for one migration cycle.
-  ;(ctx as unknown as { inject: (deps: string[], fn: (sub: unknown) => void) => void }).inject(
-    ['webServer'],
-    (sub) => {
-      const webCtx = sub as unknown as { webServer?: WebServerLike } & SubContext
-      const web = webCtx.webServer
-      if (!web) {
-        log('webServer service absent; 3080 compatibility routes unavailable (independent transports remain active)')
-        return
-      }
-      // Routes are registered regardless of the master switch so a mid-session
-      // toggle always stays serviceable; every handler refuses work when the
-      // bridge is currently disabled (evaluated per request so it is robust to
-      // the settings scope attaching before or after webServer).
-      webCtx.effect(
-        () =>
-          web.registerUpgrade({
-            path: '/phone',
-            handler: handleUpgrade,
-          }),
-        'deeppilot: /phone WebSocket',
-      )
-
-      webCtx.effect(
-        () =>
-          web.register({
-            kind: 'exact',
-            path: '/phone/health',
-            handler: handleHealth,
-          }),
-        'deeppilot: /phone/health',
-      )
-
-      webCtx.effect(
-        () =>
-          web.register({
-            kind: 'exact',
-            path: '/phone/pair',
-            handler: handlePair,
-          }),
-        'deeppilot: /phone/pair',
-      )
-
-      if (enabledNow()) {
-        log('/phone compatibility routes registered on DSH web server')
-      } else {
-        log('bridge disabled; /phone refuses connections until re-enabled')
-      }
     },
   )
 

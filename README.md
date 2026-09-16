@@ -22,7 +22,8 @@ Host on your own Mac and does not replace or modify the DSH Web UI.
 - Send prompts, switch models, create sessions, and answer approvals/questions.
 - Pair with a five-minute single-use code and a per-device P-256 key; physical
   iPhones keep the private key in Secure Enclave.
-- Connect over a trusted LAN or the optional embedded Tailscale Funnel.
+- Connect over the LAN (TLS with a Host-issued certificate pinned during
+  pairing) or the optional embedded Tailscale Funnel.
 - Receive live notifications and optional APNs notifications while offline.
 - Self-update hint: the settings page footer shows the installed plugin
   version, with an inline "new version" link to the matching GitHub
@@ -37,10 +38,11 @@ does not require the helper.
 
 | Plugin version | Required DSH | How to install |
 |---|---|---|
-| `0.6.x` (current stable, `latest`) | DSH `0.1.5-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot` |
-| `0.5.x` (previous stable) | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot@0.5.0` |
+| `0.7.x` (current stable, `latest`) | DSH `0.1.5-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot` |
+| `0.6.x` (previous stable) | DSH `0.1.5-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot@0.6.2` |
+| `0.5.x` (legacy) | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot@0.5.0` |
 
-`0.6.x` is built and typechecked against the DSH
+`0.7.x` is built and typechecked against the DSH
 [0.1.5-rc.1](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.5-rc.1)
 Host and client package family. It uses the Gateway multi-client Remote Events
 routing that keeps Web and DeepPilot independently answerable. Earlier plugin
@@ -59,10 +61,18 @@ After DSH restarts, open **Settings → DeepPilot**, enable the connection, show
 the pairing QR code, and scan it in the DeepPilot app. The same panel also
 shows a copyable pairing code for Simulator or manual entry.
 
-LAN access is enabled by default on the plugin's independent TCP port `3098`.
-DSH may continue listening only on `127.0.0.1:3080`; do not expose the full DSH
-web server. If a firewall is enabled, allow inbound TCP `3098` on trusted
-private networks. The port can be changed under **Advanced settings**.
+LAN access is enabled by default on the plugin's independent TCP port `3098`
+and is TLS-only. The plugin generates a self-signed certificate on first start
+(key under `$DSH_HOME/deeppilot/lan-tls/`), and the pairing QR code carries its
+public-key fingerprint so the app pins that exact Host. DSH may continue
+listening only on `127.0.0.1:3080`; the plugin no longer registers any `/phone`
+routes on the DSH web server. If a firewall is enabled, allow inbound TCP
+`3098` on the networks you use. The port can be changed under **Advanced
+settings**.
+
+Upgrading from a plugin version that served plain `ws://` on the LAN: devices
+paired over the LAN must pair again so they receive the certificate
+fingerprint. Devices paired through Funnel are unaffected.
 
 Package: [npmjs.com/package/dsh-deeppilot](https://www.npmjs.com/package/dsh-deeppilot)
 
@@ -78,14 +88,15 @@ DeepPilot state under `$DSH_HOME/deeppilot/`.
 
 ## Publishing (maintainers)
 
-`0.6.x` targets DSH `0.1.5-rc.1`+; `0.5.x` stays compatible with
-DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep both published:
+`0.7.x` targets DSH `0.1.5-rc.1`+; `0.6.x` keeps the pre-TLS LAN transport for
+the same DSH family during the migration window, and `0.5.x` stays compatible
+with DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep them published:
 
 1. Bump `version` in `package.json` and in the root `""` entry of
    `package-lock.json`, then run `npm test && npm run typecheck && npm run build`
    and inspect `npm pack --dry-run --json` (the check
-   `tests/compatibility-metadata.test.ts` enforces the `^0.1.5-rc.1` peer
-   ranges).
+   `tests/compatibility-metadata.test.ts` enforces the peer range and asserts it
+   admits both the `0.1.5-rc.*` and the `0.1.6-*` lines).
 2. Commit the release and push it. `npm publish` runs `prepack` (build) and
    `prepublishOnly` (test + typecheck) automatically.
 3. Publish pre-releases without touching `latest`:
@@ -95,7 +106,7 @@ DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep both published:
    ```
 
    After a successful publish, `npm view dsh-deeppilot dist-tags --json` shows
-   `"latest": "0.6.x"` and `"alpha": "0.6.x-alpha.y"`. Verify the published
+   `"latest": "0.7.x"` and `"alpha": "0.7.x-alpha.y"`. Verify the published
    package by installing it into a DSH `0.1.5-rc.1` profile before pointing
    users at it.
 4. Tag the release commit `vX.Y.Z` and prepare a GitHub Release
@@ -109,11 +120,12 @@ Never run `npm publish` from a copy that still has an older version.
 
 ## Connection and privacy
 
-Conversation traffic travels directly between the iPhone and your DSH Host.
-Trusted-LAN `ws://` traffic on the independent plugin port `3098` is
-unencrypted, so use it only on a network you trust. Both the LAN listener and
-optional Funnel mode expose only the DeepPilot connection, one-time pairing,
-and health endpoints, not the complete DSH Web UI.
+Conversation traffic travels directly between the iPhone and your DSH Host and
+is always encrypted: the LAN listener on port `3098` serves TLS with a
+self-signed certificate whose fingerprint the app receives during pairing, and
+Funnel mode uses Tailscale-issued certificates. The app refuses plain `ws://`.
+Both the LAN listener and optional Funnel mode expose only the DeepPilot
+connection, one-time pairing, and health endpoints, not the complete DSH Web UI.
 
 The DeepPilot settings page exposes **Connections per public source** under
 the collapsed **Advanced settings** section. It defaults to `8`, accepts

@@ -311,7 +311,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
       .then(async (grant: PairingGrantSnapshot) => ({
         grant,
         svg: await QRCode.toString(
-          encodePairingQRPayload(pairingTarget.host, grant),
+          encodePairingQRPayload(pairingTarget.host, grant, pairingTarget.tlsFingerprint),
           { type: 'svg', errorCorrectionLevel: 'M', margin: 2, width: 512 },
         ),
       }))
@@ -462,6 +462,12 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
             : t(props.t, 'master.loading')),
           report !== null && report.local.message && report.local.phase === 'error'
             ? h('p', { className: 'pbb-diag pbb-diagBad' }, report.local.message)
+            : null,
+          report !== null && report.local.tlsIdentityRegenerated === true
+            ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'local.tlsRegenerated'))
+            : null,
+          report !== null && report.local.phase === 'online' && report.local.tlsFingerprint
+            ? h('p', { className: 'pbb-diag' }, t(props.t, 'local.tlsFingerprint'), ' ', h('code', { className: 'pbb-token' }, report.local.tlsFingerprint))
             : null,
         ),
         h('button', {
@@ -701,6 +707,13 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
               onClick: () => copyRemoteURL(pairingTarget.host),
             }, t(props.t, 'panel.tokenAction.copy'))),
           addressMessage ? h('p', { className: 'pbb-diag' }, addressMessage) : null,
+          pairingTarget.tlsFingerprint === undefined ? null : h('div', { className: 'pbb-row' },
+            h('code', { className: 'pbb-token' }, pairingTarget.tlsFingerprint),
+            h('button', {
+              type: 'button',
+              className: 'pbb-action',
+              onClick: () => copyRemoteURL(pairingTarget.tlsFingerprint ?? ''),
+            }, t(props.t, 'panel.tokenAction.copy'))),
           h('p', { className: 'pbb-qrHint' },
             t(props.t, 'pair.qrHint', {
               kind: pairingTarget.kind === 'public' ? t(props.t, 'pair.kind.public') : t(props.t, 'pair.kind.lan'),

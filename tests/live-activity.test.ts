@@ -74,3 +74,44 @@ test('terminal state survives next round, reconnect and rotation; revoked scopes
     manager.dispose(); await store.drain(); await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('activity without a checklist carries the current operation and clears cleanly', () => {
+  const bare = { ...session, todos: null, todoItems: null, activity: 'bash: command=npm test' }
+  assert.equal(liveActivityState(bare).task, bare.activity)
+  assert.equal(liveActivityState(bare).total, 0)
+  assert.equal(liveActivityState({ ...bare, activity: null }).task, '')
+  assert.equal(liveActivityState({ ...session, activity: '  ' }).task, 'Now')
+  assert.equal(Array.from(liveActivityState({ ...bare, activity: '😀'.repeat(200) }).task).length, 160)
+})
+
+test('ordinary conversations cannot keep activities running, including approval waits', () => {
+  const ordinary = { ...session, todos: null, todoItems: null }
+  assert.equal(liveActivityState(ordinary).phase, 'unavailable')
+  assert.equal(liveActivityState({ ...ordinary, pendingApproval: true }).phase, 'unavailable')
+  assert.equal(liveActivityState({ ...ordinary, pendingQuestion: true }).phase, 'unavailable')
+  assert.equal(liveActivityState({ ...ordinary, todos: { done: 0, total: 0 } }).phase, 'unavailable')
+  assert.equal(liveActivityState({ ...ordinary, todoItems: [{ content: 'Check', status: 'pending' }] }).total, 1)
+})
+
+test('clearing todos ends background activity and adding them again cannot revive it', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'live-todos-'))
+  const store = await DeviceStore.load(join(dir, 'devices.json'))
+  const identity = createTestIdentity()
+  registerTestIdentity(store, identity)
+  store.setLiveActivity(identity.deviceId, { activityId: 'a', sessionId: 's', token: 'a'.repeat(64),
+    environment: 'development', updatedAt: Date.now(), expiresAt: Date.now() + 100_000 })
+  const deliveries: LiveActivityPushNotification[] = []
+  const manager = new LiveActivityPushManager(() => store, async (_token, _environment, notification) => {
+    deliveries.push(notification); return { outcome: 'sent' }
+  })
+  try {
+    manager.changed([session]); await manager.flush()
+    manager.changed([{ ...session, todos: null, todoItems: null }]); await manager.flush()
+    assert.equal(deliveries[1]?.event, 'end')
+    assert.equal(deliveries[1]?.contentState.phase, 'unavailable')
+    manager.changed([session]); await manager.flush()
+    assert.equal(deliveries.length, 2)
+  } finally {
+    manager.dispose(); await store.drain(); await rm(dir, { recursive: true, force: true })
+  }
+})

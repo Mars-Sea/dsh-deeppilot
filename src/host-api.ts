@@ -42,6 +42,8 @@ interface WorkspaceApiLike {
     Promise<RpcResponseLike<{ workspace: WorkspaceViewLike; created: boolean }>>
   archiveSession?(req: RpcRequestLike<{ sessionId: string }>):
     Promise<RpcResponseLike<{ archivedSessionIds: string[] }>>
+  unarchiveSession?(req: RpcRequestLike<{ sessionId: string }>):
+    Promise<RpcResponseLike<{ archivedSessionIds: string[] }>>
 }
 
 interface HostApiLike {
@@ -154,6 +156,8 @@ export interface SessionEventLike {
 }
 
 export interface MuxFrameLike {
+  /** Internal Host identity hint; never serialized into the phone protocol. */
+  isSubagent?: boolean
   type: string
   rpcId?: string
   payload?: any
@@ -162,6 +166,7 @@ export interface MuxFrameLike {
   key?: string
   value?: unknown
   approvalId?: string
+  callId?: string
   toolName?: string
   reason?: string
   questions?: unknown

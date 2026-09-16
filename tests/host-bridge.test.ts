@@ -540,11 +540,12 @@ test('session model catalog and selection use host apiProxy', async () => {
   })
 })
 
-test('session management renames, archives, and hides archived rows', async () => {
+test('session management renames, archives into a browsable mirror, and restores', async () => {
   const { proxy } = makeFakeProxy()
   let archivedSessionIds: string[] = ['session-old']
   let renamedPayload: any
   let archivedPayload: any
+  let unarchivedPayload: any
   proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
     { sessionId: 'session-new', updatedAt: 200, running: false, blank: false, projections: { values: { title: 'New' } } },
     { sessionId: 'session-old', updatedAt: 100, running: false, blank: false, projections: { values: { title: 'Old' } } },
@@ -560,12 +561,22 @@ test('session management renames, archives, and hides archived rows', async () =
       archivedSessionIds = [...new Set([...archivedSessionIds, String(request.payload?.sessionId)])]
       return { result: { ok: true, value: { archivedSessionIds } } }
     },
+    unarchiveSession: async (request) => {
+      unarchivedPayload = request.payload
+      archivedSessionIds = archivedSessionIds.filter((id) => id !== String(request.payload?.sessionId))
+      return { result: { ok: true, value: { archivedSessionIds } } }
+    },
   }
 
   const bridge = new HostBridge(proxy, 100)
   assert.equal(bridge.capabilities.sessionManagement, true)
+  assert.equal(bridge.capabilities.sessionRestore, true)
   await bridge.refreshSummaries()
   assert.deepEqual(bridge.listSessions().map((item) => item.id), ['session-new'])
+
+  // Archived rows stay out of the live list but remain browsable on demand.
+  assert.deepEqual(bridge.listArchivedSessions().map((item) => item.id), ['session-old'])
+  assert.equal(bridge.listArchivedSessions()[0]?.archived, true, 'archived rows are marked for the client')
 
   const renamed = await bridge.renameSession('session-new', 'Renamed')
   assert.equal(renamed.ok, true)
@@ -576,6 +587,40 @@ test('session management renames, archives, and hides archived rows', async () =
   assert.equal(archived.ok, true)
   assert.deepEqual(archivedPayload, { sessionId: 'session-new' })
   assert.deepEqual(bridge.listSessions(), [])
+
+  const restored = await bridge.unarchiveSession('session-old')
+  assert.equal(restored.ok, true)
+  assert.deepEqual(unarchivedPayload, { sessionId: 'session-old' })
+  // Restore puts the session back on the live list and drops it from the
+  // archived view, which still holds the session archived just above.
+  assert.equal(bridge.listSessions().some((item) => item.id === 'session-old'), true)
+  assert.deepEqual(bridge.listArchivedSessions().map((item) => item.id), ['session-new'])
+
+  // Round-trip: restoring the other session empties the archived view and
+  // returns both rows to the live list.
+  const restoredSecond = await bridge.unarchiveSession('session-new')
+  assert.equal(restoredSecond.ok, true)
+  assert.deepEqual(bridge.listArchivedSessions(), [])
+  assert.deepEqual(
+    bridge.listSessions().map((item) => item.id).sort(),
+    ['session-new', 'session-old'],
+  )
+  // Restored rows must not keep the archived marker.
+  assert.equal(bridge.listSessions().every((item) => item.archived === undefined), true)
+  bridge.dispose()
+})
+
+test('session restore degrades on a host whose workspace controller predates it', async () => {
+  const { proxy } = makeFakeProxy()
+  proxy.workspace = {
+    list: async () => ({ result: { ok: true, value: { items: [], archivedSessionIds: [] } } }),
+    archiveSession: async () => ({ result: { ok: true, value: { archivedSessionIds: [] } } }),
+  }
+  const bridge = new HostBridge(proxy, 100)
+  assert.equal(bridge.capabilities.sessionRestore, false, 'absent unarchiveSession must not claim restore')
+  const result = await bridge.unarchiveSession('session-old')
+  assert.equal(result.ok, false)
+  assert.equal(result.ok === false && result.kind, 'unsupported')
   bridge.dispose()
 })
 
@@ -788,7 +833,94 @@ test('reasoning chunks project to thinking.delta; finals carry thinking; empty s
   assert.equal(assistantRows[0].thinking, '嗯')
 })
 
-// ---------- live tool event callId passthrough ----------
+// ---------- tool results carrying images ----------
+
+// ---------- tool results carrying images ----------
+
+test('history projects images returned by a tool result onto the paired tool row', () => {
+  const rows = projectHistory([
+    { event: { type: 'tool/call', seq: 1, time: 1, data: { name: 'browser_screenshot', arguments: '{}', callId: 'c1' } } },
+    { event: { type: 'tool/result', seq: 2, time: 2, data: {
+      callId: 'c1',
+      message: { role: 'tool', content: [
+        { type: 'text', text: 'captured 1 screenshot' },
+        {
+          type: 'image',
+          attachment: {
+            attachmentId: 'att-shot-1',
+            mediaType: 'image/png',
+            width: 1280,
+            height: 720,
+            name: 'shot.png',
+          },
+        },
+      ] },
+    } } },
+  ] as any)
+
+  const toolRows = rows.filter((r) => r.role === 'tool')
+  assert.equal(toolRows.length, 1, 'result merges into its call row instead of adding one')
+  const row = toolRows[0]
+  assert.equal(row.tool?.state, 'ok')
+  assert.equal(row.tool?.summary, 'captured 1 screenshot')
+  // Without this the phone renders a text-only summary and the screenshot is
+  // silently dropped, which is the bug this projection exists to prevent.
+  assert.deepEqual(row.attachments, [{
+    kind: 'image',
+    name: 'shot.png',
+    mediaType: 'image/png',
+    attachmentId: 'att-shot-1',
+    width: 1280,
+    height: 720,
+  }])
+})
+
+test('a standalone tool result carries its images when no call row was seen', () => {
+  // Older bridges cannot pair results onto calls; the result still has to
+  // reach the phone with its attachment intact.
+  const rows = projectHistory([
+    { event: { type: 'tool/result', seq: 5, time: 5, data: {
+      message: { role: 'tool', content: [
+        { type: 'text', text: 'ok' },
+        { type: 'image', attachment: { attachmentId: 'att-2', mediaType: 'image/jpeg' } },
+      ] },
+    } } },
+  ] as any)
+
+  const result = rows.find((r) => r.tool?.name === 'result')
+  assert.ok(result, 'unpaired result row must still project')
+  assert.deepEqual(result!.attachments, [{ kind: 'image', mediaType: 'image/jpeg', attachmentId: 'att-2' }])
+})
+
+test('a failed tool result never projects attachments', () => {
+  // An error payload's content is a diagnostic, not model-facing output; a
+  // stray image block in it must not become a rendered screenshot.
+  const rows = projectHistory([
+    { event: { type: 'tool/call', seq: 1, time: 1, data: { name: 'browser_screenshot', arguments: '{}', callId: 'c1' } } },
+    { event: { type: 'tool/result', seq: 2, time: 2, data: {
+      callId: 'c1',
+      error: { message: 'boom' },
+      message: { role: 'tool', content: [{ type: 'image', attachment: { attachmentId: 'att-3' } }] },
+    } } },
+  ] as any)
+
+  const row = rows.find((r) => r.role === 'tool')
+  assert.equal(row?.tool?.state, 'error')
+  assert.equal(row?.attachments, undefined, 'failed results carry no attachments')
+})
+
+test('a tool result keeps its text-only shape when it has no image blocks', () => {
+  const rows = projectHistory([
+    { event: { type: 'tool/call', seq: 1, time: 1, data: { name: 'bash', arguments: '{"command":"ls"}', callId: 'c1' } } },
+    { event: { type: 'tool/result', seq: 2, time: 2, data: { callId: 'c1', message: { role: 'tool', content: [{ type: 'text', text: 'a.txt' }] } } } },
+  ] as any)
+
+  const row = rows.find((r) => r.role === 'tool')
+  assert.equal(row?.tool?.summary, 'a.txt')
+  assert.equal(row?.attachments, undefined, 'text-only results stay unchanged')
+})
+
+
 
 test('tool.start/tool.end pushes echo the host call id', () => {
   const start = projectEvent('s1', {
@@ -1464,4 +1596,103 @@ test('attachmentData relays host bytes and degrades when unsupported', async () 
   const plainBridge = new HostBridge(makeFakeProxy().proxy, 100)
   assert.equal(await plainBridge.attachmentData('session-a', 'att-9'), null)
   bridge.dispose()
+})
+
+for (const resolved of [false, true]) {
+  test(`approval arguments match the exact call and do not revive resolved requests (${resolved})`, async () => {
+    const { proxy, getPush } = makeFakeProxy()
+    let finish!: (value: any) => void
+    proxy.sessions.history = async req => {
+      assert.equal(req.payload?.sessionId, 'session-a')
+      return new Promise(resolve => { finish = resolve })
+    }
+    const bridge = new HostBridge(proxy, 100)
+    const collected: Array<{ type: string; payload: any }> = []
+    bridge.start()
+    bridge.addSink(makeSink(collected))
+    getPush()({ type: 'approval/requested', rpcId: 'rpc-details', sessionId: 'session-a',
+      approvalId: 'apr-details', toolName: 'bash', callId: 'target', reason: 'sandbox' })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    if (resolved) {
+      getPush()({ type: 'approval/resolved', approvalId: 'apr-details' })
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    const args = JSON.stringify({ command: 'printf "hello"\nls -la', cwd: '/tmp' })
+    finish({ result: { ok: true, value: { events: [
+      { event: { type: 'tool/call', seq: 1, data: { callId: 'other', name: 'bash', arguments: 'wrong' } } },
+      { event: { type: 'tool/call', seq: 2, data: { callId: 'target', name: 'bash', arguments: args } } },
+    ], hasMore: false } } })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const updates = collected.filter(row => row.type === 's2c.pending.approval')
+    assert.equal(updates.length, resolved ? 1 : 2)
+    if (!resolved) {
+      assert.equal(updates[1]!.payload.toolArguments, args)
+      assert.equal(bridge.pendingSnapshot().approvals[0]!.toolArguments, args)
+    } else assert.equal(bridge.pendingSnapshot().approvals.length, 0)
+    bridge.dispose()
+  })
+}
+
+test('live activity follows active tool calls without changing recency and survives summary refresh', async () => {
+  const { proxy } = makeFakeProxy()
+  proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
+    { sessionId: 'work', updatedAt: 100, running: true, blank: false },
+  ] } } })
+  const bridge = new HostBridge(proxy, 100)
+  await bridge.refreshSummaries()
+  const stamp = bridge.listSessions()[0]!.lastActivityTs
+  const event = (type: string, data: any) => (bridge as any).onMuxFrame({ type: 'session/event', sessionId: 'work', event: { type, seq: 1, data } })
+  event('tool/call', { name: 'bash', callId: 'a', arguments: JSON.stringify({ command: 'npm test' }) })
+  assert.match(bridge.listSessions()[0]!.activity!, /npm test/)
+  assert.equal(bridge.listSessions()[0]!.lastActivityTs, stamp)
+  await bridge.refreshSummaries()
+  assert.match(bridge.listSessions()[0]!.activity!, /npm test/)
+  event('tool/call', { name: 'read', callId: 'b', arguments: JSON.stringify({ path: 'README.md' }) })
+  event('tool/result', { callId: 'a' })
+  assert.match(bridge.listSessions()[0]!.activity!, /README.md/)
+  event('tool/result', { callId: 'b' })
+  assert.equal(bridge.listSessions()[0]!.activity, null)
+  event('tool/call', { name: 'bash', callId: 'c', arguments: '{}' })
+  event('turn/end', {})
+  assert.equal(bridge.listSessions()[0]!.activity, null)
+  bridge.dispose()
+})
+
+test('worker completion filtering does not suppress required approval notifications', async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
+    { sessionId: 'worker', origin: 'subagent', updatedAt: 1, running: true },
+  ] } } })
+  const bridge = new HostBridge(proxy, 100)
+  const collected: Array<{ type: string; payload: any }> = []
+  const pushed: Array<{ category: string }> = []
+  bridge.addSink(makeSink(collected))
+  bridge.setPushOutlet({ fanOut: value => pushed.push(value), isAvailable: () => true })
+  bridge.start()
+  try {
+    await bridge.refreshSummaries()
+    getPush()({ type: 'approval/requested', sessionId: 'worker', rpcId: 'rpc-worker', approvalId: 'approval-worker', toolName: 'write' })
+    for (let i = 0; i < 100 && pushed.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 5))
+    assert.deepEqual(pushed.map(p => p.category), ['approval.required'])
+    assert.equal(collected.some(f => f.type === 's2c.pending.approval'), true)
+    assert.deepEqual(collected.filter(f => f.type === 's2c.notify').map(f => f.payload.category), ['approval.required'])
+  } finally {
+    bridge.dispose()
+  }
+})
+
+test('realtime tool results retain the same bounded image metadata as history', () => {
+  const result = { type: 'tool/result', seq: 8, time: 8, data: {
+    callId: 'capture', message: { content: [
+      { type: 'text', text: 'captured' },
+      { type: 'image', attachment: { attachmentId: 'shot', mediaType: 'image/png', width: 400, height: 300 } },
+    ] },
+  } }
+  const live = projectEvent('s', result)
+  const history = projectHistory([{ event: result }])
+  assert.deepEqual(live?.data.attachments, history[0]?.attachments)
+  assert.equal(live?.data.summary, 'captured')
+  assert.equal(live?.data.callId, 'capture')
+  const failed = projectEvent('s', { ...result, data: { ...result.data, error: 'failed' } })
+  assert.equal(failed?.data.attachments, undefined)
 })

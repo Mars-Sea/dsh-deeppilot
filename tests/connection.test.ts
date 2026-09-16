@@ -124,6 +124,80 @@ async function makeConnection(opts: {
 
 const lastFrame = (ws: FakeWebSocket) => ws.sent[ws.sent.length - 1]
 
+test('archived sessions are served on demand and can be restored over the wire', async () => {
+  let archivedSessionIds = ['session-old']
+  const { ws, bridge, authenticate } = await makeConnection({
+    proxyOverrides: {
+      sessions: {
+        list: async () => ({ result: { ok: true, value: { items: [
+          { sessionId: 'session-live', updatedAt: 200, running: false, blank: false, projections: { values: { title: 'Live' } } },
+          { sessionId: 'session-old', updatedAt: 100, running: false, blank: false, projections: { values: { title: 'Old' } } },
+        ] } } }),
+        history: async () => ({ result: { ok: true, value: { events: [], hasMore: false } } }),
+        prompt: async () => ({ result: { ok: true, value: { accepted: true } } }),
+        create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
+        attachment: async () => ({ result: { ok: true, value: { attachment: { mediaType: 'image/png' }, data: 'aGk=' } } }),
+        rename: async (request: any) => ({ result: { ok: true, value: { title: request.payload?.title ?? '', seq: 1 } } }),
+      },
+      workspace: {
+        list: async () => ({ result: { ok: true, value: { items: [], archivedSessionIds } } }),
+        archiveSession: async (request: any) => {
+          archivedSessionIds = [...new Set([...archivedSessionIds, String(request.payload?.sessionId)])]
+          return { result: { ok: true, value: { archivedSessionIds } } }
+        },
+        unarchiveSession: async (request: any) => {
+          archivedSessionIds = archivedSessionIds.filter((id) => id !== String(request.payload?.sessionId))
+          return { result: { ok: true, value: { archivedSessionIds } } }
+        },
+      },
+    } as unknown as Partial<ApiProxyLike>,
+  })
+  authenticate()
+
+  assert.equal(bridge.capabilities.sessionRestore, true, 'welcome advertises restore when the host has it')
+  await bridge.refreshSummaries()
+
+  // The live snapshot must not leak the archived row.
+  ws.receive({ v: 2, type: 'c2s.sessions.list', id: 'l-1', payload: {} })
+  assert.equal(lastFrame(ws).type, 's2c.sessions.snapshot')
+  assert.deepEqual(lastFrame(ws).payload.sessions.map((s: any) => s.id), ['session-live'])
+
+  ws.receive({ v: 2, type: 'c2s.sessions.archived', id: 'ar-1', payload: {} })
+  assert.equal(lastFrame(ws).type, 's2c.sessions.archived.snapshot')
+  assert.deepEqual(lastFrame(ws).payload.sessions.map((s: any) => s.id), ['session-old'])
+  assert.equal(lastFrame(ws).payload.sessions[0].archived, true)
+
+  ws.receive({ v: 2, type: 'c2s.session.unarchive', id: 'u-1', payload: { sessionId: 'session-old' } })
+  await new Promise((r) => setTimeout(r, 20))
+  assert.ok(ws.sent.some((f) => f.type === 's2c.session.unarchived' && f.id === 'u-1'), 'restore must be acked')
+
+  // The client learns about the restored session from the delta the bridge
+  // emits, not from the unarchived ack alone.
+  const delta = ws.sent.filter((f) => f.type === 's2c.sessions.delta').at(-1)
+  assert.ok(delta, 'restore must emit a sessions delta')
+  assert.equal(delta.payload.upserted.some((s: any) => s.id === 'session-old'), true)
+})
+
+test('session restore is refused with E_UNSUPPORTED on a host without it', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate()
+  assert.equal(bridge.capabilities.sessionRestore, false)
+  ws.receive({ v: 2, type: 'c2s.session.unarchive', id: 'u-2', payload: { sessionId: 'session-old' } })
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).payload.code, 'E_UNSUPPORTED')
+})
+
+test('session restore requires the sessions.manage scope', async () => {
+  const { ws, authenticate } = await makeConnection({ scopes: ['sessions.read'] })
+  authenticate()
+  ws.sent.length = 0
+  ws.receive({ v: 2, type: 'c2s.session.unarchive', id: 'u-3', payload: { sessionId: 'session-old' } })
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).payload.code, 'E_FORBIDDEN')
+})
+
 test('widget connection reads snapshots without changing device name, replaying or suppressing alerts', async () => {
   const { ws, connection, store, bridge, authenticate, identity, closed } = await makeConnection()
   authenticate({ clientRole: 'widget', deviceName: 'DeepPilot Widget', resumeCursor: 0 })

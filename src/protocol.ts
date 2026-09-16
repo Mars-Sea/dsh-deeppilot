@@ -131,6 +131,10 @@ export interface WelcomeCapabilities {
   notifyAllCategories?: boolean
   models: boolean
   sessionManagement: boolean
+  /** Bridge can list archived sessions and restore them
+   * (c2s.sessions.archived / c2s.session.unarchive). Absent on hosts whose
+   * workspace controller predates unarchiveSession. */
+  sessionRestore?: boolean
   projectSelection: boolean
   /** Bridge has APNs configured; clients may send c2s.push.register. */
   push?: boolean
@@ -203,6 +207,8 @@ export interface SessionSummary {
   todos: { done: number; total: number } | null
   /** Full checklist so a conversation view can render progress, not just counts. Absent/null when the session has none. */
   todoItems?: SessionTodoItem[] | null
+  /** Current tool operation, bounded to 160 Unicode code points. */
+  activity?: string | null
   pendingApproval: boolean
   pendingQuestion: boolean
   /** Optional cumulative usage stats (see SessionUsageStats); hosts without
@@ -211,6 +217,10 @@ export interface SessionSummary {
   workspaceLabel: string | null
   workspaceId?: string | null
   workspacePath?: string | null
+  /** Present only on rows served by `c2s.sessions.archived`; the live session
+   * list never contains archived rows. Clients restore one with
+   * `c2s.session.unarchive`. */
+  archived?: boolean
 }
 
 export interface WorkspaceSummary {
@@ -367,6 +377,9 @@ export interface SessionEventData {
   ok?: boolean
   /** tool.end only: host invocation id pairing the result with its call row. */
   callId?: string
+  /** tool.end: bounded result summary and durable attachment metadata. */
+  summary?: string
+  attachments?: MessageProjection['attachments']
   key?: string
   value?: unknown
   [k: string]: unknown
@@ -411,6 +424,7 @@ export interface PendingApprovalPayload {
   sessionId: string
   toolName: string
   summary: string
+  toolArguments?: string
   riskLevel: 'read' | 'write' | 'destructive'
 }
 

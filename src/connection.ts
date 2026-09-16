@@ -447,6 +447,27 @@ export class BridgeConnection implements BridgeSink {
         this.send('s2c.session.archived', { sessionId: p.sessionId }, env.id)
         return
       }
+      case 'c2s.sessions.archived': {
+        // Separate from c2s.sessions.list so the live list keeps its shape for
+        // clients that do not know about archived rows.
+        this.send('s2c.sessions.archived.snapshot', {
+          sessions: this.deps.bridge.listArchivedSessions(),
+        }, env.id)
+        return
+      }
+      case 'c2s.session.unarchive': {
+        const p = env.payload as { sessionId?: string }
+        if (!p?.sessionId) return this.fail(env.id, 'E_PROTOCOL', 'sessionId required')
+        if (!this.deps.bridge.capabilities.sessionRestore) {
+          return this.fail(env.id, 'E_UNSUPPORTED', 'session restore unavailable on this host version')
+        }
+        const result = await this.deps.bridge.unarchiveSession(p.sessionId)
+        if (!result.ok) {
+          return this.fail(env.id, managementErrorCode(result.kind), result.message)
+        }
+        this.send('s2c.session.unarchived', { sessionId: p.sessionId }, env.id)
+        return
+      }
       case 'c2s.session.cancel': {
         const p = env.payload as { sessionId?: string }
         if (!p?.sessionId) return this.fail(env.id, 'E_PROTOCOL', 'sessionId required')

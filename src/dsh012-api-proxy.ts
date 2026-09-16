@@ -15,7 +15,6 @@ import {
   type RemoteApprovalRequest,
   type RemoteQuestionRequest,
 } from './dsh012-remote-interactions.ts'
-import { isSubagentRow } from './host-api.ts'
 import { projectHistory } from './host-event-projection.ts'
 import type {
   ApiProxyLike,
@@ -46,6 +45,7 @@ interface SessionControllerLike {
 interface WorkspaceControllerLike {
   create(request: { path: string }): Promise<{ workspace: unknown; created: boolean }>
   archiveSession(request: { sessionId: string }): Promise<{ archivedSessionIds: readonly string[] }>
+  unarchiveSession?(request: { sessionId: string }): Promise<{ archivedSessionIds: readonly string[] }>
   follow(signal: AbortSignal): AsyncIterable<{ type: string; value?: unknown }>
 }
 
@@ -85,6 +85,9 @@ export class Dsh012ApiProxy implements ApiProxyLike {
     if (session === undefined) throw new Error('dsh 0.1.2 sessionController is unavailable')
     this.session = session
     this.workspaceController = ctx.get('workspaceController') as WorkspaceControllerLike | undefined
+    if (typeof this.workspaceController?.unarchiveSession !== 'function') {
+      delete this.workspace?.unarchiveSession
+    }
     this.directoryPicker = ctx.get('directoryPickerController') as DirectoryPickerControllerLike | undefined
     this.shouldSurfaceInteraction = options.shouldSurfaceInteraction ?? (() => true)
   }
@@ -105,13 +108,9 @@ export class Dsh012ApiProxy implements ApiProxyLike {
   readonly sessions: ApiProxyLike['sessions'] = {
     list: async () => this.call(async () => {
       const value = await this.session.list({}, new AbortController().signal)
-      // A list row can outlive a corrupt/unsupported persisted log. Do not
-      // advertise it to a phone that cannot later open its history.
-      return {
-        // DeepPilot intentionally never exposes subagent workers to a phone.
-        // In 0.1.2 their durable read address additionally requires a parent.
-        items: value.items.map(toPhoneSessionRow).filter(row => !isSubagentRow(row)),
-      }
+      // Keep worker identity internally so HostBridge can suppress notifications
+      // as well as exclude these rows from the phone's session list.
+      return { items: value.items.map(toPhoneSessionRow) }
     }),
     history: async (request) => this.call(async () => {
       const sessionId = request.payload!.sessionId
@@ -185,6 +184,13 @@ export class Dsh012ApiProxy implements ApiProxyLike {
       const value = await this.workspaceController.archiveSession(request.payload!)
       return { archivedSessionIds: [...value.archivedSessionIds] }
     }),
+    unarchiveSession: async (request) => this.call(async () => {
+      if (this.workspaceController === undefined) throw unavailable('workspace controller unavailable')
+      const unarchive = this.workspaceController.unarchiveSession
+      if (typeof unarchive !== 'function') throw unavailable('session restore unavailable on this host version')
+      const value = await unarchive.call(this.workspaceController, request.payload!)
+      return { archivedSessionIds: [...value.archivedSessionIds] }
+    }),
   }
 
   readonly host: ApiProxyLike['host'] = {
@@ -214,8 +220,14 @@ export class Dsh012ApiProxy implements ApiProxyLike {
 
   private async *mux(signal: AbortSignal): AsyncIterable<MuxFrameLike> {
     const queue = new AsyncFrameQueue(signal)
-    const offEvent = this.ctx.on('session/event' as never, ((session: { id: string }, event: unknown) => {
-      queue.push({ type: 'session/event', sessionId: String(session.id), event: event as MuxFrameLike['event'] })
+    const offEvent = this.ctx.on('session/event' as never, ((session: { id: string; header?: { origin?: string } }, event: unknown) => {
+      queue.push({
+        type: 'session/event', sessionId: String(session.id),
+        // Header origin is available before the next list refresh. A header's
+        // parentSession alone is fork lineage, not proof of a worker session.
+        isSubagent: session.header?.origin === 'subagent',
+        event: event as MuxFrameLike['event'],
+      })
     }) as never, { global: true })
     const projections = this.ctx.get('sessionProjections') as {
       onChanged?(listener: (session: { id: string }, key: string, value: unknown) => void): () => void
@@ -265,6 +277,7 @@ export class Dsh012ApiProxy implements ApiProxyLike {
     queue.push({
       type: 'approval/requested', rpcId, sessionId, approvalId: rpcId,
       toolName: String(request.toolName ?? 'tool'), reason: String(request.reason ?? ''),
+      ...(request.callId ? { callId: request.callId } : {}),
     })
     return response.promise.finally(() => {
       request.signal?.removeEventListener('abort', abort)

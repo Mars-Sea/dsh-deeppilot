@@ -100,17 +100,20 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
       };
     }
     case 'tool/result': {
-      const data = event.data as { callId?: string; error?: unknown } | undefined;
+      const data = event.data as { callId?: string; error?: unknown; message?: { content?: unknown } } | undefined;
+      const ok = data?.error === undefined;
+      const result = limitMessageProjection({
+        seq: event.seq, role: 'tool', ts: tsOf(event),
+        tool: { name: 'result', state: ok ? 'ok' : 'error', summary: ok ? summarizeResult(data?.message?.content) : '失败' },
+        ...(ok ? attachmentProjection(data?.message) : {}),
+      });
       return {
         kind: 'tool.end',
         data: {
-          seq: event.seq,
-          role: 'tool',
-          ok: !event.data || data?.error === undefined,
-          // The seq above identifies this result event; callId is what ties it
-          // back to the originating tool/call row on the client.
+          seq: result.seq, role: result.role, ts: result.ts, ok,
+          summary: result.tool?.summary,
+          ...(result.attachments ? { attachments: result.attachments } : {}),
           ...(data?.callId ? { callId: String(data.callId) } : {}),
-          ts: tsOf(event)
         }
       };
     }
@@ -425,10 +428,23 @@ export function projectHistory(events: Array<{ event: SessionEventLike; view?: u
         const target = callId ? toolByCall.get(callId) : undefined;
         const failed = data?.error !== undefined;
         const summary = failed ? '失败' : summarizeResult(data?.message?.content);
+        // A tool result may carry images as well as text — browser and
+        // computer-use backends return screenshots this way. `summarizeResult`
+        // covers only the textual part, so project the binary blocks as
+        // attachments too; otherwise the phone renders a text-only summary and
+        // the image is silently dropped. The durable attachmentId is what lets
+        // the client read the bytes back through c2s.session.attachment.
+        const attachments = failed ? {} : attachmentProjection(data?.message);
         if (target?.tool) {
           target.tool = { ...target.tool, state: failed ? 'error' : 'ok', summary };
+          if (attachments.attachments) Object.assign(target, attachments);
         } else {
-          messages.push({ ...base, role: 'tool', tool: { name: 'result', state: failed ? 'error' : 'ok', summary } });
+          messages.push({
+            ...base,
+            role: 'tool',
+            tool: { name: 'result', state: failed ? 'error' : 'ok', summary },
+            ...attachments,
+          });
         }
         break;
       }

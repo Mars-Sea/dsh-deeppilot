@@ -33,9 +33,22 @@ v2 不接受 v1 Bearer Token、`c2s.hello.auth` 或任何降级握手；升级�
   "host": "https://example.funnel.ts.net",
   "code": "<single-use base64url code>",
   "expiresAt": 1756000300000,
-  "audience": "deeppilot:<stable host id>"
+  "audience": "deeppilot:<stable host id>",
+  "tlsFingerprint": "sha256:<base64url SHA-256 of the host certificate SPKI>"
 }
 ```
+
+- `host` 只允许 `https://` 或 `wss://`；App 必须拒绝 `http://` 与 `ws://`。
+- `tlsFingerprint` 可选。局域网地址由 Host 自签证书提供 TLS，此时字段必填，值为
+  证书 SubjectPublicKeyInfo（DER）的 SHA-256，`sha256:` 前缀加 base64url（43 字符）。
+  Funnel 等由公共 CA 签发的地址不携带该字段。
+- App 收到带指纹的配对信息后，对该 Host 的所有 HTTPS/WSS 连接（配对、健康检查、
+  WebSocket、Widget 刷新）只信任 SPKI 指纹一致的服务端证书，忽略系统信任链与主机名。
+  没有指纹的 Host 走系统信任链。App 不得对自签证书做“首次信任”提示，缺少指纹时必须
+  引导用户重新配对。
+- Host 的 LAN TLS 密钥持久化在数据目录；证书到期重签不改变指纹，密钥丢失或重建则
+  所有通过局域网配对的设备都必须重新配对。
+- 可复制的配对文本与二维码携带完全相同的 JSON。
 
 App 为该主机生成 P-256 Signing 私钥；真机优先使用 Secure Enclave，私钥不得离开设备。
 App 向 `POST /phone/pair` 发送：
@@ -59,17 +72,22 @@ App 向 `POST /phone/pair` 发送：
   "v": 2,
   "deviceId": "<base64url SHA-256 of raw public key>",
   "audience": "deeppilot:<stable host id>",
-  "scopes": ["sessions.read", "prompt.send", "sessions.manage", "interactions.respond", "notifications.register"]
+  "scopes": ["sessions.read", "prompt.send", "sessions.manage", "interactions.respond", "notifications.register"],
+  "tlsFingerprint": "sha256:<base64url SHA-256 of the host certificate SPKI>"
 }
 ```
 
-App 扫码时必须确认响应 `audience` 与二维码一致。配对码无效、过期或已使用返回 401；
+App 扫码时必须确认响应 `audience` 与二维码一致。响应中的 `tlsFingerprint` 可选，
+LAN Host 回显自己的证书指纹，App 若持有二维码指纹则必须比对一致（TLS 握手已经保证
+这一点，回显仅用于显示与二次校验）。配对码无效、过期或已使用返回 401；
 频率限制返回 429；设备注册表满返回 409。`GET /phone/health` 只返回最小公开状态，
 不承担鉴权。
 
 ### 2.2 WebSocket 挑战签名
 
-1. 客户端连接 `wss://host/phone`，HTTP Upgrade 不携带凭据。
+1. 客户端连接 `wss://host/phone`，HTTP Upgrade 不携带凭据。局域网地址同样使用 `wss`：
+   Host 的独立 LAN 监听只提供 TLS，证书自签，App 以配对时获得的 `tlsFingerprint` 固定信任。
+   协议不再定义明文 `ws://` 传输。
 2. 服务端立即发送 `s2c.auth.challenge`：
 
 ```json
@@ -182,6 +200,8 @@ APNs 必须同时具备 notifications.register 和对应通知类别的内容权
 ```
 
 SessionSummary：
+
+可选字段 `activity` 为当前工具操作的简短描述（最多 160 个 Unicode code points）。按工具 callId 跟踪，工具结束或新一轮开始时清除，不携带思考原文；此字段为协议 v2 向后兼容扩展，旧客户端忽略，新客户端在缺失时回退任务清单或状态提示。
 
 ```json
 {
@@ -353,7 +373,7 @@ tool.end / turn.start / turn.end；其余 kind 为兼容 Host 后续事件投影
 
 - message.delta/message.final 共用同一会话内 seq；data.text 为增量/全文。极端超大增量同样会被限制在 256KB 内，并在 data 附 `truncated:true`。
 - thinking.delta 的 data.text 为推理增量，seq 与同会话其他事件一致；客户端应把连续增量折叠进同一条"思考"行（role=assistant、thinking 累积、streaming=true），final 到达后由带 `thinking` 字段的正式行替换。
-- tool.start 的 `data.tool` 为 `{name, state:"running", summary}`；Host 事件携带调用 id 时额外附带 `tool.callId`。tool.end 的 data 附带 ok 布尔与该结果事件自身的 seq，并在 Host 事件携带调用 id 时附带 `callId`——`seq` 标识的是 result 事件本身，客户端必须用 `callId`（缺失时按"最旧的未完成工具行"兜底）把结果合并回对应的 tool.start 行，不得按 seq 匹配。
+- tool.start 的 `data.tool` 为 `{name, state:"running", summary}`；Host 事件携带调用 id 时额外附带 `tool.callId`。tool.end 的 data 附带 ok 布尔与该结果事件自身的 seq，并在 Host 事件携带调用 id 时附带 `callId`——`seq` 标识的是 result 事件本身，客户端必须用 `callId`（缺失时按"最旧的未完成工具行"兜底）把结果合并回对应的 tool.start 行，不得按 seq 匹配。 `tool.end.data` 可选附带 `summary` 和 `attachments`（与 MessageProjection 相同的有界摘要与持久附件元数据，不含图片字节）；客户端合并到对应工具行，未见起始行时可按结果自身 seq 创建独立结果行。这是 v2 向后兼容扩展，旧客户端忽略新增字段。
 - turn.end 的 data 附带 ok 布尔；projection 的 data 为 key/value（如 todos）。
 
 ## 4b. 项目选择与新建会话
@@ -420,6 +440,28 @@ DeepPilot 的标准 bundle 固定组合 Host 官方 `directory-picker-browse` �
 
 Host 不具备这两个 RPC 时 `welcome.capabilities.sessionManagement=false`，请求返回 `E_UNSUPPORTED`，客户端不得伪造本地成功状态。
 
+### c2s.sessions.archived → s2c.sessions.archived.snapshot
+
+按需拉取已归档会话，供归档列表界面浏览。返回行与 `s2c.sessions.snapshot` 的 SessionSummary 同构，并额外携带 `archived: true`，按 `lastActivityTs` 降序排列。
+
+```json
+{ "type": "c2s.sessions.archived", "id": "ar-1", "payload": {} }
+{ "type": "s2c.sessions.archived.snapshot", "id": "ar-1", "payload": { "sessions": [SessionSummary] } }
+```
+
+归档行**不会**出现在 `c2s.sessions.list` 的响应、`s2c.sessions.delta` 的 `upserted`/`removedIds` 或任何推送中。因此不支持本 RPC 的旧客户端行为完全不变；新客户端必须显式请求才能看到归档会话。
+
+### c2s.session.unarchive → s2c.session.unarchived
+
+恢复归档会话，真实调用 Host `workspace.unarchiveSession`。恢复后该会话重新出现在普通列表：Bridge 会随即重发 `s2c.sessions.delta`，其中该会话位于 `upserted`。归档集合以 Host 返回的完整 `archivedSessionIds` 为准。
+
+```json
+{ "type": "c2s.session.unarchive", "id": "u-1", "payload": { "sessionId": "session-…" } }
+{ "type": "s2c.session.unarchived", "id": "u-1", "payload": { "sessionId": "session-…" } }
+```
+
+Host 不具备该能力时 `welcome.capabilities.sessionRestore=false`，请求返回 `E_UNSUPPORTED`。`c2s.sessions.archived` 属默认的 `sessions.read` 权限域；`c2s.session.unarchive` 属 `sessions.manage`。
+
 ## 5. 写链路
 
 ### c2s.session.sendPrompt（payload: sessionId, text, images?, documents?）
@@ -475,6 +517,7 @@ RPC 响应 result 为 `{ "mediaType": "image/jpeg", "data": "<base64>" }`；宿�
 
 - decision：allow | deny；reason 可选，deny 时可附说明。
 - riskLevel：read | write | destructive。
+- toolArguments：可选字符串，原始完整工具参数（通常为 JSON），用于展示真实执行内容；summary 为审批原因，toolName 仅为工具名。此字段是协议 v2 的向后兼容扩展：旧客户端忽略，新客户端在缺失时显示执行内容不可用，不将工具名视为命令。桥接层按同一 session 的 callId 和工具名匹配 tool/call，读取最近 200 条消息范围的历史；未匹配则省略，不猜测、不截断。参数获取完成后可用同一 requestId 更新 pending.approval，pending.snapshot 保留此字段。
 - 挂起审批同时体现在 SessionSummary.pendingApproval。
 
 ### 提问
@@ -724,6 +767,13 @@ APNs environment 若提供只接受 development/production，categories 的值�
 
 ## Live Activity updates (optional protocol-v2 extension)
 
+Live Activities are limited to sessions with a nonempty TODO checklist: use
+`todos.total > 0`, falling back to `todoItems.length` only when the count is
+absent. Starting also requires running or pending-interaction state. Ordinary
+chat does not create an activity. Clearing the checklist projects `unavailable`
+and ends an existing activity; completing a round with a retained checklist
+continues to use `ended`. This policy does not change protocol-v2 wire fields.
+
 `WelcomeCapabilities.liveActivityPush: true` advertises registration support;
 `push` still indicates whether the configured delivery provider is ready.
 Older clients ignore the new capability; new clients omit these requests when
@@ -745,7 +795,7 @@ it is absent and may retain foreground-only ActivityKit updates.
 
 Push delivery adds `kind: "liveactivity"`, `event: "update" | "end"`, `timestamp`
 (Unix seconds), and `contentState: { title, task, done, total, phase }`. Title and
-current-task text are limited to 100 and 160 Unicode code points. Counts are
+current-task text (current tool operation when available, otherwise the checklist item) are limited to 100 and 160 Unicode code points. Counts are
 nonnegative integers, with `done <= total`; phase is `running`, `approval`,
 `question`, `ended`, or `unavailable`. End does not imply all todos completed.
 APNs uses the main app topic suffixed `.push-type.liveactivity`, push type

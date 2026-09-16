@@ -11,9 +11,10 @@ export function normalizeLocalPort(value: unknown): number {
     : DEFAULT_LOCAL_PORT
 }
 
+/** The LAN listener is TLS-only, so every advertised endpoint is `https://`. */
 export function localEndpointURLs(addresses: readonly string[], port: number): string[] {
   const normalizedPort = normalizeLocalPort(port)
-  return [...new Set(addresses)].map((address) => `http://${address}:${normalizedPort}`)
+  return [...new Set(addresses)].map((address) => `https://${address}:${normalizedPort}`)
 }
 
 export function localListenError(error: unknown, port: number): string {

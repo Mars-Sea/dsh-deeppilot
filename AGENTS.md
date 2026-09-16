@@ -31,6 +31,14 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
 - Release candidates: run the full checklist below. Use `npm ci` for a clean
   dependency install or after lockfile changes; it is not needed for every edit.
 
+### Authorization and completion
+
+Run the checks listed for a change's scope directly, without asking for
+approval at each step. Fix failures caused by the change, rerun the affected
+checks, and commit regenerated `lib/` before reporting done. Only the
+release-only commands — `npm ci`, publishing, pushing, tagging, and GitHub
+Releases — need the separate authorization described below.
+
 ### Full release checklist
 
 ```sh
@@ -44,9 +52,10 @@ cd ../bin && shasum -a 256 -c SHA256SUMS
 
 Commit regenerated `lib/` with source changes. Rebuild the helper and update
 `bin/SHA256SUMS` whenever helper code or build inputs change.
-Publishing, pushing, tagging, and creating a GitHub release require user authorization for those actions. An
-explicit request to release a named version authorizes the release steps below;
-reuse that authorization instead of requesting it again at each step.
+Publishing, pushing, tagging, and creating a GitHub release require user
+authorization for those actions. An explicit request to release a named version
+authorizes the release steps below; reuse that authorization instead of
+requesting it again at each step.
 
 ## Release process
 

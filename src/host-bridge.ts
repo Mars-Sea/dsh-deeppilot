@@ -50,6 +50,7 @@ interface PendingApproval {
   sessionId: string
   toolName: string
   reason: string
+  toolArguments?: string
 }
 
 interface PendingQuestion {
@@ -70,9 +71,13 @@ let BRIDGE_SEQ = 0;
 export class HostBridge {
   readonly id = ++BRIDGE_SEQ;
   private summaries = new Map<string, SessionSummary>()
+  private activeTools = new Map<string, Map<string, string>>()
   private approvals = new Map<string, PendingApproval>()
   private questions = new Map<string, PendingQuestion>()
   private archivedSessionIds = new Set<string>()
+  /** Mirrors archived rows from the last sessions.list so the phone can browse
+   * and restore them. Excluded from `summaries` and from the live broadcast. */
+  private archivedSummaries = new Map<string, SessionSummary>()
   private subagentSessionIds = new Set<string>()
   private sinks = new Set<BridgeSink>()
   private ring: Array<{ seq: number; type: string; payload: unknown }> = []
@@ -114,6 +119,7 @@ export class HostBridge {
         typeof this.apiProxy.sessions.selectModel === 'function',
       sessionManagement: typeof this.apiProxy.sessions.rename === 'function' &&
         typeof this.apiProxy.workspace?.archiveSession === 'function',
+      sessionRestore: typeof this.apiProxy.workspace?.unarchiveSession === 'function',
       projectSelection: typeof this.apiProxy.workspace?.list === 'function' &&
         typeof this.apiProxy.workspace?.create === 'function',
       push: this.pushOutlet?.isAvailable() === true,
@@ -182,7 +188,8 @@ export class HostBridge {
     body: string
     notificationId: string
   }): void {
-    if (this.subagentSessionIds.has(args.sessionId)) return;
+    if ((args.category === 'turn.completed' || args.category === 'session.error') &&
+        this.subagentSessionIds.has(args.sessionId)) return;
     const body = args.body.length > 120 ? args.body.slice(0, 119) + '…' : args.body;
     this.record(
       's2c.notify',
@@ -381,9 +388,12 @@ export class HostBridge {
         const event = frame.event as SessionEventLike | undefined;
         const sessionId = String(frame.sessionId ?? '');
         if (!event || !sessionId) break;
+        if (frame.isSubagent === true) this.subagentSessionIds.add(sessionId);
+        if (this.subagentSessionIds.has(sessionId)) break;
         this.noteActivity(sessionId, event);
         this.captureAssistantText(sessionId, event);
         const projection = projectEvent(sessionId, event);
+        this.captureActivity(sessionId, event, projection?.data.tool as { name?: string; summary?: string } | undefined);
         if (projection) {
           this.record('s2c.session.event', { sessionId, kind: projection.kind, seq: event.seq, data: projection.data });
         }
@@ -399,7 +409,7 @@ export class HostBridge {
         break;
       }
       case 'approval/requested': {
-        const p = frame as { sessionId?: string; approvalId?: string; toolName?: string; reason?: string };
+        const p = frame as { sessionId?: string; approvalId?: string; toolName?: string; reason?: string; callId?: string };
         if (!p.approvalId || !frame.rpcId) break;
         const toolName = String(p.toolName ?? 'tool');
         const summary = String(p.reason ?? '');
@@ -417,6 +427,7 @@ export class HostBridge {
           summary,
           riskLevel: riskOf(toolName),
         });
+        if (p.callId) void this.loadApprovalArguments(p.approvalId, p.callId);
         this.emitNotify({
           sessionId,
           category: 'approval.required',
@@ -500,17 +511,29 @@ export class HostBridge {
         }
       }
       const next = new Map<string, SessionSummary>();
-      const subagentIds = new Set<string>();
+      // Archived sessions stay out of the live list and its broadcast so
+      // existing clients keep their current behaviour; they are mirrored here
+      // and served on demand through c2s.sessions.archived.
+      const nextArchived = new Map<string, SessionSummary>();
       for (const row of response.result.value.items ?? []) {
-        if (this.archivedSessionIds.has(row.sessionId)) continue
-        if (isSubagentRow(row)) {
-          subagentIds.add(row.sessionId);
-          continue;
+        if (isSubagentRow(row)) this.subagentSessionIds.add(row.sessionId);
+        if (this.subagentSessionIds.has(row.sessionId)) continue
+        const summary = toSummary(row, this.approvals, this.questions, workspaceBySession.get(row.sessionId));
+        if (this.archivedSessionIds.has(row.sessionId)) {
+          nextArchived.set(row.sessionId, { ...summary, archived: true });
+          continue
         }
-        next.set(row.sessionId, toSummary(row, this.approvals, this.questions, workspaceBySession.get(row.sessionId)));
+        next.set(row.sessionId, summary);
       }
-      this.subagentSessionIds = subagentIds;
+      for (const [id, calls] of this.activeTools) {
+        const row = next.get(id);
+        if (!row || (row.status !== 'running' && !row.pendingApproval && !row.pendingQuestion)) this.activeTools.delete(id);
+        else row.activity = [...calls.values()].at(-1) ?? null;
+      }
+      // Worker identity is immutable for this bridge lifetime. A stale list or
+      // a removed worker must not erase identity learned from the event stream.
       this.summaries = next;
+      this.archivedSummaries = nextArchived;
       const removedIds = [...previousIds].filter((id) => !next.has(id))
       // sessions.list is authoritative. This also removes assistant snippets
       // captured for child/subagent event streams that never enter summaries.
@@ -530,6 +553,28 @@ export class HostBridge {
     const firstUser = messages.find(m => m.role === 'user' && (m.text ?? '').trim().length > 0);
     if (!firstUser) return;
     row.title = firstUser!.text!.replace(/\s+/g, ' ').trim().slice(0, 60);
+    this.pushSummary(row);
+  }
+
+  private captureActivity(sessionId: string, event: SessionEventLike, tool?: { name?: string; summary?: string }): void {
+    const row = this.summaries.get(sessionId);
+    if (!row) return;
+    const data = event.data as { callId?: string } | undefined;
+    if (event.type === 'tool/call' && data?.callId) {
+      const calls = this.activeTools.get(sessionId) ?? new Map<string, string>();
+      const detail = [tool?.name, tool?.summary].filter(Boolean).join(': ');
+      calls.set(data.callId, Array.from(detail).slice(0, 160).join(''));
+      if (calls.size > 64) calls.delete(calls.keys().next().value!);
+      this.activeTools.set(sessionId, calls);
+    } else if (event.type === 'tool/result' && data?.callId) {
+      this.activeTools.get(sessionId)?.delete(data.callId);
+    } else if (event.type === 'turn/start' || event.type === 'turn/end') {
+      this.activeTools.delete(sessionId);
+    } else return;
+    const activity = [...(this.activeTools.get(sessionId)?.values() ?? [])].at(-1) ?? null;
+    if (row.activity === activity) return;
+    row.activity = activity;
+    // Tool progress must not reorder the session list or trigger Widget pushes.
     this.pushSummary(row);
   }
 
@@ -606,6 +651,15 @@ export class HostBridge {
   }
 
   /**
+   * Archived rows from the last sessions.list, newest first. Served only on
+   * demand so the live session list and its broadcast keep their shape for
+   * clients that predate `c2s.sessions.archived`.
+   */
+  listArchivedSessions(): SessionSummary[] {
+    return [...this.archivedSummaries.values()].sort((a, b) => b.lastActivityTs - a.lastActivityTs);
+  }
+
+  /**
    * Complete transient interaction state. Unlike the replay ring, this remains
    * authoritative after a long disconnect and is rehydrated by apiProxy's mux
    * stream when the bridge itself restarts.
@@ -617,6 +671,7 @@ export class HostBridge {
         sessionId: pending.sessionId,
         toolName: pending.toolName,
         summary: pending.reason,
+        ...(pending.toolArguments !== undefined ? { toolArguments: pending.toolArguments } : {}),
         riskLevel: riskOf(pending.toolName),
       })),
       questions: [...this.questions.entries()].map(([requestId, pending]) => ({
@@ -627,6 +682,32 @@ export class HostBridge {
           : [],
       })),
     };
+  }
+
+  /** Resolve only the exact invocation in this session; never guess from the latest tool. */
+  private async loadApprovalArguments(requestId: string, callId: string): Promise<void> {
+    const pending = this.approvals.get(requestId);
+    if (!pending) return;
+    try {
+      const response = await this.apiProxy.sessions.history({
+        rpcId: randomUUID(),
+        payload: { sessionId: pending.sessionId, maxMessages: 200 },
+      });
+      if (this.disposed || this.approvals.get(requestId) !== pending || !response.result?.ok) return;
+      const event = (response.result.value.events ?? []).map(row => row.event).find(event => {
+        const data = event.data as { callId?: string; name?: string } | undefined;
+        return event.type === 'tool/call' && data?.callId === callId && data?.name === pending.toolName;
+      });
+      const args = (event?.data as { arguments?: unknown } | undefined)?.arguments;
+      if (typeof args !== 'string' || !args.trim()) return;
+      pending.toolArguments = args;
+      this.record('s2c.pending.approval', {
+        requestId, sessionId: pending.sessionId, toolName: pending.toolName,
+        summary: pending.reason, riskLevel: riskOf(pending.toolName), toolArguments: args,
+      });
+    } catch {
+      // Keep the approval answerable with explicitly unavailable execution details.
+    }
   }
 
   // ---------- data operations ----------
@@ -799,6 +880,31 @@ export class HostBridge {
       this.summaries.delete(sessionId)
       this.lastAssistantText.delete(sessionId)
       this.record('s2c.sessions.delta', { upserted: [], removedIds: [sessionId] })
+      return { ok: true, value: true }
+    } catch (error) {
+      return { ok: false, kind: 'internal', message: String(error) }
+    }
+  }
+
+  async unarchiveSession(sessionId: string): Promise<SessionManagementResult<true>> {
+    const unarchive = this.apiProxy.workspace?.unarchiveSession
+    if (typeof unarchive !== 'function') {
+      return { ok: false, kind: 'unsupported', message: 'session restore unavailable on this host version' }
+    }
+    try {
+      const response = await unarchive.call(this.apiProxy.workspace, {
+        rpcId: randomUUID(),
+        payload: { sessionId },
+      })
+      if (!response.result) return { ok: false, kind: 'internal', message: 'session restore returned no result' }
+      if (!response.result.ok) return hostSessionManagementError(response.result.error)
+      this.archivedSessionIds = new Set(
+        (response.result.value.archivedSessionIds ?? []).map(String),
+      )
+      // Rebuild both mirrors from the Host instead of hand-moving the row:
+      // refreshSummaries re-emits s2c.sessions.delta, which carries the restored
+      // session back to the client's live list.
+      await this.refreshSummaries()
       return { ok: true, value: true }
     } catch (error) {
       return { ok: false, kind: 'internal', message: String(error) }

@@ -94,11 +94,15 @@ export interface DeepPilotReport {
   debug: boolean
   /** Private IPv4 candidates for local QR pairing. */
   lanAddresses: string[]
-  /** Independent LAN listener; this never represents DSH's own web port. */
+  /** Independent TLS-only LAN listener; this never represents DSH's own web port. */
   local: {
     phase: 'disabled' | 'starting' | 'online' | 'error' | 'stopped'
     port: number
     endpoints: string[]
+    /** `sha256:` SPKI pin of the LAN certificate; present while `online`. */
+    tlsFingerprint?: string
+    /** The LAN private key was recreated this run: paired LAN devices must pair again. */
+    tlsIdentityRegenerated?: boolean
     message?: string
     updatedAt: number
   }
@@ -214,10 +218,16 @@ function parseLocal(value: unknown): DeepPilotReport['local'] {
   if (!Array.isArray(endpoints) || endpoints.some((entry) => typeof entry !== 'string')) reject('local.endpoints')
   const message = s.message
   if (message !== undefined && typeof message !== 'string') reject('local.message')
+  const tlsFingerprint = s.tlsFingerprint
+  if (tlsFingerprint !== undefined && typeof tlsFingerprint !== 'string') reject('local.tlsFingerprint')
+  const tlsIdentityRegenerated = s.tlsIdentityRegenerated
+  if (tlsIdentityRegenerated !== undefined && typeof tlsIdentityRegenerated !== 'boolean') reject('local.tlsIdentityRegenerated')
   return {
     phase: phase as DeepPilotReport['local']['phase'],
     port: int(s, 'port', 'local.port'),
     endpoints: endpoints as string[],
+    ...(typeof tlsFingerprint === 'string' ? { tlsFingerprint } : {}),
+    ...(tlsIdentityRegenerated === true ? { tlsIdentityRegenerated: true } : {}),
     ...(typeof message === 'string' ? { message } : {}),
     updatedAt: int(s, 'updatedAt', 'local.updatedAt'),
   }
