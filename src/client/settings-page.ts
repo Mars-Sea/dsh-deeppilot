@@ -1,7 +1,8 @@
-import { createElement as h, useEffect, useState } from 'react'
+import { createElement as h, useEffect, useReducer, useRef, useState } from 'react'
 import * as QRCode from 'qrcode/lib/browser.js'
 import type { DeepPilotReport, PairingGrantSnapshot, PushTestResult, RelayTestResult } from '../report-wire.ts'
-import { encodePairingQRPayload, selectPairingTargets } from '../pairing-qr.ts'
+import { encodePairingLink, selectPairingTargets, type PairingTarget } from '../pairing-qr.ts'
+import { initialPairingPanelState, pairingPanelReduce, pairingPanelView } from './pairing-panel.ts'
 import { translateWith as t } from './i18n.ts'
 import type { EnabledState, LocalEnabledState, LocalPortState, PageState, RemoteConnectionLimitState, RemoteEnabledState } from './index.ts'
 import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, MAX_FUNNEL_CONNECTIONS_PER_SOURCE } from '../funnel-policy.ts'
@@ -75,16 +76,13 @@ const LOCAL_PHASE_META: Record<DeepPilotReport['local']['phase'], { dot: string;
 
 /** Slot component: hooks come from the slot renderer, named use<Key>. */
 export function DeepPilotSettingsPage(props: Record<string, any>): any {
-  const [addressMessage, setAddressMessage] = useState('')
   const [remoteLimitDraft, setRemoteLimitDraft] = useState(String(DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE))
   const [remoteLimitMessage, setRemoteLimitMessage] = useState('')
   const [localPortDraft, setLocalPortDraft] = useState(String(DEFAULT_LOCAL_PORT))
   const [localPortMessage, setLocalPortMessage] = useState('')
   const [selectedPairingHost, setSelectedPairingHost] = useState<string | null>(null)
-  const [qrDataURL, setQRDataURL] = useState<string | null>(null)
-  const [pairingGrant, setPairingGrant] = useState<PairingGrantSnapshot | null>(null)
-  const [qrBusy, setQRBusy] = useState(false)
-  const [qrMessage, setQRMessage] = useState('')
+  const [pairingPanel, dispatchPairingPanel] = useReducer(pairingPanelReduce, initialPairingPanelState)
+  const qrRequestId = useRef(0)
   const [relayTestBusy, setRelayTestBusy] = useState(false)
   const [relayTestResult, setRelayTestResult] = useState<RelayTestResult | null>(null)
   const [relayTestError, setRelayTestError] = useState('')
@@ -136,12 +134,6 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   }
 
   useEffect(() => {
-    if (!addressMessage) return
-    const timer = globalThis.setTimeout(() => setAddressMessage(''), 2_500)
-    return () => globalThis.clearTimeout(timer)
-  }, [addressMessage])
-
-  useEffect(() => {
     if (!remoteLimitMessage) return
     const timer = globalThis.setTimeout(() => setRemoteLimitMessage(''), 4_000)
     return () => globalThis.clearTimeout(timer)
@@ -154,20 +146,20 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   }, [localPortMessage])
 
   useEffect(() => {
-    if (qrDataURL === null) return
+    if (pairingPanel.grant === null) return
+    // The panel carries a single-use code, so it must not outlive the grant.
+    const remaining = Math.max(0, pairingPanel.grant.expiresAt - Date.now())
     const timer = globalThis.setTimeout(() => {
-      setQRDataURL(null)
-      setPairingGrant(null)
-      setQRMessage(t(props.t, 'pair.qrAutoHidden'))
-    }, 48 * 60 * 60_000)
+      dispatchPairingPanel({ type: 'close', message: t(props.t, 'pair.qrExpired') })
+    }, remaining)
     return () => globalThis.clearTimeout(timer)
-  }, [qrDataURL])
+  }, [pairingPanel.grant])
 
   useEffect(() => {
-    if (!qrMessage) return
-    const timer = globalThis.setTimeout(() => setQRMessage(''), 2_500)
+    if (!pairingPanel.notice) return
+    const timer = globalThis.setTimeout(() => dispatchPairingPanel({ type: 'dismissNotice' }), 2_500)
     return () => globalThis.clearTimeout(timer)
-  }, [qrMessage])
+  }, [pairingPanel.notice])
 
   const diag: string[] = []
   let report: DeepPilotReport | null = null
@@ -286,56 +278,70 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
 
   const pairingTargets = report === null ? [] : selectPairingTargets(report.local, report.remote)
   const pairingTarget = pairingTargets.find(({ host }) => host === selectedPairingHost) ?? pairingTargets[0] ?? null
+  const panel = pairingPanelView(pairingPanel)
 
-  useEffect(() => {
-    setQRDataURL(null)
-    setPairingGrant(null)
-  }, [pairingTarget?.host])
-
-  const copyRemoteURL = (url: string): void => {
-    setAddressMessage('')
-    void writeClipboard(props.t as T, url).then(() => {
-      setAddressMessage(t(props.t, 'pair.publicCopyDone'))
-    }, (error: unknown) => {
-      setAddressMessage(t(props.t, 'pair.publicCopyFailed') + (error instanceof Error ? error.message : String(error)))
-    })
-  }
-
-  const showPairingQR = (): void => {
-    if (typeof props.beginPairing !== 'function' || pairingTarget === null) return
-    setQRBusy(true)
-    setQRMessage('')
-    setQRDataURL(null)
-    setPairingGrant(null)
+  /**
+   * Issue a grant and render the panel for one explicit target.
+   *
+   * The target is a parameter rather than component state on purpose: a click
+   * handler must not depend on whether React has already re-rendered with the
+   * newly selected host. A grant is bound to the host it was issued for, so
+   * switching between LAN and public always mints a fresh one.
+   */
+  const showPairingQR = (target: PairingTarget): void => {
+    if (typeof props.beginPairing !== 'function') return
+    // Each request carries a token: a fast LAN/public switch can leave two
+    // issues in flight, and only the newest may render its grant.
+    const requestId = qrRequestId.current + 1
+    qrRequestId.current = requestId
+    dispatchPairingPanel({ type: 'show', target, requestId })
     void (props.beginPairing() as Promise<PairingGrantSnapshot>)
-      .then(async (grant: PairingGrantSnapshot) => ({
-        grant,
-        svg: await QRCode.toString(
-          encodePairingQRPayload(pairingTarget.host, grant, pairingTarget.tlsFingerprint),
-          { type: 'svg', errorCorrectionLevel: 'M', margin: 2, width: 512 },
-        ),
-      }))
-      .then(({ grant, svg }) => {
-        setPairingGrant(grant)
-        setQRDataURL('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg))
-      }, (error: unknown) => {
-        setQRMessage(t(props.t, 'pair.qrFailed') + (error instanceof Error ? error.message : String(error)))
+      .then(async (grant: PairingGrantSnapshot) => {
+        // The QR code and the copy field carry the same short link, so the app
+        // accepts it from the camera and from the paste field alike.
+        const link = encodePairingLink(target.host, grant, target.tlsFingerprint)
+        return {
+          grant,
+          link,
+          svg: await QRCode.toString(link, { type: 'svg', errorCorrectionLevel: 'M', margin: 2, width: 512 }),
+        }
       })
-      .finally(() => setQRBusy(false))
+      .then(({ grant, link, svg }) => {
+        if (qrRequestId.current !== requestId) return
+        dispatchPairingPanel({
+          type: 'issued',
+          requestId,
+          grant,
+          link,
+          qrDataURL: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg),
+        })
+      }, (error: unknown) => {
+        if (qrRequestId.current !== requestId) return
+        dispatchPairingPanel({
+          type: 'failed',
+          requestId,
+          message: t(props.t, 'pair.qrFailed') + (error instanceof Error ? error.message : String(error)),
+        })
+      })
   }
 
   const hidePairingQR = (): void => {
-    setQRDataURL(null)
-    setPairingGrant(null)
+    // Invalidate any in-flight issue so a late response cannot reopen the panel.
+    qrRequestId.current += 1
+    dispatchPairingPanel({ type: 'close' })
   }
 
-  const copyPairingCode = (): void => {
-    if (pairingGrant === null) return
-    setQRMessage('')
-    void writeClipboard(props.t as T, pairingGrant.code).then(() => {
-      setQRMessage(t(props.t, 'pair.codeCopyDone'))
+  const copyPairingInfo = (): void => {
+    const link = pairingPanel.link
+    if (link === null) return
+    dispatchPairingPanel({ type: 'notice', message: '' })
+    void writeClipboard(props.t as T, link).then(() => {
+      dispatchPairingPanel({ type: 'notice', message: t(props.t, 'pair.infoCopyDone') })
     }, (error: unknown) => {
-      setQRMessage(t(props.t, 'pair.codeCopyFailed') + (error instanceof Error ? error.message : String(error)))
+      dispatchPairingPanel({
+        type: 'notice',
+        message: t(props.t, 'pair.infoCopyFailed') + (error instanceof Error ? error.message : String(error)),
+      })
     })
   }
 
@@ -663,12 +669,12 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
                 h('button', {
                   type: 'button',
                   className: 'pbb-action',
-                  disabled: qrBusy || !report.pairingReady,
+                  disabled: panel.busy || !report.pairingReady,
                   onClick: () => {
-                    if (qrDataURL === null) showPairingQR()
-                    else hidePairingQR()
+                    if (panel.open) hidePairingQR()
+                    else showPairingQR(pairingTarget)
                   },
-                }, qrBusy ? t(props.t, 'pair.qrGenerating') : (qrDataURL === null ? t(props.t, 'pair.qrShow') : t(props.t, 'pair.qrHide'))))),
+                }, t(props.t, panel.action)))),
         pairingTarget === null
           ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'pair.noAddressHelp'))
           : null,
@@ -677,49 +683,56 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
             type: 'button',
             key: target.host,
             className: 'pbb-action' + (target.host === pairingTarget?.host ? ' pbb-actionSelected' : ''),
+            // A grant is single-use and cannot be recalled, so a switch clicked
+            // while one is already being issued would spend a second code that
+            // nothing ever displays. Wait for the in-flight issue instead.
+            disabled: panel.busy,
             onClick: () => {
               setSelectedPairingHost(target.host)
-              hidePairingQR()
+              // Switching between LAN and public keeps the panel open by
+              // re-issuing a grant for the newly selected address, so both
+              // networks are one tap away instead of a collapse and re-open.
+              if (panel.open) showPairingQR(target)
+              else hidePairingQR()
             },
           }, (target.kind === 'public' ? t(props.t, 'pair.kind.public') : t(props.t, 'pair.kind.lan')) + ' · ' + target.host)),
         ),
-        qrMessage ? h('p', { className: 'pbb-diag' }, qrMessage) : null,
-        pairingTarget === null || qrDataURL === null || pairingGrant === null ? null : h('div', { className: 'pbb-qrPanel' },
-          h('img', {
-            className: 'pbb-qrImage',
-            src: qrDataURL,
-            alt: t(props.t, 'pair.qrAlt'),
-          }),
-          h('div', { className: 'pbb-pairCodeBlock' },
-            h('span', { className: 'pbb-pairCodeLabel' }, t(props.t, 'pair.codeLabel')),
-            h('div', { className: 'pbb-pairCodeRow' },
-              h('code', { className: 'pbb-pairCode' }, pairingGrant.code),
+        panel.message ? h('p', { className: 'pbb-diag pbb-diagBad' }, panel.message) : null,
+        panel.notice ? h('p', { className: 'pbb-diag' }, panel.notice) : null,
+        panel.failed && pairingTarget !== null
+          ? h('div', { className: 'pbb-rowAction' },
               h('button', {
                 type: 'button',
                 className: 'pbb-action',
-                onClick: copyPairingCode,
+                disabled: panel.busy || !report.pairingReady,
+                onClick: () => showPairingQR(pairingTarget),
+              }, t(props.t, 'pair.qrRetry')))
+          : null,
+        panel.open ? h('div', { className: 'pbb-qrPanel' },
+          panel.qrDataURL === null ? h('p', { className: 'pbb-diag' }, t(props.t, 'pair.qrGenerating')) : h('img', {
+            className: 'pbb-qrImage',
+            src: panel.qrDataURL,
+            alt: t(props.t, 'pair.qrAlt'),
+          }),
+          // The only credentials row on this page: host, single-use code and
+          // (for LAN) the certificate pin travel together in one string, so the
+          // phone needs one paste and nothing is shown twice.
+          panel.link === null ? null : h('div', { className: 'pbb-pairCodeBlock' },
+            h('span', { className: 'pbb-pairCodeLabel' }, t(props.t, 'pair.infoLabel')),
+            h('div', { className: 'pbb-pairCodeRow' },
+              h('code', { className: 'pbb-pairCode' }, panel.link),
+              h('button', {
+                type: 'button',
+                className: 'pbb-action',
+                onClick: copyPairingInfo,
+                'data-testid': 'pairingInfoCopy',
               }, t(props.t, 'panel.tokenAction.copy')))),
-          h('div', { className: 'pbb-row' },
-            h('code', { className: 'pbb-token' }, pairingTarget.host),
-            h('button', {
-              type: 'button',
-              className: 'pbb-action',
-              onClick: () => copyRemoteURL(pairingTarget.host),
-            }, t(props.t, 'panel.tokenAction.copy'))),
-          addressMessage ? h('p', { className: 'pbb-diag' }, addressMessage) : null,
-          pairingTarget.tlsFingerprint === undefined ? null : h('div', { className: 'pbb-row' },
-            h('code', { className: 'pbb-token' }, pairingTarget.tlsFingerprint),
-            h('button', {
-              type: 'button',
-              className: 'pbb-action',
-              onClick: () => copyRemoteURL(pairingTarget.tlsFingerprint ?? ''),
-            }, t(props.t, 'panel.tokenAction.copy'))),
           h('p', { className: 'pbb-qrHint' },
             t(props.t, 'pair.qrHint', {
-              kind: pairingTarget.kind === 'public' ? t(props.t, 'pair.kind.public') : t(props.t, 'pair.kind.lan'),
+              kind: panel.target?.kind === 'public' ? t(props.t, 'pair.kind.public') : t(props.t, 'pair.kind.lan'),
             }),
           ),
-        ),
+        ) : null,
       ),
     ),
     h('div', { className: 'pbb-card' },

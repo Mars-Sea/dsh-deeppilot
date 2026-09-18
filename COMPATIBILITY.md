@@ -7,7 +7,7 @@ This file separates tested evidence from intended behavior. Passing unit tests d
 | Component | Baseline | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | package engine and CI |
-| DSH CLI and Host API | the `0.1.5-rc.*` and `0.1.6-*`/`0.1.6` lines, `0.1.5-rc.1` minimum, for plugin `0.7.x` | plugin source typecheck, unit suite (240 tests) and `tsdown` build run against both the `0.1.5-rc.2` and the `0.1.6-alpha.1` package families; bridge and `/phone` protocol tests |
+| DSH CLI and Host API | the `0.1.5-rc.*` and `0.1.6-*`/`0.1.6` lines, `0.1.5-rc.1` minimum, for plugin `0.7.x` | plugin source typecheck, unit suite (265 tests) and `tsdown` build run against the `0.1.5-rc.2`, `0.1.6-alpha.1` and `0.1.6-alpha.2` package families; the `deeppilot/report` contribution registered through both the `0.1.6-alpha.1` and the `0.1.6-alpha.2` `TypertRegistry`; bridge and `/phone` protocol tests |
 | Host OS | macOS, Linux, Windows on packaged amd64/arm64 helper targets | helper checksums plus user-confirmed Windows/Linux Funnel launch and connection; local LAN validation remains part of alpha testing |
 | Remote access | Tailscale Funnel, ports 443/8443/10000 | helper and supervisor tests |
 | iOS | native DeepPilot client, protocol v2 | simulator build and v2 pairing/challenge evidence |
@@ -15,6 +15,7 @@ This file separates tested evidence from intended behavior. Passing unit tests d
 ## Protocol boundary
 
 - Protocol v2 is the only supported wire version. Existing protocol-v1 devices must pair again after upgrading.
+- The pairing QR now encodes a `deeppilot://pair` link, and the settings page shows that same string in one copy field. An app build that predates the link only parses the JSON payload, so it must be updated before pairing against this plugin; a link pasted into an older app is rejected instead of being half-applied. The current app still accepts the JSON payload.
 - Plugin `0.7.x` serves the LAN listener over self-signed TLS only; devices paired over LAN with `0.6.x` or older must pair again so the app receives the certificate fingerprint. The DSH web server no longer carries `/phone` compatibility routes. Funnel pairings are unaffected.
 - Bearer authentication, URL credentials, and first-frame shared tokens are rejected. A supported client registers a P-256 public key through `/phone/pair` and signs each WebSocket challenge.
 - Without a compatible embedded helper, the core bridge and trusted-LAN mode can still run; remote Funnel reports `unavailable`.
@@ -36,6 +37,28 @@ This file separates tested evidence from intended behavior. Passing unit tests d
   from the Cordis context (`sessionController`, `workspaceController`,
   `directoryPickerController`, `sessionProjections`) and the `session/event`
   and `api-session/*` events, all of which kept their `0.1.5-rc` shape.
+- DSH `0.1.6-alpha.2` changed the strict codec shape carried by an
+  `InvocationDescriptor`. Through `0.1.6-alpha.1` a descriptor published the
+  schema value itself and every consumer called `codec.schema.parse(value)`;
+  `alpha.2` instead validates a lazy `create()` factory at registration and the
+  Gateway parses through `codec.create().parse(value)`. A codec carrying only
+  `schema` is rejected by the `alpha.2` registry
+  (`typert: … strict codec has no create() factory`), which aborts plugin
+  activation. One `strictCodec()` helper in `src/report-wire.ts` emits both
+  keys — the same hand-written, dependency-free codec — so a single published
+  package registers and parses on either generation, and
+  `tests/report-wire.test.ts` pins both access paths.
+  The other `alpha.2` Typert change — a contributed schema's materialized
+  `schema` becoming a lazy `create()` factory — does not apply here: this
+  Remote contributes no schemas, which the same test asserts.
+- DSH `0.1.6-alpha.2` made runtime plugin removal real, through both the
+  Plugin Manager and the client entry reconciler. Every long-lived resource is
+  registered through `ctx.effect`, and the settings-page stylesheet stamps
+  `data-plugin="dsh-deeppilot"` so the module system's `removeOwnedStyles()`
+  can delete it; the module system only auto-claims styles present during
+  factory materialization, while this sheet is injected from `apply()`.
+  Without that stamp, disabling the plugin would leave its sheet styling the
+  page.
 - The compatibility facade converts the
   current Session controller's raw event arrays into the stable wrapped
   history entries consumed by the phone bridge. Sessions persisted by earlier

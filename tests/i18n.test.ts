@@ -74,7 +74,7 @@ test('translateWith calls the locale-aware slot translator directly', () => {
   assert.equal(translateWith(zh, 'help.step1').startsWith('先打开'), true)
   assert.equal(
     translateWith(zh, 'pair.qrHint', { kind: '内网' }),
-    '二维码包含内网地址、一次性配对码以及（内网时）证书指纹；配对码 5 分钟后失效，二维码将在 60 秒后自动隐藏。',
+    '二维码与下面的「配对信息」内容相同：包含内网地址、一次性配对码、证书指纹（内网时）与主机标识。在局域网与公网之间切换会立即生成对应的新配对信息，配对码 5 分钟后失效。',
   )
 })
 
@@ -94,7 +94,7 @@ test('t() substitutes placeholders when a vars object is passed', () => {
   // through t() as well.
   assert.equal(
     t(undefined, 'pair.qrHint', { kind: 'LAN' }),
-    'The QR contains a LAN address, a single-use pairing code and, for LAN, the certificate fingerprint. The code expires after 5 minutes; the QR auto-hides after 60 seconds.',
+    'The QR code and the pairing info below carry the same LAN address, single-use code, certificate fingerprint (for LAN) and host identity. Switching between LAN and public issues a matching new string immediately; the code expires after 5 minutes.',
   )
 })
 

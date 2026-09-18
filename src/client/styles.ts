@@ -87,11 +87,30 @@ const CSS = [
   '.pbb-versionFooter a:hover{text-decoration:underline;text-underline-offset:2px}',
 ].join('\n')
 
+/**
+ * Client bundle id, identical to the `window.__ModuleLoader__.load({ id })`
+ * identity emitted by tsdown.config.ts. DSH's module system owns style
+ * teardown by package id, so this tag must carry the same value.
+ */
+const PLUGIN_ID = 'dsh-deeppilot'
+
+/**
+ * Claim this plugin's page stylesheet against DSH's style ownership.
+ *
+ * `ClientModuleSystem` tags untagged `<style>` elements only during factory
+ * materialization; this sheet is injected from `apply()`, which runs after
+ * that point, so it would never be attributed to us. Stamping `data-plugin`
+ * ourselves lets the module system's `removeOwnedStyles(id)` delete the sheet
+ * when the plugin is unloaded at runtime — the Plugin Manager and the client
+ * entry reconciler both support live removal from 0.1.6-alpha.2 on, and an
+ * orphaned sheet would otherwise keep styling a page we no longer own.
+ */
 export function injectCss(): void {
   if (typeof document === 'undefined') return
   const id = 'dsh-deeppilot/page.css'
   if (document.querySelector('style[data-plugin-css="' + id + '"]') !== null) return
   const tag = document.createElement('style')
+  tag.setAttribute('data-plugin', PLUGIN_ID)
   tag.setAttribute('data-plugin-css', id)
   tag.textContent = CSS
   document.head.appendChild(tag)

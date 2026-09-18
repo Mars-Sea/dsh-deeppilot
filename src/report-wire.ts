@@ -9,7 +9,7 @@
  * @module dsh-deeppilot/report-wire
  */
 
-import type { InvocationDescriptor, TypertRemoteContribution, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
+import type { InvocationDescriptor, TypertCodec, TypertRemoteContribution, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
 import { DEVICE_SCOPES, normalizeDeviceScopes, type DeviceScope } from './device-auth.ts'
 
 export interface PairingGrantSnapshot {
@@ -375,6 +375,32 @@ const booleanSchema: TypertSchema<boolean> = {
 }
 
 /**
+ * One strict boundary codec carrying both generation shapes of the supported
+ * `0.1.x` host family.
+ *
+ * Through `0.1.6-alpha.1` a descriptor published the schema value itself and
+ * every consumer parsed through `codec.schema.parse(value)`. `0.1.6-alpha.2`
+ * switched to a lazily materialized process-realm factory: `TypertRegistry`
+ * now rejects a strict codec without `create()`, and the Gateway parses
+ * through `codec.create().parse(value)`.
+ *
+ * Publishing both keys — `create()` returning the same hand-written,
+ * dependency-free codec — keeps one package valid across the entire declared
+ * peer range instead of forking the wire contract per host generation. The
+ * cast is required because each generation's `TypertCodec` declares only its
+ * own key, so a fresh object literal carrying both fails excess-property
+ * checking against either one.
+ */
+function strictCodec<T>(typeSymbol: string, schema: TypertSchema<T>): TypertCodec {
+  return {
+    mode: 'strict',
+    typeSymbol,
+    schema,
+    create: () => schema,
+  } as unknown as TypertCodec
+}
+
+/**
  * Connectivity self-test for the push relay: health probe plus (when an
  * enroll key is on file) a real enrollment round-trip. Doubles as repair —
  * a token it issues is cached by the bridge.
@@ -395,11 +421,7 @@ export const REPORT_DESCRIPTOR: InvocationDescriptor = {
   method: 'report',
   invocation: { kind: 'direct' },
   parameters: [],
-  result: {
-    mode: 'strict',
-    typeSymbol: `${REPORT_REMOTE_PACKAGE}#DeepPilotReport`,
-    schema: reportSchema,
-  },
+  result: strictCodec(`${REPORT_REMOTE_PACKAGE}#DeepPilotReport`, reportSchema),
 }
 
 export const BEGIN_PAIRING_DESCRIPTOR: InvocationDescriptor = {
@@ -409,11 +431,7 @@ export const BEGIN_PAIRING_DESCRIPTOR: InvocationDescriptor = {
   method: 'beginPairing',
   invocation: { kind: 'direct' },
   parameters: [],
-  result: {
-    mode: 'strict',
-    typeSymbol: `${REPORT_REMOTE_PACKAGE}#PairingGrantSnapshot`,
-    schema: pairingGrantSchema,
-  },
+  result: strictCodec(`${REPORT_REMOTE_PACKAGE}#PairingGrantSnapshot`, pairingGrantSchema),
 }
 
 export const REVOKE_DEVICE_DESCRIPTOR: InvocationDescriptor = {
@@ -426,13 +444,9 @@ export const REVOKE_DEVICE_DESCRIPTOR: InvocationDescriptor = {
     name: 'deviceId',
     wire: 'deviceId',
     source: 'json',
-    codec: { mode: 'strict', typeSymbol: `${REPORT_REMOTE_PACKAGE}#DeviceId`, schema: deviceIdSchema },
+    codec: strictCodec(`${REPORT_REMOTE_PACKAGE}#DeviceId`, deviceIdSchema),
   }],
-  result: {
-    mode: 'strict',
-    typeSymbol: `${REPORT_REMOTE_PACKAGE}#Boolean`,
-    schema: booleanSchema,
-  },
+  result: strictCodec(`${REPORT_REMOTE_PACKAGE}#Boolean`, booleanSchema),
 }
 
 export const SET_DEVICE_SCOPES_DESCRIPTOR: InvocationDescriptor = {
@@ -444,18 +458,14 @@ export const SET_DEVICE_SCOPES_DESCRIPTOR: InvocationDescriptor = {
   parameters: [
     {
       name: 'deviceId', wire: 'deviceId', source: 'json',
-      codec: { mode: 'strict', typeSymbol: `${REPORT_REMOTE_PACKAGE}#DeviceId`, schema: deviceIdSchema },
+      codec: strictCodec(`${REPORT_REMOTE_PACKAGE}#DeviceId`, deviceIdSchema),
     },
     {
       name: 'scopes', wire: 'scopes', source: 'json',
-      codec: { mode: 'strict', typeSymbol: `${REPORT_REMOTE_PACKAGE}#DeviceScopes`, schema: scopesSchema },
+      codec: strictCodec(`${REPORT_REMOTE_PACKAGE}#DeviceScopes`, scopesSchema),
     },
   ],
-  result: {
-    mode: 'strict',
-    typeSymbol: `${REPORT_REMOTE_PACKAGE}#DeviceScopes`,
-    schema: scopesSchema,
-  },
+  result: strictCodec(`${REPORT_REMOTE_PACKAGE}#DeviceScopes`, scopesSchema),
 }
 
 export const TEST_RELAY_DESCRIPTOR: InvocationDescriptor = {
@@ -465,11 +475,7 @@ export const TEST_RELAY_DESCRIPTOR: InvocationDescriptor = {
   method: 'testRelay',
   invocation: { kind: 'direct' },
   parameters: [],
-  result: {
-    mode: 'strict',
-    typeSymbol: `${REPORT_REMOTE_PACKAGE}#RelayTestResult`,
-    schema: relayTestSchema,
-  },
+  result: strictCodec(`${REPORT_REMOTE_PACKAGE}#RelayTestResult`, relayTestSchema),
 }
 
 export const TEST_PUSH_DESCRIPTOR: InvocationDescriptor = {
@@ -479,11 +485,7 @@ export const TEST_PUSH_DESCRIPTOR: InvocationDescriptor = {
   method: 'testPush',
   invocation: { kind: 'direct' },
   parameters: [],
-  result: {
-    mode: 'strict',
-    typeSymbol: `${REPORT_REMOTE_PACKAGE}#PushTestResult`,
-    schema: pushTestSchema,
-  },
+  result: strictCodec(`${REPORT_REMOTE_PACKAGE}#PushTestResult`, pushTestSchema),
 }
 
 const INVOCATION_DESCRIPTORS = [

@@ -48,7 +48,20 @@ v2 不接受 v1 Bearer Token、`c2s.hello.auth` 或任何降级握手；升级�
   引导用户重新配对。
 - Host 的 LAN TLS 密钥持久化在数据目录；证书到期重签不改变指纹，密钥丢失或重建则
   所有通过局域网配对的设备都必须重新配对。
-- 可复制的配对文本与二维码携带完全相同的 JSON。
+- 二维码与可复制的配对文本编码同一段「配对信息」，用户复制一次、粘贴一次即可完成配对：
+
+```text
+deeppilot://pair?h=<host>&c=<code>&f=<tlsFingerprint>&a=<audience>&e=<expiresAt>
+```
+
+  `h` 连接地址（必填，与 JSON 的 `host` 相同）、`c` 一次性配对码（必填，即 `code`）、
+  `f` 证书指纹（局域网必填，公网省略）、`a` 主机标识（即 `audience`）、`e` 过期时间
+  （毫秒，即 `expiresAt`）。字段名短是因为整段内容既要放进二维码，也要粘贴进输入框；
+  值按 URL 查询参数规则百分号编码。
+- App 必须同时接受这两种形式：JSON（旧版插件二维码）与 `deeppilot://pair` 链接，并对
+  解析出的字段执行完全相同的校验。链接可以省略 `a` 与 `e`：缺少 `a` 时以 `/phone/pair`
+  响应中的 `audience` 为准，缺少 `e` 时以 Host 对配对码 5 分钟有效期的判定为准。
+- 配对信息包含一次性配对码，属于凭据：插件不得写日志，App 不得持久化未使用的链接。
 
 App 为该主机生成 P-256 Signing 私钥；真机优先使用 Secure Enclave，私钥不得离开设备。
 App 向 `POST /phone/pair` 发送：

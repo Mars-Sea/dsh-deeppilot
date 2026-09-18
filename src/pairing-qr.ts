@@ -68,8 +68,46 @@ function validTargetHost(value: string): boolean {
 
 /** Encode a short-lived, single-use pairing grant without URL credentials. */
 export function encodePairingQRPayload(host: string, grant: PairingGrantSnapshot, tlsFingerprint?: string): string {
-  const normalizedHost = host.trim()
-  if (!validTargetHost(normalizedHost)) {
+  assertPairingInput(host, grant, tlsFingerprint)
+  const payload: PairingQRPayload = {
+    v: PAIRING_QR_VERSION,
+    type: PAIRING_QR_TYPE,
+    host: host.trim(),
+    code: grant.code.trim(),
+    expiresAt: grant.expiresAt,
+    audience: grant.audience,
+    ...(tlsFingerprint !== undefined ? { tlsFingerprint } : {}),
+  }
+  return JSON.stringify(payload)
+}
+
+/**
+ * One copyable string carrying everything the app needs to pair: host, the
+ * single-use code, the LAN certificate pin and the host audience.
+ *
+ * Users copy this once instead of moving three separate values, and the app
+ * accepts it from the paste field, a deep link and (from this version on) the
+ * QR code. Field names are short because the whole string ends up in a QR code
+ * and in a text field: `h` host, `c` code, `f` fingerprint, `a` audience,
+ * `e` expiry in milliseconds.
+ */
+export function encodePairingLink(host: string, grant: PairingGrantSnapshot, tlsFingerprint?: string): string {
+  assertPairingInput(host, grant, tlsFingerprint)
+  const params = new URLSearchParams()
+  params.set('h', host.trim())
+  params.set('c', grant.code.trim())
+  if (tlsFingerprint !== undefined) params.set('f', tlsFingerprint)
+  params.set('a', grant.audience)
+  params.set('e', String(grant.expiresAt))
+  // URLSearchParams percent-encodes the host and the pin; the app decodes them.
+  return `${PAIRING_LINK_PREFIX}?${params.toString()}`
+}
+
+/** `deeppilot://pair` — the deep-link route the iOS app parses. */
+export const PAIRING_LINK_PREFIX = 'deeppilot://pair'
+
+function assertPairingInput(host: string, grant: PairingGrantSnapshot, tlsFingerprint?: string): void {
+  if (!validTargetHost(host.trim())) {
     throw new TypeError('pairing QR requires a valid HTTPS/WSS host')
   }
   if (grant.code.trim().length < 32 || !Number.isInteger(grant.expiresAt) || grant.expiresAt <= Date.now()) {
@@ -79,14 +117,4 @@ export function encodePairingQRPayload(host: string, grant: PairingGrantSnapshot
   if (tlsFingerprint !== undefined && !isLanTlsFingerprint(tlsFingerprint)) {
     throw new TypeError('pairing TLS fingerprint is invalid')
   }
-  const payload: PairingQRPayload = {
-    v: PAIRING_QR_VERSION,
-    type: PAIRING_QR_TYPE,
-    host: normalizedHost,
-    code: grant.code.trim(),
-    expiresAt: grant.expiresAt,
-    audience: grant.audience,
-    ...(tlsFingerprint !== undefined ? { tlsFingerprint } : {}),
-  }
-  return JSON.stringify(payload)
 }

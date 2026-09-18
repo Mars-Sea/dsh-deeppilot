@@ -3,6 +3,8 @@ import test from 'node:test'
 import {
   pushTestSchema,
   reportSchema,
+  REPORT_HOST_CONTRIBUTION,
+  REPORT_REMOTE_CONTRIBUTION,
 } from '../src/report-wire.ts'
 
 // A minimal but well-formed report, used as the seed for every variant below.
@@ -125,4 +127,72 @@ test('pushTestSchema accepts a 10-hex-char token fingerprint and drops anything 
       `fingerprint ${JSON.stringify(fingerprint)} must be dropped, not surfaced`,
     )
   }
+})
+
+/** Every strict codec reachable from one invocation, with a diagnostic label. */
+function strictCodecs(): { subject: string; codec: Record<string, unknown> }[] {
+  const found: { subject: string; codec: Record<string, unknown> }[] = []
+  for (const descriptor of REPORT_HOST_CONTRIBUTION.invocations) {
+    found.push({ subject: `${descriptor.id} result`, codec: descriptor.result as unknown as Record<string, unknown> })
+    for (const parameter of descriptor.parameters) {
+      found.push({
+        subject: `${descriptor.id} ${parameter.wire}`,
+        codec: parameter.codec as unknown as Record<string, unknown>,
+      })
+    }
+    if (descriptor.invocation.kind === 'context') {
+      found.push({
+        subject: `${descriptor.id} context`,
+        codec: descriptor.invocation.codec as unknown as Record<string, unknown>,
+      })
+    }
+  }
+  return found
+}
+
+test('every strict codec serves both host generations in the declared peer range', () => {
+  // Through DSH 0.1.6-alpha.1 a strict codec published the schema value itself
+  // and every consumer called `codec.schema.parse(value)`. From 0.1.6-alpha.2
+  // the registry rejects a codec without `create()` and the Gateway parses
+  // through `codec.create().parse(value)`. Both keys must survive: dropping
+  // either one silently narrows the supported host range, and a unit suite
+  // exercised against a single generation cannot see the loss.
+  const codecs = strictCodecs()
+  assert.equal(codecs.length, 9, 'the contribution declares nine strict codecs')
+  for (const { subject, codec } of codecs) {
+    assert.equal(codec.mode, 'strict', `${subject} stays strict`)
+    // Generation <= 0.1.6-alpha.1: schema value published directly.
+    const schema = codec.schema as { parse?: unknown } | undefined
+    assert.equal(typeof schema?.parse, 'function', `${subject} exposes schema.parse for older hosts`)
+    // Generation >= 0.1.6-alpha.2: registry validation and Gateway parsing.
+    const create = codec.create as (() => { parse?: unknown }) | undefined
+    assert.equal(typeof create, 'function', `${subject} exposes create() for 0.1.6-alpha.2+ hosts`)
+    const materialized = create?.()
+    assert.equal(
+      typeof materialized?.parse,
+      'function',
+      `${subject} create() materializes a parseable schema`,
+    )
+    // One codec instance must behave identically through both access paths.
+    assert.equal(materialized, schema, `${subject} create() returns the published schema`)
+  }
+})
+
+test('the host contribution deliberately declares no typert schemas', () => {
+  // 0.1.6-alpha.2 replaced a contributed schema's materialized `schema` field
+  // with a lazy `create()` factory. This Remote contributes no schemas — its
+  // codecs are hand-written and dependency-free — so that change must never
+  // reach it. Asserting the empty list keeps a future contribution from
+  // silently reintroducing the removed shape.
+  assert.deepEqual(REPORT_HOST_CONTRIBUTION.schemas, [])
+  assert.deepEqual(REPORT_HOST_CONTRIBUTION.model, { services: [], events: [], objects: [] })
+})
+
+test('the host and client halves publish the same descriptor set', () => {
+  // The Client bundle mounts these descriptors; a host-only edit would leave
+  // the settings page calling methods the Gateway no longer advertises.
+  assert.deepEqual(
+    REPORT_REMOTE_CONTRIBUTION.descriptors,
+    REPORT_HOST_CONTRIBUTION.invocations,
+  )
 })

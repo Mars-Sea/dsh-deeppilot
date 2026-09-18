@@ -1,9 +1,42 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { encodePairingQRPayload, isLanTlsFingerprint, selectPairingTargets } from '../src/pairing-qr.ts'
+import {
+  encodePairingLink,
+  encodePairingQRPayload,
+  isLanTlsFingerprint,
+  selectPairingTargets,
+} from '../src/pairing-qr.ts'
 
-const grant = () => ({ code: 'x'.repeat(43), expiresAt: Date.now() + 60_000, audience: 'deeppilot:test' })
+const grant = () => ({ code: 'x'.repeat(43), expiresAt: Date.now() + 60_000, audience: 'deeppilot:abcdefghijklmnopqrstuv' })
 const FINGERPRINT = 'sha256:' + 'A'.repeat(43)
+
+test('pairing link carries host, code, pin and audience in one pastable string', () => {
+  const pairing = grant()
+  const link = encodePairingLink('https://192.168.1.149:3098', pairing, FINGERPRINT)
+  const parsed = new URL(link)
+
+  assert.equal(parsed.protocol, 'deeppilot:')
+  assert.equal(parsed.host, 'pair')
+  assert.equal(parsed.searchParams.get('h'), 'https://192.168.1.149:3098')
+  assert.equal(parsed.searchParams.get('c'), pairing.code)
+  assert.equal(parsed.searchParams.get('f'), FINGERPRINT)
+  assert.equal(parsed.searchParams.get('a'), pairing.audience)
+  assert.equal(parsed.searchParams.get('e'), String(pairing.expiresAt))
+  // Short enough to scan and to paste.
+  assert.ok(link.length < 260, `pairing link too long: ${link.length}`)
+})
+
+test('pairing link omits the pin for public-CA hosts and validates its inputs', () => {
+  const pairing = grant()
+  const link = encodePairingLink('https://phone.example.ts.net', pairing)
+
+  assert.equal(new URL(link).searchParams.has('f'), false)
+  assert.throws(() => encodePairingLink('http://192.168.1.149:3098', pairing), TypeError)
+  assert.throws(() => encodePairingLink('https://phone.example.ts.net', { ...pairing, code: 'short' }), TypeError)
+  assert.throws(() => encodePairingLink('https://phone.example.ts.net', { ...pairing, expiresAt: 1 }), TypeError)
+  assert.throws(() => encodePairingLink('https://phone.example.ts.net', { ...pairing, audience: 'other' }), TypeError)
+  assert.throws(() => encodePairingLink('https://phone.example.ts.net', pairing, 'sha256:short'), TypeError)
+})
 
 test('pairing QR uses a versioned JSON payload and keeps credentials out of the URL', () => {
   const pairing = grant()

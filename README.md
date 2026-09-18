@@ -58,8 +58,12 @@ dsh web
 ```
 
 After DSH restarts, open **Settings → DeepPilot**, enable the connection, show
-the pairing QR code, and scan it in the DeepPilot app. The same panel also
-shows a copyable pairing code for Simulator or manual entry.
+the pairing QR code, and scan it in the DeepPilot app. Below the QR code the same
+panel shows one copyable piece of pairing info (address, single-use code and
+certificate fingerprint) that can be pasted into the app in one step — useful for
+Simulator or when the camera is unavailable. Switching between the LAN and
+public address issues a matching new QR code and string immediately, with the
+panel staying open.
 
 LAN access is enabled by default on the plugin's independent TCP port `3098`
 and is TLS-only. The plugin generates a self-signed certificate on first start
