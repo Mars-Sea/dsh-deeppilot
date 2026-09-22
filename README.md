@@ -38,16 +38,18 @@ does not require the helper.
 
 | Plugin version | Required DSH | How to install |
 |---|---|---|
-| `0.7.x` (current stable, `latest`) | DSH `0.1.5-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot` |
-| `0.6.x` (previous stable) | DSH `0.1.5-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot@0.6.2` |
-| `0.5.x` (legacy) | DSH `0.1.1-rc.2`–`0.1.2-alpha.1` | `dsh plugin --profile web add dsh-deeppilot@0.5.0` |
+| `0.8.x` (current stable, `latest`) | DSH `0.1.5-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot` |
+| `0.7.x` (previous stable) | DSH `0.1.5-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot@0.7.1` |
+| `0.6.x` (legacy) | DSH `0.1.5-rc.1` or newer | `dsh plugin --profile web add dsh-deeppilot@0.6.2` |
 
-`0.7.x` is built and typechecked against the DSH
+`0.8.x` is built and typechecked against the DSH
 [0.1.5-rc.1](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.5-rc.1)
-Host and client package family. It uses the Gateway multi-client Remote Events
-routing that keeps Web and DeepPilot independently answerable. Earlier plugin
-alphas remain historical artifacts; users installing the `alpha` tag for
-pre-release testing should update DSH to `0.1.5-rc.1` or newer.
+and [0.1.7-alpha.1](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.7-alpha.1)
+Host and client package families — the config-schema release check projects the
+plugin's Config through the pinned 0.1.7 CLI. It uses the Gateway multi-client
+Remote Events routing that keeps Web and DeepPilot independently answerable.
+Earlier plugin alphas remain historical artifacts; users installing the `alpha`
+tag for pre-release testing should update DSH to `0.1.5-rc.1` or newer.
 
 ```sh
 # DSH 0.1.5-rc.1 or newer (recommended):
@@ -92,15 +94,16 @@ DeepPilot state under `$DSH_HOME/deeppilot/`.
 
 ## Publishing (maintainers)
 
-`0.7.x` targets DSH `0.1.5-rc.1`+; `0.6.x` keeps the pre-TLS LAN transport for
-the same DSH family during the migration window, and `0.5.x` stays compatible
-with DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep them published:
+`0.8.x` targets DSH `0.1.5-rc.1`+ and adapts to the DSH 0.1.7 settings rewrite;
+`0.7.x` keeps the pre-0.1.7 settings API during the migration window, `0.6.x`
+keeps the pre-TLS LAN transport for the same DSH family, and `0.5.x` stays
+compatible with DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep them published:
 
 1. Bump `version` in `package.json` and in the root `""` entry of
    `package-lock.json`, then run `npm test && npm run typecheck && npm run build`
    and inspect `npm pack --dry-run --json` (the check
    `tests/compatibility-metadata.test.ts` enforces the peer range and asserts it
-   admits both the `0.1.5-rc.*` and the `0.1.6-*` lines).
+   admits the `0.1.5-rc.*`, the `0.1.6-*`, and the `0.1.7-*` lines).
 2. Commit the release and push it. `npm publish` runs `prepack` (build) and
    `prepublishOnly` (test + typecheck) automatically.
 3. Publish pre-releases without touching `latest`:
@@ -110,7 +113,7 @@ with DSH `0.1.1-rc.2`–`0.1.2-alpha.1`. Keep them published:
    ```
 
    After a successful publish, `npm view dsh-deeppilot dist-tags --json` shows
-   `"latest": "0.7.x"` and `"alpha": "0.7.x-alpha.y"`. Verify the published
+   `"latest": "0.8.x"` and `"alpha": "0.8.x-alpha.y"`. Verify the published
    package by installing it into a DSH `0.1.5-rc.1` profile before pointing
    users at it.
 4. Tag the release commit `vX.Y.Z` and prepare a GitHub Release
