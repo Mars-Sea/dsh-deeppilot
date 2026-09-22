@@ -140,6 +140,10 @@ export interface WelcomeCapabilities {
   push?: boolean
   widgetPush?: boolean
   liveActivityPush?: boolean
+  /** Bridge accepts c2s.device.revoke, letting a client unbind itself before
+   * deleting its local credentials. Absent on older bridges; older clients
+   * ignore the extra field. */
+  deviceRevoke?: boolean
 }
 
 export interface WelcomePayload {

@@ -264,6 +264,13 @@ interface SessionsApiLike {
     };
     data: string;
   }>>;
+  /** DSH 0.1.7+: complete projection baseline for one session; null when the session is gone. */
+  projections?(req: RpcRequestLike<{
+    sessionId: string;
+  }>): Promise<RpcResponseLike<{
+    asOfSeq: number;
+    values: Record<string, unknown>;
+  } | null>>;
 }
 interface WorkspaceApiLike {
   list?(req: RpcRequestLike<Record<string, never>>): Promise<RpcResponseLike<{
@@ -439,6 +446,12 @@ interface ApiProxyLike {
   sessions: SessionsApiLike;
   workspace?: WorkspaceApiLike;
   host?: HostApiLike;
+  /**
+   * DSH 0.1.7 added `session.projections`. Absent/false keeps the bridge on
+   * its existing list-row projection hints — the call is gated on this flag so
+   * older hosts never see a failing RPC.
+   */
+  supportsProjections?: boolean;
   respond(message: {
     type: 'client-response';
     rpcId: string;
@@ -552,6 +565,7 @@ declare class HostBridge {
     push: boolean;
     widgetPush: boolean;
     liveActivityPush: boolean;
+    deviceRevoke: boolean;
   };
   diagnostic(message: string): void;
   currentCursor(): number;
@@ -624,6 +638,13 @@ declare class HostBridge {
   private loadApprovalArguments;
   /** Tail history for an opened session; pushes s2c.session.tail to the sink. */
   openSession(sink: BridgeSink, sessionId: string, tailCount: number): Promise<boolean>;
+  /**
+   * Pull one session's projection baseline (DSH 0.1.7+) and fold every key
+   * through applyProjection — unknown keys are ignored there, `null` means the
+   * session no longer exists, and any failure degrades to a diagnostic: opening
+   * a session must never fail because a baseline could not be read.
+   */
+  private refreshProjections;
   historyPage(sessionId: string, beforeSeq: number, limit: number): Promise<{
     sessionId: string;
     messages: MessageProjection[];
@@ -722,103 +743,103 @@ interface Config {
     relayToken?: string;
   };
 }
-declare const Config: z<Schemastery.ObjectS<{
-  enabled: z<boolean, boolean>;
-  devicesPath: z<string, string>;
-  historyBufferMax: z<number, number>;
-  debug: z<boolean, boolean>;
-  local: z<Schemastery.ObjectS<{
-    enabled: z<boolean, boolean>;
-    port: z<number, number>;
-  }>, Schemastery.ObjectT<{
-    enabled: z<boolean, boolean>;
-    port: z<number, number>;
-  }>>;
-  remote: z<Schemastery.ObjectS<{
-    enabled: z<boolean, boolean>;
-    provider: z<"tailscale-funnel", "tailscale-funnel">;
-    hostname: z<string, string>;
-    statePath: z<string, string>;
-    helperPath: z<string, string>;
-    funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000>;
-    maxConnectionsPerSource: z<number, number>;
-  }>, Schemastery.ObjectT<{
-    enabled: z<boolean, boolean>;
-    provider: z<"tailscale-funnel", "tailscale-funnel">;
-    hostname: z<string, string>;
-    statePath: z<string, string>;
-    helperPath: z<string, string>;
-    funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000>;
-    maxConnectionsPerSource: z<number, number>;
-  }>>;
-  push: z<Schemastery.ObjectS<{
-    provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay">;
-    contentMode: z<"generic" | "preview", "generic" | "preview">;
-    teamId: z<string, string>;
-    keyId: z<string, string>;
-    keyPath: z<string, string>;
-    bundleId: z<string, string>;
-    relayUrl: z<string, string>;
-    relayToken: z<string, string>;
-  }>, Schemastery.ObjectT<{
-    provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay">;
-    contentMode: z<"generic" | "preview", "generic" | "preview">;
-    teamId: z<string, string>;
-    keyId: z<string, string>;
-    keyPath: z<string, string>;
-    bundleId: z<string, string>;
-    relayUrl: z<string, string>;
-    relayToken: z<string, string>;
-  }>>;
-}>, Schemastery.ObjectT<{
-  enabled: z<boolean, boolean>;
-  devicesPath: z<string, string>;
-  historyBufferMax: z<number, number>;
-  debug: z<boolean, boolean>;
-  local: z<Schemastery.ObjectS<{
-    enabled: z<boolean, boolean>;
-    port: z<number, number>;
-  }>, Schemastery.ObjectT<{
-    enabled: z<boolean, boolean>;
-    port: z<number, number>;
-  }>>;
-  remote: z<Schemastery.ObjectS<{
-    enabled: z<boolean, boolean>;
-    provider: z<"tailscale-funnel", "tailscale-funnel">;
-    hostname: z<string, string>;
-    statePath: z<string, string>;
-    helperPath: z<string, string>;
-    funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000>;
-    maxConnectionsPerSource: z<number, number>;
-  }>, Schemastery.ObjectT<{
-    enabled: z<boolean, boolean>;
-    provider: z<"tailscale-funnel", "tailscale-funnel">;
-    hostname: z<string, string>;
-    statePath: z<string, string>;
-    helperPath: z<string, string>;
-    funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000>;
-    maxConnectionsPerSource: z<number, number>;
-  }>>;
-  push: z<Schemastery.ObjectS<{
-    provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay">;
-    contentMode: z<"generic" | "preview", "generic" | "preview">;
-    teamId: z<string, string>;
-    keyId: z<string, string>;
-    keyPath: z<string, string>;
-    bundleId: z<string, string>;
-    relayUrl: z<string, string>;
-    relayToken: z<string, string>;
-  }>, Schemastery.ObjectT<{
-    provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay">;
-    contentMode: z<"generic" | "preview", "generic" | "preview">;
-    teamId: z<string, string>;
-    keyId: z<string, string>;
-    keyPath: z<string, string>;
-    bundleId: z<string, string>;
-    relayUrl: z<string, string>;
-    relayToken: z<string, string>;
-  }>>;
-}>>;
+declare const Config: z<Schemastery.ObjectS<NoInfer<{
+  enabled: z<boolean, boolean, "defined">;
+  devicesPath: z<string, string, "defined">;
+  historyBufferMax: z<number, number, "defined">;
+  debug: z<boolean, boolean, "defined">;
+  local: z<Schemastery.ObjectS<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+    port: z<number, number, "defined">;
+  }>>, Schemastery.ObjectT<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+    port: z<number, number, "defined">;
+  }>>, "defined">;
+  remote: z<Schemastery.ObjectS<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+    provider: z<"tailscale-funnel", "tailscale-funnel", "defined">;
+    hostname: z<string, string, "defined">;
+    statePath: z<string, string, "defined">;
+    helperPath: z<string, string, "defined">;
+    funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000, "defined">;
+    maxConnectionsPerSource: z<number, number, "defined">;
+  }>>, Schemastery.ObjectT<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+    provider: z<"tailscale-funnel", "tailscale-funnel", "defined">;
+    hostname: z<string, string, "defined">;
+    statePath: z<string, string, "defined">;
+    helperPath: z<string, string, "defined">;
+    funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000, "defined">;
+    maxConnectionsPerSource: z<number, number, "defined">;
+  }>>, "defined">;
+  push: z<Schemastery.ObjectS<NoInfer<{
+    provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay", "defined">;
+    contentMode: z<"generic" | "preview", "generic" | "preview", "defined">;
+    teamId: z<string, string, "defined">;
+    keyId: z<string, string, "defined">;
+    keyPath: z<string, string, "defined">;
+    bundleId: z<string, string, "defined">;
+    relayUrl: z<string, string, "defined">;
+    relayToken: z<string, string, "defined">;
+  }>>, Schemastery.ObjectT<NoInfer<{
+    provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay", "defined">;
+    contentMode: z<"generic" | "preview", "generic" | "preview", "defined">;
+    teamId: z<string, string, "defined">;
+    keyId: z<string, string, "defined">;
+    keyPath: z<string, string, "defined">;
+    bundleId: z<string, string, "defined">;
+    relayUrl: z<string, string, "defined">;
+    relayToken: z<string, string, "defined">;
+  }>>, "defined">;
+}>>, Schemastery.ObjectT<NoInfer<{
+  enabled: z<boolean, boolean, "defined">;
+  devicesPath: z<string, string, "defined">;
+  historyBufferMax: z<number, number, "defined">;
+  debug: z<boolean, boolean, "defined">;
+  local: z<Schemastery.ObjectS<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+    port: z<number, number, "defined">;
+  }>>, Schemastery.ObjectT<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+    port: z<number, number, "defined">;
+  }>>, "defined">;
+  remote: z<Schemastery.ObjectS<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+    provider: z<"tailscale-funnel", "tailscale-funnel", "defined">;
+    hostname: z<string, string, "defined">;
+    statePath: z<string, string, "defined">;
+    helperPath: z<string, string, "defined">;
+    funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000, "defined">;
+    maxConnectionsPerSource: z<number, number, "defined">;
+  }>>, Schemastery.ObjectT<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+    provider: z<"tailscale-funnel", "tailscale-funnel", "defined">;
+    hostname: z<string, string, "defined">;
+    statePath: z<string, string, "defined">;
+    helperPath: z<string, string, "defined">;
+    funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000, "defined">;
+    maxConnectionsPerSource: z<number, number, "defined">;
+  }>>, "defined">;
+  push: z<Schemastery.ObjectS<NoInfer<{
+    provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay", "defined">;
+    contentMode: z<"generic" | "preview", "generic" | "preview", "defined">;
+    teamId: z<string, string, "defined">;
+    keyId: z<string, string, "defined">;
+    keyPath: z<string, string, "defined">;
+    bundleId: z<string, string, "defined">;
+    relayUrl: z<string, string, "defined">;
+    relayToken: z<string, string, "defined">;
+  }>>, Schemastery.ObjectT<NoInfer<{
+    provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay", "defined">;
+    contentMode: z<"generic" | "preview", "generic" | "preview", "defined">;
+    teamId: z<string, string, "defined">;
+    keyId: z<string, string, "defined">;
+    keyPath: z<string, string, "defined">;
+    bundleId: z<string, string, "defined">;
+    relayUrl: z<string, string, "defined">;
+    relayToken: z<string, string, "defined">;
+  }>>, "defined">;
+}>>, "plain">;
 //#endregion
 //#region src/push-policy.d.ts
 /** Prune only when the provider supplies an authoritative token-lifecycle verdict. */

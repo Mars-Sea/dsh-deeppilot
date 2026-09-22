@@ -67,6 +67,14 @@ export interface ConnectionStateDeps {
    * readiness, so the very first registration can switch the feature on.
    */
   onPushEnrollKey?: (enrollKey: string) => Promise<void> | void
+  /**
+   * c2s.device.revoke (device unbind): the registered device revoked itself
+   * and every OTHER active connection of that device must be dropped.
+   * `except` is the connection that sent the frame — its close is already
+   * owned by the handler (ack first, then 4401). The hook must not flip the
+   * registry itself; the handler calls DeviceStore.revoke before this.
+   */
+  onDeviceRevoke?: (deviceId: string, except: BridgeConnection) => Promise<unknown> | unknown
 }
 
 
@@ -79,6 +87,12 @@ export class BridgeConnection implements BridgeSink {
   private authenticated = false
   private authenticationSettled = false
   private closed = false
+  /**
+   * Set the moment c2s.device.revoke tears this device down. `ws.close()` is
+   * asynchronous, so frames that arrive while the 4401 close is in flight must
+   * already be refused — a revoked device may not keep driving the bridge.
+   */
+  private revoked = false
   private helloTimer: NodeJS.Timeout | undefined
   private readonly openSessions = new Set<string>()
   /**
@@ -262,6 +276,9 @@ export class BridgeConnection implements BridgeSink {
 
     private async onMessage(raw: string): Promise<void> {
       this.lastActivity = Date.now()
+      // A revoked device is mid-close: swallow everything until the socket
+      // goes away instead of answering a device that no longer exists.
+      if (this.revoked) return
       // Cheap length guard before the JSON parse: pre-auth frames are tiny
       // (hello/ping), so anything over 64 KiB is either junk or an attempt
       // to make us spend CPU before the auth deadline. Reject without
@@ -302,7 +319,11 @@ export class BridgeConnection implements BridgeSink {
     if (this.widgetClient && ![
       'c2s.ping', 'c2s.sessions.list', 'c2s.pending.list', 'c2s.widget.push.register',
     ].includes(env.type)) {
-      return this.fail(env.id, 'E_FORBIDDEN', 'widget connection is read-only')
+      // Device self-revocation is refused by its own handler with a specific
+      // reason; the generic widget gate would only say "read-only".
+      if (env.type !== 'c2s.device.revoke') {
+        return this.fail(env.id, 'E_FORBIDDEN', 'widget connection is read-only')
+      }
     }
     const required = requiredScope(env.type)
     if (required !== undefined && !this.scopes.has(required)) {
@@ -648,6 +669,42 @@ export class BridgeConnection implements BridgeSink {
         this.send('s2c.ack', {}, env.id)
         return
       }
+      case 'c2s.device.revoke': {
+        // Device unbind: the app is deleting its local instance and asks the
+        // host to drop the pairing (APNs/WidgetKit/LiveActivity tokens plus a
+        // revokedAt tombstone) so it can never be an offline push target
+        // again. Unauthenticated frames never reach here; a widget socket is
+        // refused because a short-lived read-only connection must not unbind
+        // its device.
+        const p = env.payload as { deviceId?: unknown } | undefined
+        if (p?.deviceId !== undefined && typeof p.deviceId !== 'string') {
+          return this.fail(env.id, 'E_PROTOCOL', 'deviceId must be a string')
+        }
+        if (typeof p?.deviceId === 'string' && p.deviceId !== this.deviceId) {
+          return this.fail(env.id, 'E_FORBIDDEN', 'deviceId does not match the authenticated device')
+        }
+        if (this.widgetClient) {
+          return this.fail(env.id, 'E_FORBIDDEN', 'widget connection cannot revoke its device')
+        }
+        const deviceId = this.deviceId!
+        // Idempotent: an already-revoked record still acks {revoked:true} —
+        // the device cannot tell a fresh revocation from a repeated one, and
+        // neither case may surface as an error.
+        this.deps.devices.revoke(deviceId, Date.now())
+        this.revoked = true
+        // Dropping sibling sockets is best effort: the registry tombstone is
+        // already written, so a failing hook must not swallow the ack.
+        try {
+          await this.deps.onDeviceRevoke?.(deviceId, this)
+        } catch (error) {
+          if (this.deps.debug === true) this.deps.log('device revoke hook failed: ' + String(error))
+        }
+        // Ack strictly precedes the close so a slow client observes the
+        // successful unbind before the 4401.
+        this.send('s2c.ack', { revoked: true }, env.id)
+        this.close(4401, 'device revoked')
+        return
+      }
       case 'c2s.liveActivity.unregister': {
         const p = env.payload as { activityId: string }
         if (this.pendingLiveActivityId === p.activityId) {
@@ -748,6 +805,9 @@ export class BridgeConnection implements BridgeSink {
   }
 
   private async prove(env: Envelope): Promise<void> {
+    // A socket that just self-revoked is closing; it may not authenticate
+    // again (the registry tombstone would refuse it anyway).
+    if (this.revoked) return
     const p = (env.payload ?? {}) as Partial<AuthProofPayload>
     if (!p.deviceId) {
       this.fail(env.id, 'E_PROTOCOL', 'deviceId required')

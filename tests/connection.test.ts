@@ -19,6 +19,10 @@ class FakeWebSocket {
   bufferedAmount = 0
   sent: any[] = []
   closes: Array<{ code: number | undefined; reason: string }> = []
+  /** Number of frames already sent when each close happened: lets a test pin
+   *  that an ack (or any frame) precedes the close instead of only that both
+   *  occurred. */
+  closeOffsets: number[] = []
   terminated = false
   private handlers = new Map<string, (arg?: unknown) => void>()
 
@@ -33,6 +37,7 @@ class FakeWebSocket {
   close(code?: number, reason?: string): void {
     if (this.readyState === 3) return
     this.closes.push({ code, reason: reason ?? '' })
+    this.closeOffsets.push(this.sent.length)
     this.readyState = 3
     this.handlers.get('close')?.()
   }
@@ -89,6 +94,7 @@ async function makeConnection(opts: {
   scopes?: DeviceScope[]
   onAuthenticationSettled?: (ok: boolean, reason: 'success' | 'invalid-proof' | 'timeout' | 'closed') => void
   onPushEnrollKey?: (enrollKey: string) => Promise<void> | void
+  onDeviceRevoke?: (deviceId: string, except: BridgeConnection) => Promise<unknown> | unknown
 } = {}): Promise<Harness> {
   const bridge = new HostBridge(makeProxy(opts.proxyOverrides), 100)
   // Each harness gets its own registry file so tests never share state.
@@ -109,6 +115,7 @@ async function makeConnection(opts: {
     log: (m) => logs.push(m),
     ...(opts.onAuthenticationSettled ? { onAuthenticationSettled: opts.onAuthenticationSettled } : {}),
     ...(opts.onPushEnrollKey ? { onPushEnrollKey: opts.onPushEnrollKey } : {}),
+    ...(opts.onDeviceRevoke ? { onDeviceRevoke: opts.onDeviceRevoke } : {}),
     onClosed: () => {
       void (async () => {
         await store.drain()
@@ -1103,4 +1110,162 @@ test('delayed activity enrollment cannot overwrite a newer registration or undo 
   assert.equal(h.store.authorized(h.identity.deviceId)?.liveActivity?.activityId, 'new')
   assert.equal(lastFrame(h.ws).payload.code, 'E_BUSY')
   h.ws.close(); await h.closed
+})
+
+// ---------- c2s.device.revoke (device unbind) ----------
+
+test('c2s.device.revoke unbinds the authenticated device: ack, 4401 close, tokens cleared', async () => {
+  const h = await makeConnection()
+  h.authenticate()
+  assert.equal(h.store.authorized(h.identity.deviceId)?.deviceName, 'iPhone', 'hello succeeded before revocation')
+  h.store.setPushToken(h.identity.deviceId, 'a'.repeat(64), 'production', undefined, Date.now())
+  h.store.setWidgetPushToken(h.identity.deviceId, 'b'.repeat(64), 'development', Date.now())
+  h.store.setLiveActivity(h.identity.deviceId, {
+    activityId: 'act', sessionId: 's', token: 'c'.repeat(64),
+    environment: 'production', updatedAt: Date.now(), expiresAt: Date.now() + 60_000,
+  })
+  await h.store.drain()
+  h.ws.sent.length = 0
+
+  h.ws.receive({ v: 2, type: 'c2s.device.revoke', id: 'rv-1', payload: {} })
+  // The handler awaits the (here absent) sibling-socket hook before acking.
+  await new Promise((r) => setTimeout(r, 5))
+
+  const ack = h.ws.sent.at(-1)
+  assert.equal(ack?.type, 's2c.ack', 'revocation is acked')
+  assert.equal(ack?.id, 'rv-1')
+  assert.deepEqual(ack?.payload, { revoked: true })
+  assert.deepEqual(h.ws.closes, [{ code: 4401, reason: 'device revoked' }])
+  assert.equal(h.ws.closeOffsets[0], h.ws.sent.length, 'the ack strictly precedes the 4401 close')
+
+  const record = h.store.list()[0]
+  assert.equal(record.apns, undefined, 'alert token cleared')
+  assert.equal(record.widgetApns, undefined, 'widget token cleared')
+  assert.equal(record.liveActivity, undefined, 'live activity registration cleared')
+  assert.ok(typeof record.revokedAt === 'number', 'tombstone written')
+  assert.equal(h.store.authorized(h.identity.deviceId), undefined, 'record is no longer an active identity')
+
+  // The socket is mid-close: further business frames are swallowed, and a
+  // second revoke cannot be observed as an error.
+  h.ws.receive({ v: 2, type: 'c2s.sessions.list', id: 'after', payload: {} })
+  assert.equal(h.ws.sent.some((f) => f.id === 'after'), false)
+  h.ws.receive({ v: 2, type: 'c2s.device.revoke', id: 'rv-2', payload: {} })
+  assert.equal(h.ws.sent.some((f) => f.id === 'rv-2'), false)
+  await h.closed
+})
+
+test('repeated and omitted payloads revoke idempotently and delete nothing twice', async () => {
+  const h = await makeConnection()
+  h.authenticate()
+  h.store.setPushToken(h.identity.deviceId, 'a'.repeat(64), 'development', undefined, Date.now())
+  await h.store.drain()
+  const sentBefore = h.ws.sent.length
+
+  // Payload omitted entirely, then a repeated revoke on a fresh record state:
+  // both answer {revoked:true} and close once.
+  h.ws.receive({ v: 2, type: 'c2s.device.revoke', id: 'first' })
+  await new Promise((r) => setTimeout(r, 5))
+  const frames = h.ws.sent.slice(sentBefore)
+  assert.deepEqual(
+    frames.filter((f) => f.type === 's2c.ack').map((f) => [f.id, f.payload]),
+    [['first', { revoked: true }]],
+  )
+  assert.deepEqual(h.ws.closes, [{ code: 4401, reason: 'device revoked' }])
+  assert.ok(h.store.list()[0]?.revokedAt)
+  await h.closed
+})
+
+test('a widget connection cannot unbind its device', async () => {
+  const h = await makeConnection()
+  h.authenticate({ clientRole: 'widget' })
+  h.store.setPushToken(h.identity.deviceId, 'a'.repeat(64), 'development', undefined, Date.now())
+  await h.store.drain()
+  h.ws.sent.length = 0
+
+  h.ws.receive({ v: 2, type: 'c2s.device.revoke', id: 'wrv', payload: {} })
+
+  assert.equal(lastFrame(h.ws).type, 's2c.error')
+  assert.equal(lastFrame(h.ws).payload.code, 'E_FORBIDDEN')
+  assert.deepEqual(h.ws.closes, [], 'a refused revoke does not close the widget socket')
+  const record = h.store.list()[0]
+  assert.equal(record.revokedAt, undefined, 'the record was not revoked')
+  assert.equal(record.apns?.token, 'a'.repeat(64), 'the push token survives')
+  assert.equal(h.store.authorized(h.identity.deviceId)?.deviceId, h.identity.deviceId)
+  h.ws.close()
+  await h.closed
+})
+
+test('a deviceId that is not the authenticated device is refused without revoking', async () => {
+  const h = await makeConnection()
+  h.authenticate()
+  h.ws.sent.length = 0
+
+  h.ws.receive({ v: 2, type: 'c2s.device.revoke', id: 'rv-x', payload: { deviceId: 'other-device' } })
+  assert.equal(lastFrame(h.ws).type, 's2c.error')
+  assert.equal(lastFrame(h.ws).payload.code, 'E_FORBIDDEN')
+  assert.deepEqual(h.ws.closes, [], 'nothing is torn down')
+  assert.equal(h.store.list()[0]?.revokedAt, undefined)
+
+  // Its own id (and a non-string) are handled distinctly: the matching id
+  // revokes; a mistyped id is a payload error, never a silent success.
+  h.ws.receive({ v: 2, type: 'c2s.device.revoke', id: 'rv-y', payload: { deviceId: 42 } })
+  assert.equal(lastFrame(h.ws).payload.code, 'E_PROTOCOL')
+  assert.equal(h.store.list()[0]?.revokedAt, undefined)
+
+  h.ws.receive({ v: 2, type: 'c2s.device.revoke', id: 'rv-z', payload: { deviceId: h.identity.deviceId } })
+  await new Promise((r) => setTimeout(r, 5))
+  assert.equal(lastFrame(h.ws).type, 's2c.ack')
+  assert.ok(h.store.list()[0]?.revokedAt)
+  assert.equal(h.store.list()[0]?.apns, undefined, 'the alert token is gone with the record')
+  await h.closed
+})
+
+test('an unauthenticated c2s.device.revoke is refused and revokes nothing', async () => {
+  const h = await makeConnection()
+  h.ws.sent.length = 0
+
+  h.ws.receive({ v: 2, type: 'c2s.device.revoke', id: 'rv-anon', payload: {} })
+
+  assert.equal(lastFrame(h.ws).type, 's2c.error')
+  assert.equal(lastFrame(h.ws).payload.code, 'E_PROTOCOL')
+  assert.deepEqual(h.ws.closes, [], 'pre-auth business frames only fail')
+  assert.equal(h.store.list()[0]?.revokedAt, undefined)
+  h.ws.close()
+  await h.closed
+})
+
+test('c2s.device.revoke needs no scope: a narrowed device can still unbind itself', async () => {
+  const h = await makeConnection({ scopes: ['notifications.register'] })
+  h.authenticate()
+  h.ws.sent.length = 0
+  h.ws.receive({ v: 2, type: 'c2s.device.revoke', id: 'rv-scope', payload: {} })
+  await new Promise((r) => setTimeout(r, 5))
+  assert.deepEqual(h.ws.sent.at(-1)?.payload, { revoked: true })
+  assert.ok(h.store.list()[0]?.revokedAt, 'the tombstone is written even without sessions.read')
+  assert.deepEqual(h.ws.closes, [{ code: 4401, reason: 'device revoked' }])
+  await h.closed
+})
+
+test('sibling sockets of a revoked device are dropped, and the revoke hook sees the initiator', async () => {
+  const seen: Array<{ deviceId: string; except: unknown }> = []
+  const h = await makeConnection({
+    onDeviceRevoke: (deviceId, except) => { seen.push({ deviceId, except }) },
+  })
+  h.authenticate()
+  h.ws.receive({ v: 2, type: 'c2s.device.revoke', id: 'rv-hook', payload: {} })
+  await new Promise((r) => setTimeout(r, 5))
+  assert.equal(seen.length, 1, 'the hook fires exactly once')
+  assert.equal(seen[0]?.deviceId, h.identity.deviceId)
+  assert.equal(seen[0]?.except, h.connection, 'the initiating socket is left to close itself')
+  assert.equal(lastFrame(h.ws).type, 's2c.ack', 'the hook runs before the ack')
+  await h.closed
+})
+
+test('welcome advertises the deviceRevoke capability', async () => {
+  const h = await makeConnection()
+  h.authenticate()
+  const welcome = h.ws.sent.find((frame) => frame.type === 's2c.welcome')
+  assert.equal(welcome?.payload.capabilities.deviceRevoke, true)
+  h.ws.close()
+  await h.closed
 })

@@ -58,6 +58,10 @@ export function requiredScope(type: string): DeviceScope | undefined {
   // a non-string value must never reach the startsWith checks below.
   if (typeof type !== 'string') return undefined
   if (type === 'c2s.ping' || type === 'c2s.resume') return undefined
+  // Self-revocation is a device-lifecycle operation, not a business read: a
+  // device whose scopes were narrowed must still be able to unbind itself,
+  // otherwise it is stuck as a permanent offline-push target.
+  if (type === 'c2s.device.revoke') return undefined
   if (type === 'c2s.session.sendPrompt' || type === 'c2s.session.delivery') return 'prompt.send'
   if (type === 'c2s.pending.list') return 'interactions.respond'
   if (type === 'c2s.approval.respond' || type === 'c2s.question.respond') return 'interactions.respond'

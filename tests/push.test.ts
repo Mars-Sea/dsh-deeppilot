@@ -264,6 +264,87 @@ test('push tokens persist per device, are idempotent, and can be pruned', async 
   }
 })
 
+test('one APNs token belongs to one device: re-registering it detaches the previous holder', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'pbb-token-uniq-'))
+  try {
+    const path = join(dir, 'devices.json')
+    const store = await DeviceStore.load(path)
+    const first = createTestIdentity()
+    const second = createTestIdentity()
+    registerTestIdentity(store, first)
+    registerTestIdentity(store, second)
+
+    store.setPushToken(first.deviceId, DEVICE_TOKEN_HEX, 'production', undefined, 1)
+    store.setPushToken(second.deviceId, DEVICE_TOKEN_HEX, 'production', undefined, 2)
+    await store.drain()
+
+    const reloaded = await DeviceStore.load(path)
+    assert.equal(reloaded.authorized(first.deviceId)?.apns, undefined,
+      'the same physical token is detached from the older deviceId')
+    assert.equal(reloaded.authorized(second.deviceId)?.apns?.token, DEVICE_TOKEN_HEX,
+      'the newest registration wins')
+    assert.equal(reloaded.authorized(first.deviceId)?.publicKey, first.publicKey,
+      'detaching a token never touches the pairing key')
+    assert.equal(reloaded.authorized(first.deviceId)?.revokedAt, undefined,
+      'detaching a token never revokes the record')
+
+    // Re-registering it on the current holder is a silent no-op, exactly as
+    // before: no extra detach work, no rewrite of updatedAt.
+    reloaded.setPushToken(second.deviceId, DEVICE_TOKEN_HEX, 'production', undefined, 3)
+    await reloaded.drain()
+    const afterRepeat = JSON.parse(await readFile(path, 'utf8'))
+    assert.equal(afterRepeat.devices.find((d: any) => d.deviceId === second.deviceId).apns.updatedAt, 2)
+    assert.equal(afterRepeat.devices.find((d: any) => d.deviceId === first.deviceId).apns, undefined)
+
+    // Widget tokens obey the same rule, independently of alert tokens.
+    const widgetToken = 'f'.repeat(64)
+    store.setWidgetPushToken(first.deviceId, widgetToken, 'development', 4)
+    store.setWidgetPushToken(second.deviceId, widgetToken, 'development', 5)
+    await store.drain()
+    assert.equal(store.authorized(first.deviceId)?.widgetApns, undefined)
+    assert.equal(store.authorized(second.deviceId)?.widgetApns?.token, widgetToken,
+      'the widget token is stored lowercased like the alert token')
+    assert.equal(store.authorized(second.deviceId)?.apns?.token, DEVICE_TOKEN_HEX,
+      'the widget dedup leaves the holder’s alert registration alone')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('revoking a device removes it from the offline push target set permanently', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'pbb-revoke-fanout-'))
+  try {
+    const store = await DeviceStore.load(join(dir, 'devices.json'))
+    const gone = createTestIdentity()
+    const staying = createTestIdentity()
+    registerTestIdentity(store, gone)
+    registerTestIdentity(store, staying)
+    const now = Date.now()
+    store.setPushToken(gone.deviceId, 'a'.repeat(64), 'production', undefined, now)
+    store.setPushToken(staying.deviceId, 'b'.repeat(64), 'production', undefined, now)
+    await store.drain()
+
+    // Mirrors the fan-out candidate filter in index.ts: an offline device is a
+    // target only while it holds a token the registry still lists.
+    const offlineTargets = () => store.list()
+      .filter((device) => device.apns !== undefined)
+      .filter((device) => mayReceivePush(device, { category: 'turn.completed', body: 'x' }))
+      .map((device) => device.deviceId)
+    assert.deepEqual(offlineTargets().sort(), [gone.deviceId, staying.deviceId].sort())
+
+    assert.equal(store.revoke(gone.deviceId, now + 1), true)
+    await store.drain()
+    assert.deepEqual(offlineTargets(), [staying.deviceId],
+      'a revoked device can never be selected as an offline push target again')
+
+    const reloaded = await DeviceStore.load(join(dir, 'devices.json'))
+    assert.equal(reloaded.list().find((d) => d.deviceId === gone.deviceId)?.apns, undefined,
+      'the cleared token is what survives a restart')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 // ---------- c2s.push.register over the wire ----------
 
 test('push.register stores the token and answers ack', async () => {

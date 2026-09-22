@@ -13,3 +13,4 @@ auth-token
 devices.json
 /tailscale/
 *.log
+.dsh-home-*/

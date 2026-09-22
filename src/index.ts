@@ -155,6 +155,12 @@ export function apply(ctx: Context, options: unknown): void {
     }),
   }
   ctx.inject(['settings'], (settingsCtx) => {
+    // DSH 0.1.7 removed installSection entirely: that host persists section
+    // values in this plugin's own profile config entry — the object
+    // currentConfig() already reads — and notifies through the volatile-update
+    // event below. Guarding the seam keeps activation alive on either host.
+    const install = (settingsCtx as { settings?: { installSection?: unknown } }).settings?.installSection
+    if (typeof install !== 'function') return
     settingsCtx.settings.installSection(
       ctx,
       'deeppilot',
@@ -163,6 +169,18 @@ export function apply(ctx: Context, options: unknown): void {
       settingsHooks,
     )
   })
+
+  // DSH 0.1.7 commits volatile-only config edits into the live refs without a
+  // remount and emits this on the owning fiber — the replacement for the
+  // installSection hooks that host no longer has. Re-run the same transport
+  // reconciles; on older hosts nothing ever emits it, so the listener is inert.
+  ;(ctx as unknown as { on: (name: string, listener: () => void) => void }).on(
+    'loader/volatile-update',
+    () => queueMicrotask(() => {
+      scheduleLocalReconcile?.()
+      scheduleRemoteReconcile?.()
+    }),
+  )
 
   // Master switch, resolved against the latest available settings document.
   // Individual injected services also read currentConfig() when they activate.
@@ -345,6 +363,29 @@ export function apply(ctx: Context, options: unknown): void {
   const closeAllConnections = (): void => {
     for (const connection of connections) connection.closeForServerStop()
     connections.clear()
+  }
+
+  /**
+   * Unbind one device. Single path shared by the settings page (report-service
+   * revokeDevice) and the wire-level c2s.device.revoke frame: mark the registry
+   * tombstone (which also drops every APNs/WidgetKit/LiveActivity token, so the
+   * push fan-out can no longer select it) and hard-drop its live sockets.
+   * `except` is the connection that sent the revoke frame — it closes itself
+   * with 4401 after acking, so it is not terminated here.
+   */
+  const revokeDevice = async (deviceId: string, except?: BridgeConnection): Promise<boolean> => {
+    const { devices } = await ready
+    if (!devices) throw new Error('device registry unavailable')
+    const revoked = devices.revoke(deviceId, Date.now())
+    if (revoked) {
+      for (const connection of [...connections]) {
+        if (connection === except || connection.connectedDeviceId !== deviceId) continue
+        connection.terminate()
+        connections.delete(connection)
+      }
+      log(`device revoked id=${auditLabel(deviceId)}`)
+    }
+    return revoked
   }
 
   // ---------- offline push outlet (F-9) ----------
@@ -776,18 +817,9 @@ export function apply(ctx: Context, options: unknown): void {
       devices,
     }
   }, beginPairing, async (deviceId) => {
-    const { devices } = await ready
-    if (!devices) throw new Error('device registry unavailable')
-    const revoked = devices.revoke(deviceId, Date.now())
-    if (revoked) {
-      for (const connection of [...connections]) {
-        if (connection.connectedDeviceId !== deviceId) continue
-        connection.terminate()
-        connections.delete(connection)
-      }
-      log(`device revoked id=${auditLabel(deviceId)}`)
-    }
-    return revoked
+    // Settings-page revocation shares the exact path used by the wire-level
+    // c2s.device.revoke frame (index.ts revokeDevice helper).
+    return await revokeDevice(deviceId)
   }, async (deviceId, scopes) => {
     const { devices } = await ready
     if (!devices) throw new Error('device registry unavailable')
@@ -990,6 +1022,11 @@ export function apply(ctx: Context, options: unknown): void {
                   log(`device authenticated id=${auditLabel(deviceId)} source=${auditLabel(source)}`)
                 },
                 onPushEnrollKey: handlePushEnrollKey,
+                // A device that unbinds itself from the app must not leave a
+                // second socket (e.g. an older install) still live: the
+                // registry tombstone is already written by the handler, so
+                // this only drops the sibling sockets.
+                onDeviceRevoke: (deviceId, except) => revokeDevice(deviceId, except),
               })
               connections.add(connection)
             } catch (error) {

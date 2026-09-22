@@ -46,6 +46,7 @@ npm ci
 npm test
 npm run typecheck
 npm run build
+npm run check:config-schema
 cd helper && go test ./...
 cd ../bin && shasum -a 256 -c SHA256SUMS
 ```

@@ -1457,6 +1457,73 @@ test('session summaries carry usage stats from both stats projections', async ()
   bridge.dispose()
 })
 
+test('opening a session refreshes the 0.1.7 projection baseline', async () => {
+  const { proxy } = makeFakeProxy()
+  proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
+    {
+      sessionId: 'session-open',
+      updatedAt: 300,
+      running: false,
+      blank: false,
+      projections: { values: { title: 'Stale title' } },
+    },
+  ] } } })
+  const baselineCalls: string[] = []
+  proxy.supportsProjections = true
+  proxy.sessions.projections = async (req) => {
+    baselineCalls.push(req.payload?.sessionId ?? '')
+    return { result: { ok: true, value: { asOfSeq: 42, values: {
+      title: 'Fresh title',
+      todos: [{ content: '写测试', status: 'in_progress' }],
+      // Keys the bridge does not consume must pass through applyProjection ignored.
+      subagentCatalog: [{ childId: 'x' }],
+    } } } }
+  }
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  const collected: Array<{ type: string; payload: any }> = []
+  bridge.addSink(makeSink(collected))
+  await new Promise((r) => setTimeout(r, 20))
+
+  const opened = await bridge.openSession(makeSink(collected), 'session-open', 50)
+  assert.equal(opened, true)
+  await new Promise((r) => setTimeout(r, 20))
+
+  assert.deepEqual(baselineCalls, ['session-open'])
+  const delta = [...collected].reverse().find((f) => f.type === 's2c.sessions.delta')
+  assert.ok(delta, 'sessions.delta missing after baseline refresh')
+  const row = delta.payload.upserted.find((s: any) => s.id === 'session-open')
+  assert.ok(row, 'session summary missing from delta')
+  assert.equal(row.title, 'Fresh title')
+  assert.deepEqual(row.todos, { done: 0, total: 1 })
+  bridge.dispose()
+})
+
+test('hosts without the projections capability never see the RPC', async () => {
+  const { proxy } = makeFakeProxy()
+  proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
+    { sessionId: 'session-old-host', updatedAt: 300, running: false, blank: false },
+  ] } } })
+  const baselineCalls: string[] = []
+  // Method present but capability flag absent (older host generation): the
+  // bridge must keep its list-row behaviour instead of issuing a failing RPC.
+  proxy.sessions.projections = async (req) => {
+    baselineCalls.push(req.payload?.sessionId ?? '')
+    return { result: { ok: true, value: { asOfSeq: 1, values: { title: 'should not apply' } } } }
+  }
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  const collected: Array<{ type: string; payload: any }> = []
+  bridge.addSink(makeSink(collected))
+  await new Promise((r) => setTimeout(r, 20))
+
+  const opened = await bridge.openSession(makeSink(collected), 'session-old-host', 50)
+  assert.equal(opened, true)
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(baselineCalls, [], 'projections must not be called without supportsProjections')
+  bridge.dispose()
+})
+
 test('user message projection carries the durable attachment reference', async () => {
   const { proxy } = makeFakeProxy()
   proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [

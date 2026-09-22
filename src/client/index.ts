@@ -6,8 +6,10 @@
  * surfaced to the slot component as a `use` hook, with
  * the report fetched Host-side through the deeppilot/report Typert Remote.
  * The master switch (enabled) is read/written through the shared settings
- * namespace (`ctx.settingsScope.bind({ namespace: 'deeppilot' })`), the
- * same seam the Host registers via installSettingsSection.
+ * namespace (`ctx.settingsScope.bind({ namespace: 'deeppilot' })` on hosts
+ * ≤ 0.1.6; `ctx.configForms.get('deeppilot')` on 0.1.7 — see
+ * settings-scope.ts for the adapter), the same seam the Host half persists
+ * through.
  *
  * The slot `inject` MUST be a thunk returning the inject face — the renderer
  * calls `entry.inject(...)`; passing a plain object used to throw
@@ -26,6 +28,11 @@ import { injectCss } from './styles.ts'
 import { DeepPilotSettingsPage } from './settings-page.ts'
 import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, normalizeFunnelConnectionLimit } from '../funnel-policy.ts'
 import { DEFAULT_LOCAL_PORT, normalizeLocalPort } from '../local-policy.ts'
+import {
+  bindSettingsScope,
+  type ConfigFormsLike,
+  type SettingsScopeLike,
+} from './settings-scope.ts'
 
 export { DeepPilotSettingsPage } from './settings-page.ts'
 
@@ -43,22 +50,8 @@ type AnyCtx = Context & {
   settingsScope?: {
     bind(spec: { namespace: string }): SettingsScopeLike | undefined
   }
-}
-
-/** Minimal structural face over the settings-namespace scope (client contract). */
-interface SettingsScopeLike {
-  getSnapshot(): {
-    status: 'loading' | 'ready' | 'unavailable'
-    value?: {
-      enabled?: boolean
-      local?: { enabled?: boolean; port?: number; [key: string]: unknown }
-      remote?: { enabled?: boolean; maxConnectionsPerSource?: number; [key: string]: unknown }
-    }
-    writable?: boolean
-  }
-  subscribe(listener: () => void): () => void
-  set(field: string, value: unknown): Promise<void>
-  unset(field: string): Promise<void>
+  /** DSH 0.1.7 replacement for settingsScope (see settings-scope.ts). */
+  configForms?: ConfigFormsLike
 }
 
 /** Controller state surfaced to the page through the snapshot store. */
@@ -143,7 +136,18 @@ class ReportController {
   }
 }
 
-export const inject: readonly string[] = ['slots', 'locale', 'remote', 'settingsScope']
+/**
+ * Services this client entry cannot start without.
+ *
+ * The settings seam is deliberately NOT here: DSH ≤ 0.1.6 provides
+ * `settingsScope`, 0.1.7 removed it in favor of `configForms`, and a name no
+ * running host provides keeps the whole entry pending forever — the 0.1.7 boot
+ * reported exactly `dsh-deeppilot: pending (waiting for service:
+ * settingsScope)` while every other service resolved and the entry never
+ * applied. Both settings seams are optional injections inside `apply`
+ * instead; see the scope binding below.
+ */
+export const inject: readonly string[] = ['slots', 'locale', 'remote']
 
 export function apply(ctx: Context): void {
   if (typeof document !== 'undefined') injectCss()
@@ -253,9 +257,13 @@ export function apply(ctx: Context): void {
   }
 
   // Master switch: mirror the durable `enabled` field of the deeppilot
-  // settings namespace (Host side registered via installSettingsSection).
+  // settings namespace (Host side registered via installSection ≤ 0.1.6; on
+  // 0.1.7 the same values live in this plugin's profile config entry).
   const enabledStore = createSnapshotStore<EnabledState>({ status: 'loading', enabled: true })
-  const scope = anyCtx.settingsScope?.bind({ namespace: 'deeppilot' })
+  let scope: SettingsScopeLike | undefined = bindSettingsScope(anyCtx)
+  /** Adopters registered before attachScope runs, so a late-bound scope (0.1.7
+   *  configForms provisioned after this plugin applies) still subscribes all. */
+  const scopeAdoptions: Array<() => void> = []
   const adoptEnabled = (): void => {
     if (scope === undefined) return
     const snap = scope.getSnapshot()
@@ -265,10 +273,7 @@ export function apply(ctx: Context): void {
       enabledStore.set({ status: 'unavailable', enabled: true })
     }
   }
-  if (scope !== undefined) {
-    scope.subscribe(adoptEnabled)
-    adoptEnabled()
-  }
+  scopeAdoptions.push(adoptEnabled)
 
   // Track the last scope-confirmed value so a rejected write can roll the
   // optimistic store back instead of leaving the UI in a state the Host never
@@ -327,10 +332,7 @@ export function apply(ctx: Context): void {
       localPortStore.set({ status: 'unavailable', value: DEFAULT_LOCAL_PORT })
     }
   }
-  if (scope !== undefined) {
-    scope.subscribe(adoptLocal)
-    adoptLocal()
-  }
+  scopeAdoptions.push(adoptLocal)
 
   const setDeepPilotLocalEnabled = (value: boolean): void => {
     const previous = lastConfirmedLocalEnabled()
@@ -378,9 +380,32 @@ export function apply(ctx: Context): void {
       remoteConnectionLimitStore.set({ status: 'unavailable', value: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE })
     }
   }
-  if (scope !== undefined) {
-    scope.subscribe(adoptRemoteEnabled)
-    adoptRemoteEnabled()
+  scopeAdoptions.push(adoptRemoteEnabled)
+
+  // Attach once every adopter is registered. Neither settings seam sits in the
+  // entry's own `inject` (see the export above): whichever generation's service
+  // the running host provides is awaited as an optional injection, including
+  // one provisioned after this plugin applies (0.1.7 provisions `configForms`
+  // behind its own settings-page fiber), so the page never sticks in
+  // "loading" and a host without either seam still activates the entry.
+  const attachScope = (): void => {
+    if (scope === undefined) return
+    for (const adopt of scopeAdoptions) {
+      scope.subscribe(adopt)
+      adopt()
+    }
+  }
+  attachScope()
+  if (scope === undefined) {
+    const bindScopeFrom = (sub: AnyCtx): void => {
+      if (scope !== undefined) return
+      // The shared helper prefers the legacy seam, so a host providing both
+      // still binds the ≤ 0.1.6 scope first.
+      scope = bindSettingsScope(sub)
+      attachScope()
+    }
+    ctx.inject(['settingsScope'], (sub) => { bindScopeFrom(sub as AnyCtx) })
+    ctx.inject(['configForms'], (sub) => { bindScopeFrom(sub as AnyCtx) })
   }
 
   const setDeepPilotRemoteEnabled = (value: boolean): void => {

@@ -239,6 +239,7 @@ export class DeviceStore {
     ) {
       return
     }
+    this.detachDuplicateToken('apns', normalized, deviceId)
     record.apns = next
     void this.flush()
   }
@@ -280,10 +281,14 @@ export class DeviceStore {
   setWidgetPushToken(deviceId: string, token: string, environment: ApnsEnvironment, now: number): void {
     const record = this.authorized(deviceId)
     if (!record || !isValidApnsToken(token)) return
+    // Match c2s.push.register: hex tokens are stored lowercased, so an
+    // uppercase re-send is the same registration, not a rotation.
+    const normalized = token.toLowerCase()
     const previous = record.widgetApns
-    if (previous?.token === token && previous.environment === environment &&
+    if (previous?.token === normalized && previous.environment === environment &&
         now - previous.updatedAt < 60 * 60 * 1000) return
-    record.widgetApns = { token, environment, updatedAt: now }
+    this.detachDuplicateToken('widgetApns', normalized, deviceId)
+    record.widgetApns = { token: normalized, environment, updatedAt: now }
     void this.flush()
   }
 
@@ -293,6 +298,29 @@ export class DeviceStore {
     if (record?.widgetApns?.token !== token) return
     delete record.widgetApns
     void this.flush()
+  }
+
+  /**
+   * One physical device owns one APNs token, but a re-pair or a botched unbind
+   * can leave the same token attached to a second deviceId. Registering it
+   * under `keepDeviceId` detaches it from every other record — only that one
+   * token field, never the other record's pairing key or scopes. No flush of
+   * its own: the caller batches it with the write that follows, so a single
+   * registry write covers both changes.
+   */
+  private detachDuplicateToken(
+    field: 'apns' | 'widgetApns',
+    token: string,
+    keepDeviceId: string,
+  ): void {
+    for (const record of this.devices.values()) {
+      if (record.deviceId === keepDeviceId) continue
+      if (field === 'apns') {
+        if (record.apns?.token === token) delete record.apns
+      } else if (record.widgetApns?.token === token) {
+        delete record.widgetApns
+      }
+    }
   }
 
   /** Serialized so concurrent touches can never interleave half-written JSON. */

@@ -198,7 +198,7 @@ APNs 必须同时具备 notifications.register 和对应通知类别的内容权
   "serverVersion": "0.1.0",
   "deviceId": "<authenticated device id>",
   "scopes": ["sessions.read", "prompt.send"],
-  "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "pendingSnapshot": true, "notifyAllCategories": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true, "widgetPush": true },
+  "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "pendingSnapshot": true, "notifyAllCategories": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true, "widgetPush": true, "deviceRevoke": true },
   "cursor": 1042,
   "resumed": true
 } }
@@ -688,6 +688,34 @@ token 后发送：
 - 能力为 false/缺失时客户端不得发送该请求（服务端回 `E_UNSUPPORTED` 或
   `E_PROTOCOL`）。Relay 分发模式同样透传该推送，中继只做转发与限流。
 
+### 设备自撤销（可选 v2 扩展）
+
+`welcome.capabilities.deviceRevoke = true` 表示 Bridge 接受设备自己发起的解绑。App
+删除某个已配对的 DSH 实例（即删除本地配置与 Keychain 私钥）前必须先发该帧：
+只删本地凭据不会通知主机，主机侧该设备记录仍带着 apns/widgetApns/liveActivity
+token，而离线推送的目标筛选条件是「持有 token 且当前无活跃 WebSocket」，于是这台
+已解绑的手机变成永久推送目标。该帧是这条链路的唯一止血入口：
+
+```json
+{ "type": "c2s.device.revoke", "id": "rv-1", "payload": {} }
+{ "type": "s2c.ack", "id": "rv-1", "payload": { "revoked": true } }
+```
+
+- 前置条件：连接必须已通过 `c2s.auth.prove` 认证；未认证时与其它业务帧一致地失败
+  （`E_PROTOCOL` / `E_AUTH`）。该帧不要求任何 scope：设备生命周期操作不能因为 scope
+  被收窄而无法解绑，否则它只会永远留在离线推送目标集合里。
+- `payload.deviceId` 可选。省略时操作本连接已认证的设备；提供时必须等于该 deviceId，
+  否则回 `E_FORBIDDEN` 且不执行任何撤销。
+- `clientRole:"widget"` 的短连接一律回 `E_FORBIDDEN`：小组件不是设备的所有者，
+  不得解绑设备。
+- 效果：Bridge 吊销该设备（删除 `apns` / `widgetApns` / `liveActivity` 并写入
+  `revokedAt` 墓碑），并关闭该 deviceId 的其它活跃连接。从此该设备不再是离线推送
+  目标，也无法再用同一把钥匙完成握手。
+- 响应：先回 `s2c.ack { revoked: true }`，随后**以 4401 + reason `device revoked`
+  关闭本连接**。ack 必须早于关闭，客户端据此确认解绑已完成。
+- 幂等：记录已被撤销时同样回 `{revoked:true}` 并关闭，不返回错误。
+- 客户端在删除本地凭据前发送该帧；只有收到 `revoked:true`（或断线重试后仍为该结果）
+  才继续删除本地实例，避免删掉凭据却留下推送目标。
 
 ## 7. 断线重放
 
@@ -703,6 +731,9 @@ token 后发送：
   再以 **1001** 关闭；客户端不应把这两类 1001 当成异常网络故障。
 - 单个客户端持续来不及读取、服务端待发送缓冲超过 4MB 时，以 **1013** 关闭；
   客户端可按临时过载执行退避重连。
+- 设备自撤销（§6）在 ack 之后以 **4401** + reason `device revoked` 关闭该连接；
+  它与鉴权失败的 4401 同码不同因，客户端应据 reason 与上一帧 ack 区分，且不得因此
+  重连。
 
 ## 9. 错误帧
 
@@ -725,6 +756,11 @@ token 后发送：
 - welcome.capabilities 中为 false 的能力，客户端不得调用对应 c2s 帧（服务端将回 E_UNSUPPORTED）。
 - `notifyAllCategories` 是服务端投影保证而非新请求权限：缺失/false 表示客户端保留事件
   通知回退，true 表示四类通知均由 `s2c.notify` 唯一负责展示。
+- `deviceRevoke` 同 `liveActivityPush` 属可选 v2 扩展：true 表示 Bridge 接受
+  `c2s.device.revoke` 设备自撤销（见 §6）。缺失/false 时客户端不得发送该帧
+  （旧 Bridge 不认识该类型，回 `E_PROTOCOL`）；客户端应就此结束该次解绑的重试，改为
+  本地抑制（不展示不属于任何已配对 Host 的推送，见 §6 通知 Host 路由）并可提示用户
+  在主机设置页吊销该设备，否则它只会在本地解绑、继续接收离线推送。
 - v2 同版本新增可选字段时双方必须忽略未知字段。
 - v1 不受支持；服务端不得接受 Bearer、`c2s.hello.auth` 或通过错误重试降级。
 - 后续破坏性变更必须升级 `v`，不能静默重新解释 v2 字段。

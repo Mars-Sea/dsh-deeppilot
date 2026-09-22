@@ -5,6 +5,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sign } from 'node:crypto'
 import { Config } from '../src/index.ts'
+// Value reads go through normalizeOptions — the production entry every
+// currentConfig() consumer uses — because volatile fields parse into
+// references that only normalizeOptions unwraps back to plain data.
+import { normalizeOptions } from '../src/config.ts'
 import { bridgeDataDir, ensurePrivateBridgeDataDir, migrateLegacyBridgeDataDir } from '../src/token.ts'
 import { requestClientIdentity } from '../src/phone-http.ts'
 import { PairingCodeManager, canonicalAuthChallenge, deviceIdForPublicKey, verifyAuthProof } from '../src/device-auth.ts'
@@ -73,12 +77,13 @@ test('configuration rejects unsupported providers and Funnel ports', () => {
   assert.throws(() => Config({ remote: { maxConnectionsPerSource: 0 } } as never), TypeError)
   assert.throws(() => Config({ remote: { maxConnectionsPerSource: 17 } } as never), TypeError)
   assert.throws(() => Config({ remote: { maxConnectionsPerSource: 1.5 } } as never), TypeError)
-  assert.equal(Config({ remote: { funnelPort: 8443 }, push: { provider: 'relay' } }).remote.funnelPort, 8443)
-  assert.equal(Config({}).local.enabled, true)
-  assert.equal(Config({}).local.port, 3098)
-  assert.equal(Config({ local: { port: 4098 } }).local.port, 4098)
-  assert.equal(Config({}).remote.maxConnectionsPerSource, 8)
-  assert.equal(Config({ remote: { maxConnectionsPerSource: 12 } }).remote.maxConnectionsPerSource, 12)
+  const parse = (raw: unknown): Config => normalizeOptions(Config(raw as never))
+  assert.equal(parse({ remote: { funnelPort: 8443 }, push: { provider: 'relay' } }).remote?.funnelPort, 8443)
+  assert.equal(parse({}).local?.enabled, true)
+  assert.equal(parse({}).local?.port, 3098)
+  assert.equal(parse({ local: { port: 4098 } }).local?.port, 4098)
+  assert.equal(parse({}).remote?.maxConnectionsPerSource, 8)
+  assert.equal(parse({ remote: { maxConnectionsPerSource: 12 } }).remote?.maxConnectionsPerSource, 12)
 })
 
 test('bridge data is stored under the deeppilot directory', () => {

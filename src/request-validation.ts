@@ -4,7 +4,10 @@ import { validSendId } from './prompt-delivery.ts'
  * (supported models, pending choices, permissions) stays with its owner. */
 export function validateRequest(type: string, value: unknown): string | undefined {
   const empty = new Set(['c2s.ping', 'c2s.sessions.list', 'c2s.pending.list', 'c2s.workspaces.list', 'c2s.directory.pick'])
-  if (value === undefined && (type === 'c2s.session.create' || type === 'c2s.directory.list')) value = {}
+  // Device self-revocation takes no required fields: both an omitted payload
+  // and `{}` are valid, and `deviceId` is optional (it must equal the
+  // authenticated device when present).
+  if (value === undefined && (type === 'c2s.session.create' || type === 'c2s.directory.list' || type === 'c2s.device.revoke')) value = {}
   if (value == null && empty.has(type)) return
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return 'payload must be an object'
   const p = value as Record<string, unknown>
@@ -14,6 +17,7 @@ export function validateRequest(type: string, value: unknown): string | undefine
   if (type.startsWith('c2s.session.') && type !== 'c2s.session.create' && !text(p.sessionId)) return 'invalid sessionId'
   if (type === 'c2s.session.create' && (!optional('workspaceId', v => text(v)) || !optional('cwd', v => text(v, 32768)) || (p.workspaceId !== undefined && p.cwd !== undefined))) return 'invalid workspace selection'
   if (type === 'c2s.directory.list' && !optional('path', v => text(v, 32768, false))) return 'invalid path'
+  if (type === 'c2s.device.revoke' && !optional('deviceId', v => text(v))) return 'invalid deviceId'
   if (type === 'c2s.workspace.create' && !text(p.path, 32768)) return 'invalid path'
   if (type === 'c2s.session.open' && !optional('tailCount', v => integer(v, 1, 10000))) return 'invalid tailCount'
   if (type === 'c2s.session.history' && (!integer(p.beforeSeq, 0, Number.MAX_SAFE_INTEGER) || !optional('limit', v => integer(v, 1, 500)))) return 'invalid history range'

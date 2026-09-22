@@ -33,6 +33,9 @@ interface SessionsApiLike {
   /** Reads one durable image back after the host verifies the session log references its id. */
   attachment?(req: RpcRequestLike<{ sessionId: string; attachmentId: string }>):
     Promise<RpcResponseLike<{ attachment: { mediaType?: string }; data: string }>>
+  /** DSH 0.1.7+: complete projection baseline for one session; null when the session is gone. */
+  projections?(req: RpcRequestLike<{ sessionId: string }>):
+    Promise<RpcResponseLike<{ asOfSeq: number; values: Record<string, unknown> } | null>>
 }
 
 interface WorkspaceApiLike {
@@ -199,6 +202,12 @@ export interface ApiProxyLike {
   sessions: SessionsApiLike
   workspace?: WorkspaceApiLike
   host?: HostApiLike
+  /**
+   * DSH 0.1.7 added `session.projections`. Absent/false keeps the bridge on
+   * its existing list-row projection hints — the call is gated on this flag so
+   * older hosts never see a failing RPC.
+   */
+  supportsProjections?: boolean
   respond(message: { type: 'client-response'; rpcId: string; result: RpcResult<unknown> }):
     Promise<{ accepted: boolean; reason?: string }>
   events: {

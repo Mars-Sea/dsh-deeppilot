@@ -14,12 +14,16 @@ const packageJson = JSON.parse(
 // npm's prerelease rule: a version carrying a prerelease tag only satisfies a
 // range when some comparator in that range carries a prerelease on the *same*
 // major.minor.patch tuple. Neither `^0.1.5-rc.1` nor `>=0.1.5-rc.1` therefore
-// admits any 0.1.6 prerelease, even though both look like they should. A
-// disjunction is the only form that admits both prerelease lines while keeping
-// a ceiling on the next minor line:
-//   ^0.1.5-rc.1            -> 0.1.5-rc.* only
+// admits any 0.1.6 prerelease, even though both look like they should. Every
+// new prerelease line needs its own disjunct for the same reason: the
+// `0.1.7-alpha.*` line is rejected by `>=0.1.6-alpha.1 <0.2.0-0` because no
+// comparator there carries a prerelease on the 0.1.7 tuple. A disjunction is
+// the only form that admits every supported prerelease line while keeping a
+// ceiling on the next minor line:
+//   ^0.1.5-rc.1              -> 0.1.5-rc.* only
 //   >=0.1.6-alpha.1 <0.2.0-0 -> every 0.1.6 prerelease and stable, < 0.2.0
-const DSH_BASELINE = '^0.1.5-rc.1 || >=0.1.6-alpha.1 <0.2.0-0'
+//   >=0.1.7-alpha.1 <0.2.0-0 -> every 0.1.7 prerelease, < 0.2.0
+const DSH_BASELINE = '^0.1.5-rc.1 || >=0.1.6-alpha.1 <0.2.0-0 || >=0.1.7-alpha.1 <0.2.0-0'
 const DSH_PEERS = [
   '@deepseek-ai/dsh',
   '@deepseek-ai/dsh-api-gateway',
@@ -56,6 +60,7 @@ test('the DSH peer range actually admits every supported prerelease line', () =>
   for (const version of [
     '0.1.5-rc.1', '0.1.5-rc.2',
     '0.1.6-alpha.1', '0.1.6-beta.1', '0.1.6',
+    '0.1.7-alpha.1', '0.1.7',
   ]) {
     assert.equal(semver.satisfies(version, range), true, `peer range must admit ${version}`)
   }

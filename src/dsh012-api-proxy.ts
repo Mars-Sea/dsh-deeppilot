@@ -40,6 +40,9 @@ interface SessionControllerLike {
   prompt(request: Record<string, unknown>, signal: AbortSignal): Promise<{ accepted: true }>
   attachment(request: { sessionId: string; attachmentId: string }): Promise<{ attachment: { mediaType?: string }; data: string }>
   cancel(request: { sessionId: string }): { accepted: true }
+  /** DSH 0.1.7+: non-activating projection baseline for one session. */
+  projections?(request: { sessionId: string }, signal?: AbortSignal):
+    Promise<{ asOfSeq: number; values: Record<string, unknown> } | null>
 }
 
 interface WorkspaceControllerLike {
@@ -90,6 +93,15 @@ export class Dsh012ApiProxy implements ApiProxyLike {
     }
     this.directoryPicker = ctx.get('directoryPickerController') as DirectoryPickerControllerLike | undefined
     this.shouldSurfaceInteraction = options.shouldSurfaceInteraction ?? (() => true)
+  }
+
+  /**
+   * Whether the host controller implements `session.projections` (added in
+   * DSH 0.1.7). HostBridge gates its open-time baseline refresh on this so
+   * older hosts keep their current list-row-hint behaviour with no RPC noise.
+   */
+  get supportsProjections(): boolean {
+    return typeof this.session.projections === 'function'
   }
 
   /**
@@ -163,6 +175,13 @@ export class Dsh012ApiProxy implements ApiProxyLike {
     rename: async (request) => this.call(() => this.session.rename(request.payload!)),
     cancel: async (request) => this.call(() => this.session.cancel(request.payload!)),
     attachment: async (request) => this.call(() => this.session.attachment(request.payload!)),
+    // DSH 0.1.7 added session.projections; HostBridge feature-detects through
+    // supportsProjections, so this branch is only reached on hosts that have it.
+    projections: async (request) => this.call(() => {
+      const read = this.session.projections
+      if (typeof read !== 'function') throw unavailable('session projections unavailable')
+      return read.call(this.session, request.payload!)
+    }),
   }
 
   readonly workspace: ApiProxyLike['workspace'] = {

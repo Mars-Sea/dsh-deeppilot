@@ -24,12 +24,18 @@ This file separates tested evidence from intended behavior. Passing unit tests d
   Older plugin versions used developer-preview DSH builds and remain historical
   artifacts.
 - The declared peer range is a disjunction,
-  `^0.1.5-rc.1 || >=0.1.6-alpha.1 <0.2.0-0`, because npm's prerelease rule only
+  `^0.1.5-rc.1 || >=0.1.6-alpha.1 <0.2.0-0 || >=0.1.7-alpha.1 <0.2.0-0`,
+  because npm's prerelease rule only
   lets a prerelease version satisfy a range whose comparators carry a
   prerelease on the same `major.minor.patch` tuple. Neither `^0.1.5-rc.1` nor
-  `>=0.1.5-rc.1` alone admits a `0.1.6` prerelease. `tests/compatibility-metadata.test.ts`
+  `>=0.1.5-rc.1` alone admits a `0.1.6` prerelease, and the `0.1.7-alpha.*`
+  line is likewise rejected by `>=0.1.6-alpha.1 <0.2.0-0` because no
+  comparator there carries a prerelease on the `0.1.7` tuple — every new
+  prerelease line needs its own disjunct.
+  `tests/compatibility-metadata.test.ts`
   asserts the range admits `0.1.5-rc.1`, `0.1.5-rc.2`, `0.1.6-alpha.1`,
-  `0.1.6-beta.1` and `0.1.6`, and rejects `0.2.0`.
+  `0.1.6-beta.1`, `0.1.6`, `0.1.7-alpha.1` and `0.1.7`,
+  and rejects `0.2.0`.
 - DSH `0.1.6-alpha.1` replaced `agent/session-start` with `agent/created`,
   deprecated the synchronous `snapshotEvents`/`eventAt`/`ownEvents` history
   readers, and renamed the PTC packages to the `ptc-runtime` family. The plugin
@@ -51,6 +57,40 @@ This file separates tested evidence from intended behavior. Passing unit tests d
   The other `alpha.2` Typert change — a contributed schema's materialized
   `schema` becoming a lazy `create()` factory — does not apply here: this
   Remote contributes no schemas, which the same test asserts.
+- DSH `0.1.7-alpha.1` rewrote the settings subsystem: `installSection`,
+  `SettingsSectionHooks`, and the client `settingsScope` service are gone,
+  section values persist in this plugin own profile config entry, and the
+  settings UI refuses writes to fields the schema does not declare
+  `.volatile()`. The plugin adapts across both generations: `live()` in
+  `src/config.ts` feature-detects the volatile method and, on schemastery
+  3.18.2, writes the same metadata through `extra('volatile', true)` (an
+  unconditional `.volatile()` throws at import on ≤ 0.1.6 and kills
+  activation); volatile fields are exactly the ones the settings surface
+  writes (`enabled`, `local`, `remote`, plus read-time `debug`) while
+  `devicesPath`, `historyBufferMax`, and `push` keep remount-on-edit
+  semantics; `normalizeOptions` unwraps the `{ get() }`
+  references 0.1.7 carries in `apply()` options (a surviving reference fails
+  every plain-value comparison the bridge makes), the host re-runs its
+  transport reconciles on `loader/volatile-update`, and the client binds
+  `ctx.configForms.get('deeppilot')` through `src/client/settings-scope.ts`
+  when `settingsScope` is absent. Neither seam is declared in the client
+  entry's `inject`: a service name no running host provides keeps the whole
+  entry pending (`dsh-deeppilot: pending (waiting for service: settingsScope)`
+  on the first 0.1.7 boot), so both are awaited as optional injections, and
+  both are read through `ctx.get()` because a Cordis context proxy throws
+  `cannot get property "settingsScope" without inject` on an undeclared
+  service read; `tests/client-entry.test.ts` activates the real entry against
+  a Cordis context shaped like each generation and pins that audit. The same
+  release added
+  `session.projections`; the bridge feature-detects it via
+  `supportsProjections` and refreshes a session projection baseline on open,
+  while older hosts keep list-row projection hints. Plugin-manager display
+  metadata (`locale/*.json`, `package.json.icon`) and `--dump-config-schema`
+  are additive and inert on older hosts; `npm run check:config-schema`
+  projects this package Config through the pinned 0.1.7 CLI in CI and pins
+  the volatile annotations on the four live fields (devDependency floor:
+  `@deepseek-ai/schemastery` 3.18.3, which is also what a profile install
+  resolves through the `^3.18.2` peer range).
 - DSH `0.1.6-alpha.2` made runtime plugin removal real, through both the
   Plugin Manager and the client entry reconciler. Every long-lived resource is
   registered through `ctx.effect`, and the settings-page stylesheet stamps
@@ -70,6 +110,9 @@ This file separates tested evidence from intended behavior. Passing unit tests d
 
 - Intel macOS support for the embedded helper;
 - signed/notarized helper distribution;
+- validation against the `0.1.7-*` package line: the peer range admits
+  `0.1.7-alpha.1` and later `0.1.7` releases, but typecheck, unit-suite, and
+  runtime evidence against those host packages have not been produced yet;
 - repair or migration of persisted history rejected by the Host's own session
   reader;
 - every DSH developer-preview revision;
