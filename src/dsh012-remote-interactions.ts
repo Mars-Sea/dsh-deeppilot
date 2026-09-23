@@ -18,10 +18,25 @@ interface HostConnectionLike {
   createSharedFetchHandler(channel: '/api'): FetchHandlerLike
 }
 
+/**
+ * `wireStream.open` carries two published arities:
+ *
+ * - through `0.1.6-*`: `(endpoint, payload, signal)`
+ * - `0.1.7-alpha.1` onward: `(endpoint, payload, uplink, peer, signal)`
+ *
+ * The reorder is not additive. Passing the 3-argument form to a 0.1.7 host puts
+ * the AbortSignal in the `uplink` slot, leaves `signal` undefined, and the host
+ * fails the stream inside `AbortSignal.any([signal, …])` with
+ * `ERR_INVALID_ARG_TYPE`, which the resident Client's Connection answers with an
+ * endless `[connection] connection lost, retry #N` loop.
+ */
+interface HostWireStreamLike {
+  open(endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>>
+  open(endpoint: string, payload: unknown, uplink: undefined, peer: undefined, signal: AbortSignal): Promise<AsyncIterable<unknown>>
+}
+
 interface HostGatewayLike {
-  wireStream: {
-    open(endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>>
-  }
+  wireStream: HostWireStreamLike
 }
 
 interface ClientTransportHooksLike {
@@ -161,6 +176,36 @@ function createAgentScope(ctx: Context, identity: string): Context {
   })
 }
 
+/**
+ * Arity of the Host's published `wireStream.open`. 0.1.7-alpha.1 declares
+ * `(endpoint, payload, uplink, peer, signal)`; every earlier generation
+ * declares `(endpoint, payload, signal)`. Both are plain arrow functions with
+ * no default or rest parameters, so `length` is a reliable contract selector —
+ * unlike a capability probe, it opens no trial stream. A future signature that
+ * rest-parameterizes (reporting `0`) falls back to the 3-argument call, which
+ * every generation through `0.1.6-*` accepts.
+ */
+function hostWireStreamArity(open: HostWireStreamLike['open']): number {
+  return open.length
+}
+
+/**
+ * Open one Host logical stream on whichever `wireStream.open` contract the
+ * running Host publishes. DeepPilot's carrier owns the Host in process and has
+ * no Client-to-Host uplink, so the 5-argument form sends `undefined` for both
+ * `uplink` and `peer` — the documented "operator's in-process carrier" case.
+ */
+function openHostStream(
+  gateway: HostGatewayLike,
+  endpoint: string,
+  payload: unknown,
+  signal: AbortSignal,
+): Promise<AsyncIterable<unknown>> {
+  const open = gateway.wireStream.open
+  if (hostWireStreamArity(open) >= 5) return open(endpoint, payload, undefined, undefined, signal)
+  return open(endpoint, payload, signal)
+}
+
 function inProcessStream(
   gateway: HostGatewayLike,
   endpoint: string,
@@ -168,7 +213,7 @@ function inProcessStream(
   signal: AbortSignal,
 ): AsyncIterable<unknown> {
   return (async function* () {
-    const source = await gateway.wireStream.open(endpoint, payload, signal)
+    const source = await openHostStream(gateway, endpoint, payload, signal)
     yield* source
   })()
 }

@@ -7,7 +7,7 @@ This file separates tested evidence from intended behavior. Passing unit tests d
 | Component | Baseline | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | package engine and CI |
-| DSH CLI and Host API | the `0.1.5-rc.*` and `0.1.6-*`/`0.1.6` lines, `0.1.5-rc.1` minimum, for plugin `0.7.x` | plugin source typecheck, unit suite (265 tests) and `tsdown` build run against the `0.1.5-rc.2`, `0.1.6-alpha.1` and `0.1.6-alpha.2` package families; the `deeppilot/report` contribution registered through both the `0.1.6-alpha.1` and the `0.1.6-alpha.2` `TypertRegistry`; bridge and `/phone` protocol tests |
+| DSH CLI and Host API | the `0.1.5-rc.*` and `0.1.6-*`/`0.1.6` lines, `0.1.5-rc.1` minimum, for plugin `0.7.x` | plugin source typecheck, unit suite (301 tests) and `tsdown` build run against the `0.1.5-rc.2`, `0.1.6-alpha.1` and `0.1.6-alpha.2` package families; the `deeppilot/report` contribution registered through both the `0.1.6-alpha.1` and the `0.1.6-alpha.2` `TypertRegistry`; bridge and `/phone` protocol tests |
 | Host OS | macOS, Linux, Windows on packaged amd64/arm64 helper targets | helper checksums plus user-confirmed Windows/Linux Funnel launch and connection; local LAN validation remains part of alpha testing |
 | Remote access | Tailscale Funnel, ports 443/8443/10000 | helper and supervisor tests |
 | iOS | native DeepPilot client, protocol v2 | simulator build and v2 pairing/challenge evidence |
@@ -57,6 +57,24 @@ This file separates tested evidence from intended behavior. Passing unit tests d
   The other `alpha.2` Typert change — a contributed schema's materialized
   `schema` becoming a lazy `create()` factory — does not apply here: this
   Remote contributes no schemas, which the same test asserts.
+- DSH `0.1.7-alpha.1` reordered the Host `typertGateway.wireStream.open`
+  parameters from `(endpoint, payload, signal)` to
+  `(endpoint, payload, uplink, peer, signal)`. The reorder is not additive: a
+  3-argument call lands the `AbortSignal` in the `uplink` slot, leaves `signal`
+  undefined, and the Host fails every stream inside
+  `AbortSignal.any([signal, …])` with
+  `TypeError [ERR_INVALID_ARG_TYPE]: The "signals[0]" argument must be an
+  instance of AbortSignal`. The resident Client's Connection treats that dead
+  generation as a lost connection and prints an endless
+  `[connection] connection lost, retry #N` loop with exponential backoff while
+  the phone's approval and question round-trips stay broken.
+  `openHostStream()` in `src/dsh012-remote-interactions.ts` selects the
+  contract from the published arity (`open.length`) and passes `undefined` for
+  both `uplink` and `peer` on 0.1.7 — the documented "operator's in-process
+  carrier" case, since DeepPilot's carrier owns the Host in process and has no
+  Client-to-Host uplink. `tests/dsh012-wire-stream-contract.test.ts` pins the
+  argument binding for a 3-arity and a 5-arity Host, and asserts the signal
+  lands in each contract's declared slot.
 - DSH `0.1.7-alpha.1` rewrote the settings subsystem: `installSection`,
   `SettingsSectionHooks`, and the client `settingsScope` service are gone,
   section values persist in this plugin own profile config entry, and the
@@ -111,8 +129,11 @@ This file separates tested evidence from intended behavior. Passing unit tests d
 - Intel macOS support for the embedded helper;
 - signed/notarized helper distribution;
 - validation against the `0.1.7-*` package line: the peer range admits
-  `0.1.7-alpha.1` and later `0.1.7` releases, but typecheck, unit-suite, and
-  runtime evidence against those host packages have not been produced yet;
+  `0.1.7-alpha.1` and later `0.1.7` releases, and the `wireStream.open`
+  reorder that release introduced is adapted and pinned by
+  `tests/dsh012-wire-stream-contract.test.ts`, but the unit suite still runs
+  against the `0.1.5-rc.1`/`0.1.6-*` package families and no `0.1.7`
+  typecheck or full-suite evidence has been produced yet;
 - repair or migration of persisted history rejected by the Host's own session
   reader;
 - every DSH developer-preview revision;
