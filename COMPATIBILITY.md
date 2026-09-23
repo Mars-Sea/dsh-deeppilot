@@ -109,6 +109,17 @@ This file separates tested evidence from intended behavior. Passing unit tests d
   the volatile annotations on the four live fields (devDependency floor:
   `@deepseek-ai/schemastery` 3.18.3, which is also what a profile install
   resolves through the `^3.18.2` peer range).
+- `icon.svg` is a vector recreation of the iOS app icon, built from the
+  private app's own Icon Composer sources (`ios/DeepPilot.icon/icon.json`
+  plus `Assets/deepseek.svg`) and the in-app composition its
+  `AppIconArtwork` applies: a white field, the DeepSeek brand glyph fitted
+  with 13% padding, and a `Color(white: 0.25)` → black vertical gradient.
+  The app's `.icon` bundle is not distributable through npm — the host
+  inlines a single relative SVG, PNG, JPEG, or WebP file under 256 KiB as a
+  `data:` URI — so the recreation is the only way to keep the two icons
+  visually identical. `tests/package-meta.test.ts` pins the host's reader
+  rules; regenerate the SVG from the app sources whenever the app icon
+  changes.
 - DSH `0.1.6-alpha.2` made runtime plugin removal real, through both the
   Plugin Manager and the client entry reconciler. Every long-lived resource is
   registered through `ctx.effect`, and the settings-page stylesheet stamps
