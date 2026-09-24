@@ -30,28 +30,14 @@
 
 ## 从 npm 安装
 
-需要 Node.js 22+ 和带 `web` profile 的 DSH。npm 包内置 macOS、Linux、Windows
+当前源码仅面向 Node.js 22+ 与带 `web` profile 的 **DSH 0.1.7-rc.1**。npm 包内置 macOS、Linux、Windows
 的 amd64/arm64 Funnel helper；可信局域网模式不依赖 helper。
 
-| 插件版本 | 所需 DSH | 安装命令 |
-|---|---|---|
-| `0.8.x`（当前稳定版，`latest`） | DSH `0.1.5-rc.1` 或更高 | `dsh plugin --profile web add dsh-deeppilot` |
-| `0.7.x`（旧版稳定版） | DSH `0.1.5-rc.1` 或更高 | `dsh plugin --profile web add dsh-deeppilot@0.7.1` |
-| `0.6.x`（历史版本） | DSH `0.1.5-rc.1` 或更高 | `dsh plugin --profile web add dsh-deeppilot@0.6.2` |
-
-`0.8.x` 基于 DSH
-[0.1.5-rc.1](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.5-rc.1)
-与 [0.1.7-alpha.1](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.7-alpha.1)
-的 Host 与 client 包族构建并完成类型检查 —— 发布前的 config-schema 检查会通过
-固定的 0.1.7 CLI 投影本插件的 Config。它使用 Gateway 多 Client Remote Events
-路由，使 Web 与 DeepPilot 能独立处理同一交互。旧 alpha 仅保留为历史产物；安装
-`alpha` tag 进行预发布测试的用户应先把 DSH 更新到 `0.1.5-rc.1` 或更高版本。
+当前工作树的 DSH 包和兼容性检查均固定为 `0.1.7-rc.1`。从此工作树发布新版本前，
+已发布的旧插件包仍可能带有各自的旧兼容声明。
 
 ```sh
-# DSH 0.1.5-rc.1 或更高（推荐）：
 dsh plugin --profile web add dsh-deeppilot
-# DSH 0.1.1-rc.2 至 0.1.2-alpha.1（旧版稳定）：
-dsh plugin --profile web add dsh-deeppilot@0.5.0
 dsh web
 ```
 
@@ -82,14 +68,12 @@ dsh plugin --profile web remove dsh-deeppilot
 
 ## 发布说明（维护者）
 
-`0.8.x` 面向 DSH `0.1.5-rc.1`+ 并适配 DSH 0.1.7 的设置系统重写；迁移期内
-`0.7.x` 保留 0.1.7 之前的设置 API，`0.6.x` 在同一 DSH 版本族上保留 TLS 化之前的
-局域网传输，`0.5.x` 保持兼容 DSH `0.1.1-rc.2`–`0.1.2-alpha.1`，各版本线都要保持发布：
+此分支仅在 DSH `0.1.7-rc.1` 下完成验证后发布：
 
 1. 同步修改 `package.json` 与 `package-lock.json` 根 `""` 条目中的
    `version`，然后运行 `npm test && npm run typecheck && npm run build`，
-   并检查 `npm pack --dry-run --json`（`tests/compatibility-metadata.test.ts`
-   会强制校验 peer 范围，并断言它同时接纳 `0.1.5-rc.*`、`0.1.6-*` 与 `0.1.7-*` 三条线）。
+   并检查 `npm pack --dry-run --json`。兼容性元数据测试会校验 peer 与开发依赖
+   均固定为 rc.1。
 2. 提交发布并推送。`npm publish` 会自动执行 `prepack`（构建）与
    `prepublishOnly`（测试 + 类型检查）。
 3. 发布预发布版本，不要动 `latest`：
@@ -98,9 +82,7 @@ dsh plugin --profile web remove dsh-deeppilot
    npm publish --tag alpha
    ```
 
-   发布成功后，`npm view dsh-deeppilot dist-tags --json` 应显示
-   `"latest": "0.8.x"` 与 `"alpha": "0.8.x-alpha.y"`。向用户推荐前，请先在
-   DSH `0.1.5-rc.1` profile 中安装验证发布的包。
+   发布成功后检查 dist tag，并在 DSH `0.1.7-rc.1` profile 中安装验证发布的包。
 4. 为发布提交打 `vX.Y.Z` tag，并准备包含英文与简体中文说明的
    GitHub Release，链接本 README 的发布说明。
 5. 稳定版用 `npm publish --tag latest` 发布，使 `latest` 切换到新版本。

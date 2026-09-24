@@ -1,17 +1,6 @@
 /**
- * Client-entry activation across DSH generations.
- *
- * DSH 0.1.7 removed the client `settingsScope` service. The settings seam was
- * declared in the entry's own `inject`, so on a 0.1.7 host the browser boot
- * audit failed with `dsh-deeppilot: pending (waiting for service:
- * settingsScope)` and the entry never applied — the whole DeepPilot settings
- * page vanished even though every other service resolved.
- *
- * These tests run the real client entry against a real Cordis context shaped
- * like each host generation and assert what that audit checks: every name in
- * the entry's `inject` resolves, and the fiber reaches ACTIVE. They also pin
- * the seam behavior behind it (which store adopts which host face, and that a
- * late-provisioned service still binds).
+ * Client-entry activation against the rc.1 config form service. The form may
+ * arrive after this entry applies, so its injection stays optional.
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -57,32 +46,6 @@ function fakeConfigForm(value: Record<string, unknown>, accepted = true): { face
         return accepted
       },
       unset: async () => accepted,
-    },
-  }
-}
-
-/** ≤0.1.6 settings scope fake: the legacy seam's bind() face. */
-function fakeSettingsScope(value: Record<string, unknown>) {
-  const listeners = new Set<() => void>()
-  const writes: Array<{ field: string; value: unknown }> = []
-  const bound: string[] = []
-  const scope = {
-    getSnapshot: () => ({ status: 'ready' as const, value, writable: true }),
-    subscribe: (listener: () => void) => {
-      listeners.add(listener)
-      return () => { listeners.delete(listener) }
-    },
-    set: async (field: string, next: unknown) => { writes.push({ field, value: next }) },
-    unset: async () => {},
-  }
-  return {
-    writes,
-    bound,
-    service: {
-      bind: (spec: { namespace: string }) => {
-        bound.push(spec.namespace)
-        return scope
-      },
     },
   }
 }
@@ -136,10 +99,7 @@ function faceOf(sections: Array<{ inject: () => HooksFace }>): HooksFace {
   return entry.inject()
 }
 
-test('the client entry never requires a service one host generation lacks', () => {
-  // `settingsScope` (≤ 0.1.6) and `configForms` (0.1.7) are mutually exclusive
-  // across generations: either name in this list bricks activation on the
-  // other host, because the boot audit waits for it forever.
+test('the client entry permits configForms to arrive after activation', () => {
   assert.deepEqual([...clientEntry.inject], ['slots', 'locale', 'remote'])
 })
 
@@ -148,10 +108,7 @@ test('a 0.1.7 host activates the entry and binds a late configForms service', as
   const fiber = loadEntry(root)
   await fiber
 
-  // The failure this test exists for: no settingsScope exists on 0.1.7, and
-  // the entry must still reach ACTIVE with nothing missing.
-  assert.equal(root.get('settingsScope'), undefined)
-  assert.equal(fiber.state, ACTIVE, 'entry fiber is active without settingsScope')
+  assert.equal(fiber.state, ACTIVE, 'entry fiber is active before configForms')
   assert.deepEqual(missingServices(root, fiber), [])
 
   const face = faceOf(sections)
@@ -180,66 +137,14 @@ test('a 0.1.7 host activates the entry and binds a late configForms service', as
   assert.deepEqual(face.hooks.deepPilotRemoteEnabled.getSnapshot(), { status: 'ready', enabled: true })
   assert.deepEqual(face.hooks.deepPilotRemoteConnectionLimit.getSnapshot(), { status: 'ready', value: 5 })
 
-  // Writes travel through the adapted form, not the removed service.
+  // Writes travel through the adapted form.
   face.setDeepPilotEnabled(true)
   await settle()
   assert.deepEqual(form.writes, [{ field: 'enabled', value: true }])
 })
 
-test('a ≤ 0.1.6 host binds the legacy settingsScope and ignores configForms', async () => {
-  const { root, sections } = harness()
-  const legacy = fakeSettingsScope({
-    enabled: false,
-    local: { enabled: false, port: 3200 },
-    remote: { enabled: false, maxConnectionsPerSource: 3 },
-  })
-  root.provide('settingsScope', legacy.service)
-
-  const fiber = loadEntry(root)
-  await fiber
-
-  assert.equal(fiber.state, ACTIVE)
-  assert.deepEqual(missingServices(root, fiber), [])
-  // Bound at apply time: the page is ready without waiting for anything.
-  assert.deepEqual(legacy.bound, ['deeppilot'])
-
-  const face = faceOf(sections)
-  assert.deepEqual(face.hooks.deepPilotEnabled.getSnapshot(), { status: 'ready', enabled: false })
-  assert.deepEqual(face.hooks.deepPilotLocalPort.getSnapshot(), { status: 'ready', value: 3200 })
-  assert.deepEqual(face.hooks.deepPilotRemoteConnectionLimit.getSnapshot(), { status: 'ready', value: 3 })
-
-  face.setDeepPilotEnabled(true)
-  await settle()
-  assert.deepEqual(legacy.writes, [{ field: 'enabled', value: true }])
-})
-
-test('a ≤ 0.1.6 host binds a settingsScope provisioned after apply', async () => {
-  // Dropping the hard requirement also means the entry may now apply before
-  // the legacy service exists (entry activation order is not a dependency
-  // order). The optional injection has to catch that ordering too, or 0.1.6
-  // silently loses the settings bindings instead of failing loudly.
-  const { root, sections } = harness()
-  const legacy = fakeSettingsScope({ enabled: true, local: { port: 3098 } })
-
-  const fiber = loadEntry(root)
-  await fiber
-  assert.equal(fiber.state, ACTIVE)
-
-  const face = faceOf(sections)
-  assert.deepEqual(legacy.bound, [], 'nothing bound while the service was absent')
-  assert.deepEqual(face.hooks.deepPilotEnabled.getSnapshot(), { status: 'loading', enabled: true })
-
-  root.provide('settingsScope', legacy.service)
-  await settle()
-  assert.deepEqual(legacy.bound, ['deeppilot'])
-  assert.deepEqual(face.hooks.deepPilotEnabled.getSnapshot(), { status: 'ready', enabled: true })
-  assert.deepEqual(face.hooks.deepPilotLocalPort.getSnapshot(), { status: 'ready', value: 3098 })
-})
-
-test('a host with neither settings seam still activates the entry', async () => {
-  // A future generation may rename the seam again. Losing the settings
-  // namespace must degrade to a page stuck on its loading copy — never to a
-  // pending entry that takes the whole plugin down.
+test('a host without configForms still activates the entry', async () => {
+  // A missing form degrades the settings page without blocking the entry.
   const { root, sections } = harness()
   const fiber = loadEntry(root)
   await fiber

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { adaptConfigForm, bindSettingsScope } from '../src/client/settings-scope.ts'
+import { adaptConfigForm, bindConfigForm } from '../src/client/config-form.ts'
 
 /** Minimal 0.1.7 config-form fake with test controls. */
 function fakeForm(options?: { accepted?: boolean; value?: Record<string, unknown> }) {
@@ -81,56 +81,32 @@ test('adaptConfigForm forwards subscribe to the form', () => {
   assert.equal(ticks, 1)
 })
 
-test('bindSettingsScope prefers the legacy settings scope', () => {
-  const legacyCalls: string[] = []
-  const legacyScope = fakeForm().face
+test('bindConfigForm binds the rc.1 config form', () => {
   const form = fakeForm()
-  const scope = bindSettingsScope({
-    settingsScope: {
-      bind: (spec) => {
-        legacyCalls.push(spec.namespace)
-        // The legacy seam resolving a scope always wins over the 0.1.7 form.
-        return { ...legacyScope, getSnapshot: legacyScope.getSnapshot, subscribe: legacyScope.subscribe, set: async () => {}, unset: async () => {} }
-      },
-    },
-    configForms: { get: () => form.face },
-  })
-  assert.ok(scope)
-  assert.deepEqual(legacyCalls, ['deeppilot'])
-  // Precedence pins to the legacy path: its snapshot comes through, not the form's.
-  assert.deepEqual(scope.getSnapshot(), legacyScope.getSnapshot())
-})
-
-test('bindSettingsScope falls back to the 0.1.7 config form', () => {
-  const form = fakeForm()
-  const scope = bindSettingsScope({ configForms: { get: () => form.face } })
+  const scope = bindConfigForm({ get: () => ({ get: () => form.face }) })
   assert.ok(scope)
   assert.equal(scope.getSnapshot().status, 'ready')
 })
 
-test('bindSettingsScope stays undefined when no host seam exists', () => {
-  assert.equal(bindSettingsScope({}), undefined)
-  assert.equal(bindSettingsScope({ configForms: {} }), undefined)
+test('bindConfigForm stays undefined when no form exists', () => {
+  assert.equal(bindConfigForm({ get: () => undefined }), undefined)
+  assert.equal(bindConfigForm({ get: () => ({}) }), undefined)
 })
 
-test('bindSettingsScope resolves both seams through ctx.get, never a service property', () => {
-  // A Cordis context proxy throws `cannot get property "settingsScope" without
-  // inject` when an undeclared service property is read, so the adapter must
-  // never touch `ctx.settingsScope` / `ctx.configForms` directly — an entry
-  // that no longer declares the 0.1.6 seam would fail its own apply().
+test('bindConfigForm resolves configForms through ctx.get', () => {
+  // An undeclared Cordis service property read throws, so use ctx.get.
   const form = fakeForm()
   const resolved: string[] = []
-  const scope = bindSettingsScope({
+  const scope = bindConfigForm({
     get: (name: string) => {
       resolved.push(name)
       return name === 'configForms' ? { get: () => form.face } : undefined
     },
   })
   assert.ok(scope)
-  assert.deepEqual(resolved, ['settingsScope', 'configForms'])
+  assert.deepEqual(resolved, ['configForms'])
   assert.equal(scope.getSnapshot().status, 'ready')
 
-  // Nothing provided at all: both lookups miss and the adapter reports no seam
-  // instead of throwing.
-  assert.equal(bindSettingsScope({ get: () => undefined }), undefined)
+  // Nothing provided at all: the adapter reports no form.
+  assert.equal(bindConfigForm({ get: () => undefined }), undefined)
 })

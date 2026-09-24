@@ -264,8 +264,8 @@ interface SessionsApiLike {
     };
     data: string;
   }>>;
-  /** DSH 0.1.7+: complete projection baseline for one session; null when the session is gone. */
-  projections?(req: RpcRequestLike<{
+  /** Complete projection baseline for one session; null when it is gone. */
+  projections(req: RpcRequestLike<{
     sessionId: string;
   }>): Promise<RpcResponseLike<{
     asOfSeq: number;
@@ -446,12 +446,6 @@ interface ApiProxyLike {
   sessions: SessionsApiLike;
   workspace?: WorkspaceApiLike;
   host?: HostApiLike;
-  /**
-   * DSH 0.1.7 added `session.projections`. Absent/false keeps the bridge on
-   * its existing list-row projection hints — the call is gated on this flag so
-   * older hosts never see a failing RPC.
-   */
-  supportsProjections?: boolean;
   respond(message: {
     type: 'client-response';
     rpcId: string;
@@ -639,7 +633,7 @@ declare class HostBridge {
   /** Tail history for an opened session; pushes s2c.session.tail to the sink. */
   openSession(sink: BridgeSink, sessionId: string, tailCount: number): Promise<boolean>;
   /**
-   * Pull one session's projection baseline (DSH 0.1.7+) and fold every key
+   * Pull one session's projection baseline and fold every key
    * through applyProjection — unknown keys are ignored there, `null` means the
    * session no longer exists, and any failure degrades to a diagnostic: opening
    * a session must never fail because a baseline could not be read.
@@ -744,18 +738,18 @@ interface Config {
   };
 }
 declare const Config: z<Schemastery.ObjectS<NoInfer<{
-  enabled: z<boolean, boolean, "defined">;
+  enabled: z<boolean, boolean, "volatile-defined">;
   devicesPath: z<string, string, "defined">;
   historyBufferMax: z<number, number, "defined">;
-  debug: z<boolean, boolean, "defined">;
-  local: z<Schemastery.ObjectS<NoInfer<{
+  debug: z<boolean, boolean, "volatile-defined">;
+  local: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     port: z<number, number, "defined">;
-  }>>, Schemastery.ObjectT<NoInfer<{
+  }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     port: z<number, number, "defined">;
-  }>>, "defined">;
-  remote: z<Schemastery.ObjectS<NoInfer<{
+  }>>>, "volatile-defined">;
+  remote: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     provider: z<"tailscale-funnel", "tailscale-funnel", "defined">;
     hostname: z<string, string, "defined">;
@@ -763,7 +757,7 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
     helperPath: z<string, string, "defined">;
     funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000, "defined">;
     maxConnectionsPerSource: z<number, number, "defined">;
-  }>>, Schemastery.ObjectT<NoInfer<{
+  }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     provider: z<"tailscale-funnel", "tailscale-funnel", "defined">;
     hostname: z<string, string, "defined">;
@@ -771,7 +765,7 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
     helperPath: z<string, string, "defined">;
     funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000, "defined">;
     maxConnectionsPerSource: z<number, number, "defined">;
-  }>>, "defined">;
+  }>>>, "volatile-defined">;
   push: z<Schemastery.ObjectS<NoInfer<{
     provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay", "defined">;
     contentMode: z<"generic" | "preview", "generic" | "preview", "defined">;
@@ -792,18 +786,18 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
     relayToken: z<string, string, "defined">;
   }>>, "defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
-  enabled: z<boolean, boolean, "defined">;
+  enabled: z<boolean, boolean, "volatile-defined">;
   devicesPath: z<string, string, "defined">;
   historyBufferMax: z<number, number, "defined">;
-  debug: z<boolean, boolean, "defined">;
-  local: z<Schemastery.ObjectS<NoInfer<{
+  debug: z<boolean, boolean, "volatile-defined">;
+  local: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     port: z<number, number, "defined">;
-  }>>, Schemastery.ObjectT<NoInfer<{
+  }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     port: z<number, number, "defined">;
-  }>>, "defined">;
-  remote: z<Schemastery.ObjectS<NoInfer<{
+  }>>>, "volatile-defined">;
+  remote: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     provider: z<"tailscale-funnel", "tailscale-funnel", "defined">;
     hostname: z<string, string, "defined">;
@@ -811,7 +805,7 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
     helperPath: z<string, string, "defined">;
     funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000, "defined">;
     maxConnectionsPerSource: z<number, number, "defined">;
-  }>>, Schemastery.ObjectT<NoInfer<{
+  }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     provider: z<"tailscale-funnel", "tailscale-funnel", "defined">;
     hostname: z<string, string, "defined">;
@@ -819,7 +813,7 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
     helperPath: z<string, string, "defined">;
     funnelPort: z<443 | 8443 | 10000, 443 | 8443 | 10000, "defined">;
     maxConnectionsPerSource: z<number, number, "defined">;
-  }>>, "defined">;
+  }>>>, "volatile-defined">;
   push: z<Schemastery.ObjectS<NoInfer<{
     provider: z<"apns" | "none" | "relay", "apns" | "none" | "relay", "defined">;
     contentMode: z<"generic" | "preview", "generic" | "preview", "defined">;
@@ -867,8 +861,8 @@ declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 
  * devices) and loopback Funnel-origin listeners. The web UI and the rest of
  * DSH's API are never exposed by these listeners.
  *
- * Data plane: an in-process HostBridge consumes a local compatibility façade
- * over DSH 0.1.2 Session/Workspace controllers, mirrors session summaries,
+ * Data plane: an in-process HostBridge consumes a local adapter over DSH
+ * Session/Workspace controllers, mirrors session summaries,
  * tracks pending approvals/questions, and fans projected protocol-v2 pushes
  * out to every connected device.
  *

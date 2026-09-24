@@ -2,11 +2,9 @@
  * Tiny observable snapshot store consumed by the harness slot renderer's
  * `useSyncExternalStore` hooks.
  *
- * Vendored intentionally: the 0.1.2 web shell may seed an internal
- * `@deepseek-ai/dsh-client-store` module, but that package is not published
- * for external plugins and is not present in every host module table. Keeping
- * this three-method utility local ensures the generated browser bundle has no
- * unavailable runtime dependency.
+ * Kept local because the rc.1 browser module table does not publish
+ * `@deepseek-ai/dsh-client-store` for external plugins. The generated bundle
+ * therefore has no unavailable runtime dependency.
  */
 export interface SnapshotStore<T> {
   getSnapshot(): T

@@ -150,40 +150,25 @@ function strictCodecs(): { subject: string; codec: Record<string, unknown> }[] {
   return found
 }
 
-test('every strict codec serves both host generations in the declared peer range', () => {
-  // Through DSH 0.1.6-alpha.1 a strict codec published the schema value itself
-  // and every consumer called `codec.schema.parse(value)`. From 0.1.6-alpha.2
-  // the registry rejects a codec without `create()` and the Gateway parses
-  // through `codec.create().parse(value)`. Both keys must survive: dropping
-  // either one silently narrows the supported host range, and a unit suite
-  // exercised against a single generation cannot see the loss.
+test('every strict codec materializes through the rc.1 create contract', () => {
   const codecs = strictCodecs()
   assert.equal(codecs.length, 9, 'the contribution declares nine strict codecs')
   for (const { subject, codec } of codecs) {
     assert.equal(codec.mode, 'strict', `${subject} stays strict`)
-    // Generation <= 0.1.6-alpha.1: schema value published directly.
-    const schema = codec.schema as { parse?: unknown } | undefined
-    assert.equal(typeof schema?.parse, 'function', `${subject} exposes schema.parse for older hosts`)
-    // Generation >= 0.1.6-alpha.2: registry validation and Gateway parsing.
     const create = codec.create as (() => { parse?: unknown }) | undefined
-    assert.equal(typeof create, 'function', `${subject} exposes create() for 0.1.6-alpha.2+ hosts`)
+    assert.equal(typeof create, 'function', `${subject} exposes create()`)
     const materialized = create?.()
     assert.equal(
       typeof materialized?.parse,
       'function',
       `${subject} create() materializes a parseable schema`,
     )
-    // One codec instance must behave identically through both access paths.
-    assert.equal(materialized, schema, `${subject} create() returns the published schema`)
+    assert.equal('schema' in codec, false, `${subject} has no removed schema field`)
   }
 })
 
 test('the host contribution deliberately declares no typert schemas', () => {
-  // 0.1.6-alpha.2 replaced a contributed schema's materialized `schema` field
-  // with a lazy `create()` factory. This Remote contributes no schemas — its
-  // codecs are hand-written and dependency-free — so that change must never
-  // reach it. Asserting the empty list keeps a future contribution from
-  // silently reintroducing the removed shape.
+  // This Remote contributes only hand-written codecs.
   assert.deepEqual(REPORT_HOST_CONTRIBUTION.schemas, [])
   assert.deepEqual(REPORT_HOST_CONTRIBUTION.model, { services: [], events: [], objects: [] })
 })

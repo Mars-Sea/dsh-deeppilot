@@ -1,20 +1,15 @@
 /**
  * Compose cordis.patch.yml against a minimal DSH profile and assert that the
- * exported Config schema survives the pinned 0.1.7 loader.
+ * exported Config schema survives the pinned 0.1.7-rc.1 loader.
  *
- * Uses `dsh --dump-config-schema` (added in v0.1.7-alpha.1): the CLI imports
+ * Uses `dsh --dump-config-schema`: the CLI imports
  * the plugin's Config schema without mounting anything, so this guards three
  * regressions at once — the patch still composes, the plugin still imports
  * under a current host, and the schema still projects.
  *
- * The `sdk-minimal` template is deliberate: the `web` template in
- * 0.1.7-alpha.1 ships agent-preset entries the schema dumper rejects
- * ("unrecognized Loader tree carrier"), which would fail this check for
- * reasons unrelated to this package.
+ * The `sdk-minimal` template keeps this check scoped to the plugin entry.
  *
  * Requires network on first run (npx downloads the pinned DSH CLI).
- * Override the pin with DSH_CONFIG_SCHEMA_DSH_VERSION when moving to a new
- * host line.
  */
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -22,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const DSH_VERSION = process.env.DSH_CONFIG_SCHEMA_DSH_VERSION ?? '0.1.7-alpha.1'
+const DSH_VERSION = '0.1.7-rc.1'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 // The profile must live INSIDE this package tree: the loader resolves the
 // bare specifier "dsh-deeppilot" from the profile's cordis.yml, where Node's
@@ -106,8 +101,7 @@ try {
   // The fields the settings surface writes must arrive annotated volatile —
   // without that annotation a 0.1.7 host refuses every settings write for the
   // field, and the fields that must keep their remount semantics must NOT be
-  // marked. This proves live() ran against a volatile-capable metadata path
-  // end-to-end through the real 0.1.7 dumper.
+  // marked. This proves the actual schema through the rc.1 dumper.
   const def = dump.$defs?.[defKey]
   const branches = Array.isArray(def?.anyOf) ? def.anyOf : [def]
   const props = branches.map((branch) => branch?.properties).find((candidate) => candidate && 'enabled' in candidate)

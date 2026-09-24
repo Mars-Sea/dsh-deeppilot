@@ -374,30 +374,13 @@ const booleanSchema: TypertSchema<boolean> = {
   },
 }
 
-/**
- * One strict boundary codec carrying both generation shapes of the supported
- * `0.1.x` host family.
- *
- * Through `0.1.6-alpha.1` a descriptor published the schema value itself and
- * every consumer parsed through `codec.schema.parse(value)`. `0.1.6-alpha.2`
- * switched to a lazily materialized process-realm factory: `TypertRegistry`
- * now rejects a strict codec without `create()`, and the Gateway parses
- * through `codec.create().parse(value)`.
- *
- * Publishing both keys — `create()` returning the same hand-written,
- * dependency-free codec — keeps one package valid across the entire declared
- * peer range instead of forking the wire contract per host generation. The
- * cast is required because each generation's `TypertCodec` declares only its
- * own key, so a fresh object literal carrying both fails excess-property
- * checking against either one.
- */
+/** The rc.1 Gateway materializes each strict codec through `create()`. */
 function strictCodec<T>(typeSymbol: string, schema: TypertSchema<T>): TypertCodec {
   return {
     mode: 'strict',
     typeSymbol,
-    schema,
     create: () => schema,
-  } as unknown as TypertCodec
+  }
 }
 
 /**
@@ -501,8 +484,7 @@ export const REPORT_HOST_CONTRIBUTION = {
   package: REPORT_REMOTE_PACKAGE,
   face: 'host' as const,
   schemas: [],
-  // Typert contributions in dsh 0.1.2 include reflection metadata even when
-  // a hand-written Remote has no generated reflection exports.
+  // This hand-written Remote has no generated reflection exports.
   model: { services: [], events: [], objects: [] },
   invocations: INVOCATION_DESCRIPTORS,
 }

@@ -68,6 +68,7 @@ function makeProxy(overrides: Partial<ApiProxyLike> = {}): ApiProxyLike {
       prompt: async () => ({ result: { ok: true, value: { accepted: true } } }),
       create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
       attachment: async () => ({ result: { ok: true, value: { attachment: { mediaType: 'image/png' }, data: 'aGk=' } } }),
+      projections: async () => ({ result: { ok: true, value: null } }),
     },
     respond: async () => ({ accepted: true }),
     events: {
@@ -517,6 +518,7 @@ test('document prompts are bounded, sanitized, and accepted with ordinary text',
           return { result: { ok: true, value: { accepted: true } } }
         },
         create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
+        projections: async () => ({ result: { ok: true, value: null } }),
       },
     },
   })
@@ -686,6 +688,7 @@ test('prompt failures surface the host error kind, not a blanket E_BUSY', async 
         history: async () => ({ result: { ok: true, value: { events: [], hasMore: false } } }),
         prompt: async () => ({ result: { ok: false, error: { code: 'session-not-found', message: 'no such session' } } }),
         create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
+        projections: async () => ({ result: { ok: true, value: null } }),
       },
     },
   })
@@ -711,6 +714,7 @@ test('a failed session.open rolls back its viewer registration', async () => {
         history: async () => ({ result: { ok: false, error: { code: 'session-not-found' } } }),
         prompt: async () => ({ result: { ok: true, value: { accepted: true } } }),
         create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
+        projections: async () => ({ result: { ok: true, value: null } }),
       },
     },
   })
@@ -746,6 +750,7 @@ test('session.open sends tail before realtime events produced during history loo
         },
         prompt: async () => ({ result: { ok: true, value: { accepted: true } } }),
         create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
+        projections: async () => ({ result: { ok: true, value: null } }),
       },
     },
   })
@@ -791,6 +796,7 @@ test('session.history correlates the page with the request id', async () => {
         }),
         prompt: async () => ({ result: { ok: true, value: { accepted: true } } }),
         create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
+        projections: async () => ({ result: { ok: true, value: null } }),
       },
     },
   })

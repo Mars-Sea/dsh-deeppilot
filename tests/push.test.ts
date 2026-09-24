@@ -56,6 +56,7 @@ function makeProxy(): ApiProxyLike {
       history: async () => ({ result: { ok: true, value: { events: [], hasMore: false } } }),
       prompt: async () => ({ result: { ok: true, value: { accepted: true } } }),
       create: async () => ({ result: { ok: true, value: { sessionId: 's-new' } } }),
+      projections: async () => ({ result: { ok: true, value: null } }),
     },
     respond: async () => ({ accepted: true }),
     events: {

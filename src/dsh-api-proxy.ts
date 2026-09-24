@@ -1,20 +1,18 @@
 /**
- * Compatibility façade for the DSH 0.1.2 controller API.
+ * Adapter for the DSH rc.1 controller API.
  *
  * DeepPilot's phone protocol deliberately speaks one stable in-process
- * `apiProxy` vocabulary. Harness 0.1.2 removed that service in favor of
- * direct Session/Workspace controllers plus Gateway-backed Remote Events.
- * This adapter rebuilds the small subset the bridge needs from those public
- * controllers and joins the official Client interaction plane in-process,
- * keeping the phone protocol isolated from the Host API migration.
+ * `apiProxy` vocabulary. This adapter maps it to the current public
+ * Session/Workspace controllers and Gateway-backed Remote Events, keeping
+ * the phone protocol isolated from the Host API.
  */
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import {
-  startDsh012RemoteInteractions,
+  startDshRemoteInteractions,
   type RemoteApprovalRequest,
   type RemoteQuestionRequest,
-} from './dsh012-remote-interactions.ts'
+} from './dsh-remote-interactions.ts'
 import { projectHistory } from './host-event-projection.ts'
 import type {
   ApiProxyLike,
@@ -40,15 +38,15 @@ interface SessionControllerLike {
   prompt(request: Record<string, unknown>, signal: AbortSignal): Promise<{ accepted: true }>
   attachment(request: { sessionId: string; attachmentId: string }): Promise<{ attachment: { mediaType?: string }; data: string }>
   cancel(request: { sessionId: string }): { accepted: true }
-  /** DSH 0.1.7+: non-activating projection baseline for one session. */
-  projections?(request: { sessionId: string }, signal?: AbortSignal):
+  /** Non-activating projection baseline for one session. */
+  projections(request: { sessionId: string }, signal?: AbortSignal):
     Promise<{ asOfSeq: number; values: Record<string, unknown> } | null>
 }
 
 interface WorkspaceControllerLike {
   create(request: { path: string }): Promise<{ workspace: unknown; created: boolean }>
   archiveSession(request: { sessionId: string }): Promise<{ archivedSessionIds: readonly string[] }>
-  unarchiveSession?(request: { sessionId: string }): Promise<{ archivedSessionIds: readonly string[] }>
+  unarchiveSession(request: { sessionId: string }): Promise<{ archivedSessionIds: readonly string[] }>
   follow(signal: AbortSignal): AsyncIterable<{ type: string; value?: unknown }>
 }
 
@@ -59,14 +57,14 @@ interface DirectoryPickerControllerLike {
 
 interface DeferredInteraction {
   resolve(value: unknown): void
-  /** Convert the stable phone-protocol response into the 0.1.2 waterfall result. */
+  /** Convert the stable phone-protocol response into a Host waterfall result. */
   map(value: unknown): unknown
 }
 
-/** Which DSH 0.1.2 first-answer-wins interaction a phone may surface. */
+/** Which first-answer-wins interaction a phone may surface. */
 export type DshInteractionKind = 'approval' | 'question'
 
-export interface Dsh012ApiProxyOptions {
+export interface DshApiProxyOptions {
   /**
    * Decide whether the resident DeepPilot Remote Client represents a usable
    * phone surface. Returning false delegates only this Client delivery; API
@@ -75,33 +73,24 @@ export interface Dsh012ApiProxyOptions {
   shouldSurfaceInteraction?: (kind: DshInteractionKind) => boolean
 }
 
-/** Direct-controller facade with the exact legacy shape HostBridge consumes. */
-export class Dsh012ApiProxy implements ApiProxyLike {
+/** Direct-controller adapter with the shape HostBridge consumes. */
+export class DshApiProxy implements ApiProxyLike {
   private readonly session: SessionControllerLike
   private readonly workspaceController: WorkspaceControllerLike | undefined
   private readonly directoryPicker: DirectoryPickerControllerLike | undefined
   private readonly interactions = new Map<string, DeferredInteraction>()
   private readonly shouldSurfaceInteraction: (kind: DshInteractionKind) => boolean
 
-  constructor(private readonly ctx: Context, options: Dsh012ApiProxyOptions = {}) {
+  constructor(private readonly ctx: Context, options: DshApiProxyOptions = {}) {
     const session = ctx.get('sessionController') as SessionControllerLike | undefined
-    if (session === undefined) throw new Error('dsh 0.1.2 sessionController is unavailable')
+    if (session === undefined) throw new Error('DSH sessionController is unavailable')
     this.session = session
     this.workspaceController = ctx.get('workspaceController') as WorkspaceControllerLike | undefined
-    if (typeof this.workspaceController?.unarchiveSession !== 'function') {
-      delete this.workspace?.unarchiveSession
-    }
+    // A profile without the optional workspace service cannot restore a
+    // session; keep the phone capability bit honest.
+    if (this.workspaceController === undefined) delete this.workspace?.unarchiveSession
     this.directoryPicker = ctx.get('directoryPickerController') as DirectoryPickerControllerLike | undefined
     this.shouldSurfaceInteraction = options.shouldSurfaceInteraction ?? (() => true)
-  }
-
-  /**
-   * Whether the host controller implements `session.projections` (added in
-   * DSH 0.1.7). HostBridge gates its open-time baseline refresh on this so
-   * older hosts keep their current list-row-hint behaviour with no RPC noise.
-   */
-  get supportsProjections(): boolean {
-    return typeof this.session.projections === 'function'
   }
 
   /**
@@ -175,13 +164,7 @@ export class Dsh012ApiProxy implements ApiProxyLike {
     rename: async (request) => this.call(() => this.session.rename(request.payload!)),
     cancel: async (request) => this.call(() => this.session.cancel(request.payload!)),
     attachment: async (request) => this.call(() => this.session.attachment(request.payload!)),
-    // DSH 0.1.7 added session.projections; HostBridge feature-detects through
-    // supportsProjections, so this branch is only reached on hosts that have it.
-    projections: async (request) => this.call(() => {
-      const read = this.session.projections
-      if (typeof read !== 'function') throw unavailable('session projections unavailable')
-      return read.call(this.session, request.payload!)
-    }),
+    projections: async (request) => this.call(() => this.session.projections(request.payload!)),
   }
 
   readonly workspace: ApiProxyLike['workspace'] = {
@@ -205,9 +188,7 @@ export class Dsh012ApiProxy implements ApiProxyLike {
     }),
     unarchiveSession: async (request) => this.call(async () => {
       if (this.workspaceController === undefined) throw unavailable('workspace controller unavailable')
-      const unarchive = this.workspaceController.unarchiveSession
-      if (typeof unarchive !== 'function') throw unavailable('session restore unavailable on this host version')
-      const value = await unarchive.call(this.workspaceController, request.payload!)
+      const value = await this.workspaceController.unarchiveSession(request.payload!)
       return { archivedSessionIds: [...value.archivedSessionIds] }
     }),
   }
@@ -257,7 +238,7 @@ export class Dsh012ApiProxy implements ApiProxyLike {
 
     let disposeInteractions: (() => Promise<void>) | undefined
     try {
-      disposeInteractions = await startDsh012RemoteInteractions(this.ctx, {
+      disposeInteractions = await startDshRemoteInteractions(this.ctx, {
         approval: (sessionId, request, next) => this.answerApproval(queue, sessionId, request, next),
         question: (sessionId, request, next) => this.answerQuestion(queue, sessionId, request, next),
       })

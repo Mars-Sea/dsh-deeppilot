@@ -734,13 +734,10 @@ export class HostBridge {
         hasMore: Boolean(result.hasMore) || page.dropped > 0,
       });
       this.deriveTitleFallback(sessionId, messages);
-      // DSH 0.1.7 exposes a complete per-session projection baseline; fold it
+      // DSH exposes a complete per-session projection baseline; fold it
       // into the summary row when the phone opens a session so the first paint
       // does not depend on list-row hints or frames missed while offline.
-      // Older hosts (supportsProjections absent) keep today's behaviour.
-      if (this.apiProxy.supportsProjections === true) {
-        void this.refreshProjections(sessionId);
-      }
+      void this.refreshProjections(sessionId);
       return true;
     } catch {
       return false;
@@ -748,19 +745,19 @@ export class HostBridge {
   }
 
   /**
-   * Pull one session's projection baseline (DSH 0.1.7+) and fold every key
+   * Pull one session's projection baseline and fold every key
    * through applyProjection — unknown keys are ignored there, `null` means the
    * session no longer exists, and any failure degrades to a diagnostic: opening
    * a session must never fail because a baseline could not be read.
    */
   private async refreshProjections(sessionId: string): Promise<void> {
     try {
-      const response = await this.apiProxy.sessions.projections?.({
+      const response = await this.apiProxy.sessions.projections({
         rpcId: randomUUID(),
         payload: { sessionId },
       });
       if (this.disposed) return;
-      const result = response?.result;
+      const result = response.result;
       if (!result) return;
       if (!result.ok) {
         this.diagnostic('sessions.projections failed: ' + result.error.code);

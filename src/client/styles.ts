@@ -101,8 +101,8 @@ const PLUGIN_ID = 'dsh-deeppilot'
  * materialization; this sheet is injected from `apply()`, which runs after
  * that point, so it would never be attributed to us. Stamping `data-plugin`
  * ourselves lets the module system's `removeOwnedStyles(id)` delete the sheet
- * when the plugin is unloaded at runtime — the Plugin Manager and the client
- * entry reconciler both support live removal from 0.1.6-alpha.2 on, and an
+ * when the plugin is unloaded at runtime — the rc.1 Plugin Manager and client
+ * entry reconciler both support live removal, and an
  * orphaned sheet would otherwise keep styling a page we no longer own.
  */
 export function injectCss(): void {

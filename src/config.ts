@@ -62,18 +62,12 @@ export interface Config {
 export const DEFAULT_RELAY_URL = 'https://pilot.hailab.dev'
 
 export const Config = z.object({
-  // `live()` marks the fields the settings surface writes (plus the read-time
-  // debug flag) as volatile on hosts that support it: DSH 0.1.7 refuses to
-  // write a field that is not declared volatile and commits a volatile-only
-  // edit into the running instance without a remount. Older hosts' schemastery
-  // has no .volatile method, where settings writes ride the settings document
-  // and never touch the entry config at all — the declaration degrades to a
-  // pass-through there instead of throwing when this module is imported.
-  enabled: live(z.boolean().default(true)),
+  // rc.1 accepts live settings writes only for fields declared volatile.
+  enabled: z.boolean().default(true).volatile(),
   devicesPath: z.string().default(join(bridgeDataDir(), 'devices-v2.json')),
   historyBufferMax: z.natural().min(100).default(2000),
-  debug: live(z.boolean().default(false)),
-  local: live(z.object({
+  debug: z.boolean().default(false).volatile(),
+  local: z.object({
     enabled: z.boolean().default(true),
     port: z.natural()
       .min(MIN_LOCAL_PORT)
@@ -83,8 +77,8 @@ export const Config = z.object({
   }).default({
     enabled: true,
     port: DEFAULT_LOCAL_PORT,
-  })),
-  remote: live(z.object({
+  }).volatile(),
+  remote: z.object({
     enabled: z.boolean().default(false),
     provider: z.union(['tailscale-funnel'] as const).default('tailscale-funnel'),
     hostname: z.string().default(DEFAULT_REMOTE_HOSTNAME),
@@ -104,7 +98,7 @@ export const Config = z.object({
     helperPath: '',
     funnelPort: 443,
     maxConnectionsPerSource: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE,
-  })),
+  }).volatile(),
   push: z.object({
     provider: z.union(['none', 'apns', 'relay'] as const).default('none'),
     contentMode: z.union(['preview', 'generic'] as const).default('preview'),
@@ -127,28 +121,6 @@ export const Config = z.object({
 })
 
 /**
- * Declare one live-update (volatile) config node when the host supports it.
- *
- * DSH 0.1.7's schemastery adds `Schema#volatile()`; the schemas this package
- * typechecks against (3.18.x line) do not have the method, so the call goes
- * through a structural check instead of a direct chain — a direct
- * `.volatile()` would both fail typecheck today and throw at import on an
- * older host, killing plugin activation.
- */
-export function live<T>(node: T): T {
-  const schema = node as { volatile?: () => T; extra?: (key: string, value: unknown) => T }
-  if (typeof schema.volatile === 'function') return schema.volatile()
-  // schemastery < 3.18.3 has no .volatile(), but .extra writes the same
-  // metadata. Setting it keeps a 0.1.7 host willing to accept settings writes
-  // for this field even on the older schema instance: without refs the value
-  // lands at the next activation instead of live-committing — the same
-  // "applies on restart" semantics ≤ 0.1.6 always had. On ≤ 0.1.6 hosts the
-  // metadata is inert (that loader has no volatile handling).
-  if (typeof schema.extra === 'function') return schema.extra('volatile', true)
-  return node
-}
-
-/**
  * Deep-unwrap live-update (volatile) references to plain values.
  *
  * On a 0.1.7 host, `apply()`'s options — and even a direct `Config(raw)` call
@@ -156,8 +128,7 @@ export function live<T>(node: T): T {
  * `currentConfig()` compares plain values (`=== true`, numeric bounds, object
  * fields), and schemastery refuses to re-parse a reference, so normalization
  * unwraps on the way in and on the way out. A JSON-shaped config value cannot
- * carry a function, so the `get` check cannot false-positive; plain input
- * passes through unchanged, keeping older-host behavior identical.
+ * carry a function, so the `get` check cannot false-positive.
  */
 export function plainConfig(value: unknown): unknown {
   if (value === null || typeof value !== 'object') return value
@@ -177,8 +148,7 @@ export function plainConfig(value: unknown): unknown {
  * Cordis hands the second argument in different shapes depending on host
  * composition: a reactive options getter, the resolved config value, or
  * nothing when the patch row omits `config`. Normalize all of them — and
- * unwrap volatile references so the returned Config is plain data on every
- * host generation.
+ * unwrap volatile references so the returned Config is plain data.
  */
 export function normalizeOptions(options: unknown): Config {
   if (typeof options === 'function') return plainConfig((options as () => unknown)()) as Config

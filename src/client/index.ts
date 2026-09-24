@@ -6,10 +6,8 @@
  * surfaced to the slot component as a `use` hook, with
  * the report fetched Host-side through the deeppilot/report Typert Remote.
  * The master switch (enabled) is read/written through the shared settings
- * namespace (`ctx.settingsScope.bind({ namespace: 'deeppilot' })` on hosts
- * ≤ 0.1.6; `ctx.configForms.get('deeppilot')` on 0.1.7 — see
- * settings-scope.ts for the adapter), the same seam the Host half persists
- * through.
+ * profile config form (`ctx.configForms.get('deeppilot')`), the same entry the
+ * Host half reads.
  *
  * The slot `inject` MUST be a thunk returning the inject face — the renderer
  * calls `entry.inject(...)`; passing a plain object used to throw
@@ -29,10 +27,10 @@ import { DeepPilotSettingsPage } from './settings-page.ts'
 import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, normalizeFunnelConnectionLimit } from '../funnel-policy.ts'
 import { DEFAULT_LOCAL_PORT, normalizeLocalPort } from '../local-policy.ts'
 import {
-  bindSettingsScope,
+  bindConfigForm,
   type ConfigFormsLike,
   type SettingsScopeLike,
-} from './settings-scope.ts'
+} from './config-form.ts'
 
 export { DeepPilotSettingsPage } from './settings-page.ts'
 
@@ -47,10 +45,6 @@ type AnyCtx = Context & {
     inject: (name: string, cb: () => unknown) => unknown
     register: (entry: unknown, component: unknown) => unknown
   }
-  settingsScope?: {
-    bind(spec: { namespace: string }): SettingsScopeLike | undefined
-  }
-  /** DSH 0.1.7 replacement for settingsScope (see settings-scope.ts). */
   configForms?: ConfigFormsLike
 }
 
@@ -139,13 +133,9 @@ class ReportController {
 /**
  * Services this client entry cannot start without.
  *
- * The settings seam is deliberately NOT here: DSH ≤ 0.1.6 provides
- * `settingsScope`, 0.1.7 removed it in favor of `configForms`, and a name no
- * running host provides keeps the whole entry pending forever — the 0.1.7 boot
- * reported exactly `dsh-deeppilot: pending (waiting for service:
- * settingsScope)` while every other service resolved and the entry never
- * applied. Both settings seams are optional injections inside `apply`
- * instead; see the scope binding below.
+ * `configForms` is provided by the settings-page fiber, which may activate
+ * after this entry. It is attached through an optional injection below so
+ * the entry can activate before the settings page does.
  */
 export const inject: readonly string[] = ['slots', 'locale', 'remote']
 
@@ -257,12 +247,11 @@ export function apply(ctx: Context): void {
   }
 
   // Master switch: mirror the durable `enabled` field of the deeppilot
-  // settings namespace (Host side registered via installSection ≤ 0.1.6; on
-  // 0.1.7 the same values live in this plugin's profile config entry).
+  // profile config entry shared with the Host half.
   const enabledStore = createSnapshotStore<EnabledState>({ status: 'loading', enabled: true })
-  let scope: SettingsScopeLike | undefined = bindSettingsScope(anyCtx)
-  /** Adopters registered before attachScope runs, so a late-bound scope (0.1.7
-   *  configForms provisioned after this plugin applies) still subscribes all. */
+  let scope: SettingsScopeLike | undefined = bindConfigForm(anyCtx)
+  /** Adopters registered before attachScope runs, so a late-bound config form
+   *  still subscribes all. */
   const scopeAdoptions: Array<() => void> = []
   const adoptEnabled = (): void => {
     if (scope === undefined) return
@@ -382,12 +371,8 @@ export function apply(ctx: Context): void {
   }
   scopeAdoptions.push(adoptRemoteEnabled)
 
-  // Attach once every adopter is registered. Neither settings seam sits in the
-  // entry's own `inject` (see the export above): whichever generation's service
-  // the running host provides is awaited as an optional injection, including
-  // one provisioned after this plugin applies (0.1.7 provisions `configForms`
-  // behind its own settings-page fiber), so the page never sticks in
-  // "loading" and a host without either seam still activates the entry.
+  // Attach once every adopter is registered. The form is an optional
+  // injection because the settings-page fiber may provide it later.
   const attachScope = (): void => {
     if (scope === undefined) return
     for (const adopt of scopeAdoptions) {
@@ -399,12 +384,9 @@ export function apply(ctx: Context): void {
   if (scope === undefined) {
     const bindScopeFrom = (sub: AnyCtx): void => {
       if (scope !== undefined) return
-      // The shared helper prefers the legacy seam, so a host providing both
-      // still binds the ≤ 0.1.6 scope first.
-      scope = bindSettingsScope(sub)
+      scope = bindConfigForm(sub)
       attachScope()
     }
-    ctx.inject(['settingsScope'], (sub) => { bindScopeFrom(sub as AnyCtx) })
     ctx.inject(['configForms'], (sub) => { bindScopeFrom(sub as AnyCtx) })
   }
 
@@ -438,7 +420,7 @@ export function apply(ctx: Context): void {
   }
 
   if (anyCtx.slots === undefined) {
-    // locale/settingsScope/remote all have visible degradations when missing;
+    // locale/configForms/remote all have visible degradations when missing;
     // slots is the registration seam itself — a missing slot service means
     // the whole page is silently blank. Surface it loudly so the cause shows
     // up next to the other diagnostic lines.

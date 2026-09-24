@@ -9,8 +9,7 @@ import { WebSocketServer } from 'ws'
 import { BridgeConnection } from './connection.ts'
 import { HostBridge } from './host-bridge.ts'
 import type { PushOutlet } from './host-bridge.ts'
-import { Dsh012ApiProxy, type DshInteractionKind } from './dsh012-api-proxy.ts'
-import type { SettingsSectionHooks } from '@deepseek-ai/dsh-settings'
+import { DshApiProxy, type DshInteractionKind } from './dsh-api-proxy.ts'
 import { applyReportRemote } from './report-remote.ts'
 import { runRelayProbe } from './relay-test.ts'
 import type { DeepPilotReport, PushTestResult } from './report-wire.ts'
@@ -34,8 +33,8 @@ import {
 import { normalizeFunnelConnectionLimit } from './funnel-policy.ts'
 import { localLANIPv4Addresses } from './local-address.ts'
 import { UpdateChecker, type UpdateInfo } from './update-check.ts'
-import { Config, DEFAULT_RELAY_URL, normalizeOptions } from './config.ts'
-import type { Config as PluginConfig } from './config.ts'
+import { DEFAULT_RELAY_URL, normalizeOptions } from './config.ts'
+import type { Config } from './config.ts'
 import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import { pushContent, mayReceivePush, shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
@@ -53,8 +52,8 @@ import { loadOrCreateLanTlsIdentity, type LanTlsIdentity } from './lan-tls.ts'
  * devices) and loopback Funnel-origin listeners. The web UI and the rest of
  * DSH's API are never exposed by these listeners.
  *
- * Data plane: an in-process HostBridge consumes a local compatibility façade
- * over DSH 0.1.2 Session/Workspace controllers, mirrors session summaries,
+ * Data plane: an in-process HostBridge consumes a local adapter over DSH
+ * Session/Workspace controllers, mirrors session summaries,
  * tracks pending approvals/questions, and fans projected protocol-v2 pushes
  * out to every connected device.
  *
@@ -120,60 +119,13 @@ export function apply(ctx: Context, options: unknown): void {
     .digest('hex')
     .slice(0, 12)
 
-  /**
-   * Settings-section source: while a settings service is attached this holds
-   * the user-edited section value; otherwise the composition defaults. Read
-   * through currentConfig() everywhere (normalizeOptions prefers it).
-   */
-  let liveSource: (() => Config) | undefined
   let scheduleRemoteReconcile: (() => void) | undefined
   let scheduleLocalReconcile: (() => void) | undefined
-  const currentConfig = (): Config => {
-    if (liveSource !== undefined) return normalizeOptions(liveSource())
-    return normalizeOptions(options)
-  }
+  const currentConfig = (): Config => normalizeOptions(options)
   const enabledNow = (): boolean => currentConfig().enabled === true
 
-  // Web settings page: a "deeppilot" section with the plugin knobs.
-  // Values persist through the settings document and re-enter via setSource;
-  // `enabled` decides whether the bridge starts at all (next restart). This is
-  // registered unconditionally so the master switch stays reachable even while
-  // the bridge is off — otherwise a disabled bridge could never be re-enabled.
-  const settingsHooks: SettingsSectionHooks<PluginConfig> = {
-    setSource: (source) => {
-      liveSource = source
-      // Defer one microtask so the settings service can finish publishing the
-      // new source before either transport runtime reads it.
-      queueMicrotask(() => {
-        scheduleLocalReconcile?.()
-        scheduleRemoteReconcile?.()
-      })
-    },
-    onChange: () => queueMicrotask(() => {
-      scheduleLocalReconcile?.()
-      scheduleRemoteReconcile?.()
-    }),
-  }
-  ctx.inject(['settings'], (settingsCtx) => {
-    // DSH 0.1.7 removed installSection entirely: that host persists section
-    // values in this plugin's own profile config entry — the object
-    // currentConfig() already reads — and notifies through the volatile-update
-    // event below. Guarding the seam keeps activation alive on either host.
-    const install = (settingsCtx as { settings?: { installSection?: unknown } }).settings?.installSection
-    if (typeof install !== 'function') return
-    settingsCtx.settings.installSection(
-      ctx,
-      'deeppilot',
-      Config,
-      normalizeOptions(undefined),
-      settingsHooks,
-    )
-  })
-
-  // DSH 0.1.7 commits volatile-only config edits into the live refs without a
-  // remount and emits this on the owning fiber — the replacement for the
-  // installSection hooks that host no longer has. Re-run the same transport
-  // reconciles; on older hosts nothing ever emits it, so the listener is inert.
+  // rc.1 commits volatile config edits into live refs and emits on the owning
+  // fiber. Reconcile transport listeners after the new values are published.
   ;(ctx as unknown as { on: (name: string, listener: () => void) => void }).on(
     'loader/volatile-update',
     () => queueMicrotask(() => {
@@ -182,7 +134,7 @@ export function apply(ctx: Context, options: unknown): void {
     }),
   )
 
-  // Master switch, resolved against the latest available settings document.
+  // Master switch, resolved against the current profile entry.
   // Individual injected services also read currentConfig() when they activate.
   if (currentConfig().enabled !== true) {
     log('disabled via settings; bridge stays inactive (rumors of /phone below are skipped)')
@@ -1233,8 +1185,8 @@ export function apply(ctx: Context, options: unknown): void {
   }, 30_000)
   ;(ctx as unknown as SubContext).effect(() => () => clearInterval(sweep), 'deeppilot: stale sweep')
 
-  // Data plane: dsh 0.1.2 removed apiProxy. Build the bridge's stable
-  // protocol-facing façade from the public Session/Workspace controllers.
+  // Build the bridge's stable protocol-facing adapter from the public
+  // Session/Workspace controllers.
 
   /**
    * Whether the resident Gateway Client represents a real phone surface. A
@@ -1256,11 +1208,11 @@ export function apply(ctx: Context, options: unknown): void {
         return
       }
       const apiCtx = sub as unknown as Context & SubContext
-      let proxy: Dsh012ApiProxy
+      let proxy: DshApiProxy
       try {
-        proxy = new Dsh012ApiProxy(apiCtx, { shouldSurfaceInteraction: hasPairedPhoneSurface })
+        proxy = new DshApiProxy(apiCtx, { shouldSurfaceInteraction: hasPairedPhoneSurface })
       } catch (error) {
-        log('dsh 0.1.2 session bridge unavailable: ' + String(error))
+        log('DSH session bridge unavailable: ' + String(error))
         return
       }
       const bridge = new HostBridge(proxy, cfg.historyBufferMax, join(dataDir, 'prompt-deliveries-v1.json'))

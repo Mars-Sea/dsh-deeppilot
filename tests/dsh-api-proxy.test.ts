@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
-import { Dsh012ApiProxy } from '../src/dsh012-api-proxy.ts'
+import { DshApiProxy } from '../src/dsh-api-proxy.ts'
 import { HostBridge, projectHistory } from '../src/host-bridge.ts'
 import type { BridgeSink } from '../src/host-bridge.ts'
 import { unwrapStreamItem } from '../src/host-api.ts'
 
-test('dsh 0.1.2 non-empty raw history opens through the stable bridge shape', async () => {
+test('rc.1 raw history opens through the stable bridge shape', async () => {
   const rawEvents = [
     {
       type: 'user/message',
@@ -41,7 +41,7 @@ test('dsh 0.1.2 non-empty raw history opens through the stable bridge shape', as
   const ctx = {
     get: (key: string) => key === 'sessionController' ? sessionController : undefined,
   }
-  const proxy = new Dsh012ApiProxy(ctx as never)
+  const proxy = new DshApiProxy(ctx as never)
   const bridge = new HostBridge(proxy, 100)
   const frames: Array<{ type: string; payload: any }> = []
   const sink: BridgeSink = {
@@ -69,7 +69,7 @@ test('dsh 0.1.2 non-empty raw history opens through the stable bridge shape', as
   bridge.dispose()
 })
 
-test('dsh 0.1.2 history adapter preserves sequence pagination while wrapping events', async () => {
+test('rc.1 history adapter preserves sequence pagination while wrapping events', async () => {
   const rawEvents = [
     { type: 'user/message', seq: 1, data: { content: [], source: { kind: 'user' } } },
     { type: 'assistant/message', seq: 2, data: { message: { content: [{ type: 'text', text: 'answer' }] } } },
@@ -80,7 +80,7 @@ test('dsh 0.1.2 history adapter preserves sequence pagination while wrapping eve
       ? { inspect: async () => ({ events: rawEvents }) }
       : undefined,
   }
-  const proxy = new Dsh012ApiProxy(ctx as never)
+  const proxy = new DshApiProxy(ctx as never)
 
   const response = await proxy.sessions.history({
     payload: { sessionId: 'legacy-session', beforeSeq: 3, maxMessages: 1 },
@@ -97,7 +97,7 @@ test('dsh 0.1.2 history adapter preserves sequence pagination while wrapping eve
   })
 })
 
-test('dsh 0.1.2 history adapter skips raw pages with no phone message projection', async () => {
+test('rc.1 history adapter skips raw pages with no phone message projection', async () => {
   const rawEvents = [
     {
       type: 'user/message',
@@ -113,7 +113,7 @@ test('dsh 0.1.2 history adapter skips raw pages with no phone message projection
       ? { inspect: async () => ({ events: rawEvents }) }
       : undefined,
   }
-  const proxy = new Dsh012ApiProxy(ctx as never)
+  const proxy = new DshApiProxy(ctx as never)
   const bridge = new HostBridge(proxy, 100)
 
   assert.deepEqual(await bridge.historyPage('legacy-session', 4, 1), {
@@ -124,7 +124,7 @@ test('dsh 0.1.2 history adapter skips raw pages with no phone message projection
   bridge.dispose()
 })
 
-test('dsh 0.1.2 history adapter accumulates raw pages up to the requested phone message count', async () => {
+test('rc.1 history adapter accumulates raw pages up to the requested phone message count', async () => {
   const rawEvents = [
     { type: 'user/message', seq: 1, time: 10, data: 'oldest' },
     { type: 'turn/start', seq: 2, time: 20, data: {} },
@@ -142,7 +142,7 @@ test('dsh 0.1.2 history adapter accumulates raw pages up to the requested phone 
       ? { inspect: async () => ({ events: rawEvents }) }
       : undefined,
   }
-  const proxy = new Dsh012ApiProxy(ctx as never)
+  const proxy = new DshApiProxy(ctx as never)
 
   const first = await proxy.sessions.history({
     payload: { sessionId: 'legacy-session', beforeSeq: 6, maxMessages: 2 },
@@ -182,9 +182,11 @@ class RemoteEventHarness {
 
   readonly gateway = {
     wireStream: {
-      open: async (endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> => {
+      open: async (endpoint: string, payload: unknown, uplink: unknown, peer: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> => {
         assert.equal(endpoint, '$events')
         assert.deepEqual(payload, { args: {} })
+        assert.equal(uplink, undefined)
+        assert.equal(peer, undefined)
         this.opened = true
         this.openedWake?.()
         return this.stream(signal)
@@ -263,7 +265,7 @@ function interactionContext(harness: RemoteEventHarness): Context {
   return ctx
 }
 
-async function startMux(proxy: Dsh012ApiProxy, signal: AbortSignal) {
+async function startMux(proxy: DshApiProxy, signal: AbortSignal) {
   const iterator = proxy.events.mux({}, signal)[Symbol.asyncIterator]()
   const firstFrame = iterator.next()
   return { iterator, firstFrame }
@@ -283,7 +285,7 @@ function dispatchHostWaterfall(
 test('DeepPilot no longer registers a competing Host interaction waterfall', async () => {
   const harness = new RemoteEventHarness()
   const ctx = interactionContext(harness)
-  const proxy = new Dsh012ApiProxy(ctx)
+  const proxy = new DshApiProxy(ctx)
   const controller = new AbortController()
   const { iterator } = await startMux(proxy, controller.signal)
   await harness.waitUntilOpened()
@@ -302,7 +304,7 @@ test('DeepPilot no longer registers a competing Host interaction waterfall', asy
 test('a missing phone surface delegates only the DeepPilot Gateway delivery', async () => {
   const harness = new RemoteEventHarness()
   const ctx = interactionContext(harness)
-  const proxy = new Dsh012ApiProxy(ctx, { shouldSurfaceInteraction: () => false })
+  const proxy = new DshApiProxy(ctx, { shouldSurfaceInteraction: () => false })
   const controller = new AbortController()
   const { iterator, firstFrame } = await startMux(proxy, controller.signal)
   await harness.waitUntilOpened()
@@ -323,7 +325,7 @@ test('a missing phone surface delegates only the DeepPilot Gateway delivery', as
 test('the resident phone Client returns a question through the official Gateway result channel', async () => {
   const harness = new RemoteEventHarness()
   const ctx = interactionContext(harness)
-  const proxy = new Dsh012ApiProxy(ctx, {
+  const proxy = new DshApiProxy(ctx, {
     shouldSurfaceInteraction: kind => kind === 'question',
   })
   const controller = new AbortController()
@@ -358,7 +360,7 @@ test('the resident phone Client returns a question through the official Gateway 
 test('a phone approval is sent through Gateway and resolves the local pending card', async () => {
   const harness = new RemoteEventHarness()
   const ctx = interactionContext(harness)
-  const proxy = new Dsh012ApiProxy(ctx, { shouldSurfaceInteraction: kind => kind === 'approval' })
+  const proxy = new DshApiProxy(ctx, { shouldSurfaceInteraction: kind => kind === 'approval' })
   const controller = new AbortController()
   const { iterator, firstFrame } = await startMux(proxy, controller.signal)
   await harness.waitUntilOpened()
@@ -395,7 +397,7 @@ test('a phone approval is sent through Gateway and resolves the local pending ca
 test('Gateway cancellation from a Web answer clears the phone pending interaction', async () => {
   const harness = new RemoteEventHarness()
   const ctx = interactionContext(harness)
-  const proxy = new Dsh012ApiProxy(ctx)
+  const proxy = new DshApiProxy(ctx)
   const controller = new AbortController()
   const { iterator, firstFrame } = await startMux(proxy, controller.signal)
   await harness.waitUntilOpened()
@@ -421,7 +423,7 @@ test('Gateway cancellation from a Web answer clears the phone pending interactio
 test('a throwing phone-surface decision delegates this Gateway delivery', async () => {
   const harness = new RemoteEventHarness()
   const ctx = interactionContext(harness)
-  const proxy = new Dsh012ApiProxy(ctx, {
+  const proxy = new DshApiProxy(ctx, {
     shouldSurfaceInteraction: () => { throw new Error('registry broke') },
   })
   const controller = new AbortController()
@@ -454,7 +456,7 @@ for (const listed of [true, false]) {
     ctx.provide('sessionController', { list: async () => ({ items: rows }) })
     ctx.provide('connection', harness.connection)
     ctx.provide('typertGateway', harness.gateway)
-    const bridge = new HostBridge(new Dsh012ApiProxy(ctx), 100)
+    const bridge = new HostBridge(new DshApiProxy(ctx), 100)
     const frames: Array<{ type: string; payload: any }> = []
     const pushes: Array<{ sessionId: string; category: string }> = []
     bridge.addSink({
@@ -507,10 +509,10 @@ for (const listed of [true, false]) {
   })
 }
 
-test('restore capability reflects the controller instead of the facade wrapper', () => {
+test('restore capability reflects whether the optional workspace service is present', () => {
   for (const available of [false, true]) {
-    const workspace = available ? { unarchiveSession: async () => ({ archivedSessionIds: [] }) } : {}
-    const proxy = new Dsh012ApiProxy({ get: (key: string) =>
+    const workspace = available ? { unarchiveSession: async () => ({ archivedSessionIds: [] }) } : undefined
+    const proxy = new DshApiProxy({ get: (key: string) =>
       key === 'sessionController' ? {} : key === 'workspaceController' ? workspace : undefined,
     } as never)
     const bridge = new HostBridge(proxy, 100)

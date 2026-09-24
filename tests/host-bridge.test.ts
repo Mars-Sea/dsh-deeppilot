@@ -36,6 +36,7 @@ function makeFakeProxy() {
         model: req.payload?.model ?? '',
         ...(req.payload?.reasoningEffort ? { reasoningEffort: req.payload.reasoningEffort } : {}),
       } } } }),
+      projections: async () => ({ result: { ok: true, value: null } }),
     },
     respond: async (message) => {
       respondCalls.push(message)
@@ -610,14 +611,11 @@ test('session management renames, archives into a browsable mirror, and restores
   bridge.dispose()
 })
 
-test('session restore degrades on a host whose workspace controller predates it', async () => {
+test('session restore degrades when the optional workspace service is absent', async () => {
   const { proxy } = makeFakeProxy()
-  proxy.workspace = {
-    list: async () => ({ result: { ok: true, value: { items: [], archivedSessionIds: [] } } }),
-    archiveSession: async () => ({ result: { ok: true, value: { archivedSessionIds: [] } } }),
-  }
+  proxy.workspace = undefined
   const bridge = new HostBridge(proxy, 100)
-  assert.equal(bridge.capabilities.sessionRestore, false, 'absent unarchiveSession must not claim restore')
+  assert.equal(bridge.capabilities.sessionRestore, false, 'absent workspace service must not claim restore')
   const result = await bridge.unarchiveSession('session-old')
   assert.equal(result.ok, false)
   assert.equal(result.ok === false && result.kind, 'unsupported')
@@ -1469,7 +1467,6 @@ test('opening a session refreshes the 0.1.7 projection baseline', async () => {
     },
   ] } } })
   const baselineCalls: string[] = []
-  proxy.supportsProjections = true
   proxy.sessions.projections = async (req) => {
     baselineCalls.push(req.payload?.sessionId ?? '')
     return { result: { ok: true, value: { asOfSeq: 42, values: {
@@ -1496,31 +1493,6 @@ test('opening a session refreshes the 0.1.7 projection baseline', async () => {
   assert.ok(row, 'session summary missing from delta')
   assert.equal(row.title, 'Fresh title')
   assert.deepEqual(row.todos, { done: 0, total: 1 })
-  bridge.dispose()
-})
-
-test('hosts without the projections capability never see the RPC', async () => {
-  const { proxy } = makeFakeProxy()
-  proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
-    { sessionId: 'session-old-host', updatedAt: 300, running: false, blank: false },
-  ] } } })
-  const baselineCalls: string[] = []
-  // Method present but capability flag absent (older host generation): the
-  // bridge must keep its list-row behaviour instead of issuing a failing RPC.
-  proxy.sessions.projections = async (req) => {
-    baselineCalls.push(req.payload?.sessionId ?? '')
-    return { result: { ok: true, value: { asOfSeq: 1, values: { title: 'should not apply' } } } }
-  }
-  const bridge = new HostBridge(proxy, 100)
-  bridge.start()
-  const collected: Array<{ type: string; payload: any }> = []
-  bridge.addSink(makeSink(collected))
-  await new Promise((r) => setTimeout(r, 20))
-
-  const opened = await bridge.openSession(makeSink(collected), 'session-old-host', 50)
-  assert.equal(opened, true)
-  await new Promise((r) => setTimeout(r, 20))
-  assert.deepEqual(baselineCalls, [], 'projections must not be called without supportsProjections')
   bridge.dispose()
 })
 

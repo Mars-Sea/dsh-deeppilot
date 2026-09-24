@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Config, live, normalizeOptions, plainConfig } from '../src/config.ts'
+import { Config, normalizeOptions, plainConfig } from '../src/config.ts'
 
 /** Stand-in for the 0.1.7 volatile reference ({ get() }). */
 const ref = (value: unknown): { get: () => unknown } => ({ get: () => value })
@@ -78,25 +78,8 @@ test('normalizeOptions(undefined) returns plain defaults', () => {
   assert.ok(!leaves.includes('REFERENCE'), 'defaults contain no volatile references')
 })
 
-test('live() degrades to a pass-through without the host volatile method', () => {
-  // The installed schemastery in this package's support window has no
-  // .volatile — constructing the whole Config schema at import already
-  // exercises this branch; here we pin the helper contract itself.
-  const node = { marker: 'plain' }
-  assert.equal(live(node), node)
-})
-
-test('live() applies volatile() when the host provides it', () => {
-  const result = { marker: 'volatile' }
-  const node = { volatile: () => result }
-  assert.equal(live(node), result)
-})
-
 test('the dev schemastery really wraps volatile fields, and unwrap hides them', () => {
-  // Pins the devDependency floor: with @deepseek-ai/schemastery >= 3.18.3 the
-  // raw parse carries { get() } references for volatile fields — this is what
-  // makes the unwrap paths above genuinely exercised rather than no-ops. A
-  // downgrade below 3.18.3 fails here instead of silently losing coverage.
+  // The rc.1 schema carries { get() } references for volatile fields.
   const raw = Config({}) as { local?: unknown; enabled?: unknown }
   const isRef = (value: unknown): boolean =>
     value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function'

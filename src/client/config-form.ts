@@ -1,13 +1,7 @@
 /**
- * Dual-host settings-scope binding for the browser half of the plugin.
- *
- * DSH ≤ 0.1.6 exposes the plugin's settings section through
- * `ctx.settingsScope.bind({ namespace })`. DSH 0.1.7 removed that service and
- * replaces it with `ctx.configForms.get(entryId)` — a form over this plugin's
- * own profile config entry (the same values the Host half reads through
- * currentConfig()). The two faces are near-isomorphic on purpose: this module
- * adapts the newer form to the older scope shape so the settings page and its
- * stores stay host-agnostic.
+ * Bind the rc.1 profile config form for the browser half of the plugin.
+ * The adapter preserves the settings page's snapshot and rejected-write
+ * behavior while the form reads and writes this plugin's profile entry.
  *
  * Structural types only (no value imports): the client bundle's runtime
  * require allowlist is react + @deepseek-ai/cordis.
@@ -27,7 +21,7 @@ export interface ScopeSnapshot {
   writable?: boolean
 }
 
-/** The 0.1.6 settings-scope face the settings page consumes. */
+/** The settings page's local snapshot and write contract. */
 export interface SettingsScopeLike {
   getSnapshot(): ScopeSnapshot
   subscribe(listener: () => void): () => void
@@ -52,31 +46,17 @@ interface SettingsScopeProvider {
   /**
    * Cordis service lookup. Real contexts carry this and MUST be read through
    * it: a context proxy throws `cannot get property "<name>" without inject`
-   * when an undeclared *service* property is read, which is exactly the
-   * 0.1.7 situation (`settingsScope` is gone, `configForms` is not declared
-   * on this entry — see client/index.ts). Plain-object callers without `get`
-   * fall back to direct property reads.
+   * when an undeclared service property is read. The form is resolved through
+   * `get` because it may be provided after this entry applies.
    */
-  get?(name: string): unknown
-  settingsScope?: {
-    bind(spec: { namespace: string }): SettingsScopeLike | undefined
-  }
-  configForms?: ConfigFormsLike
-}
-
-/** Read one optional settings seam without an inject declaration on this entry. */
-function readSeam<T>(ctx: SettingsScopeProvider, name: 'settingsScope' | 'configForms'): T | undefined {
-  if (typeof ctx.get === 'function') return (ctx.get(name) ?? undefined) as T | undefined
-  return ctx[name] as T | undefined
+  get(name: string): unknown
 }
 
 /**
  * Deep-unwrap live-update references in a snapshot section.
  *
- * If a host parses section values through a volatile-capable schema, leaves
- * can arrive as `{ get() }` references; the settings page compares plain
- * values, so unwrap defensively at this single boundary regardless of which
- * schemastery instance produced the snapshot.
+ * Volatile fields can arrive as `{ get() }` references. The settings page
+ * compares plain values, so unwrap them at this boundary.
  */
 function plainSection(value: SettingsSectionValue | undefined): SettingsSectionValue | undefined {
   if (value === null || typeof value !== 'object') return value
@@ -91,7 +71,7 @@ function plainSection(value: SettingsSectionValue | undefined): SettingsSectionV
 }
 
 /**
- * Adapt one 0.1.7 config form to the settings-scope face.
+ * Adapt one config form to the settings page's local contract.
  *
  * The form resolves writes as `Promise<boolean>` (false = the Host rejected or
  * could not recover the write) where the scope face signals failure by
@@ -99,7 +79,7 @@ function plainSection(value: SettingsSectionValue | undefined): SettingsSectionV
  * a `false` must be translated into one.
  *
  * @param forms - the 0.1.7 configForms service, if the host provides it.
- * @param entryId - profile entry id; identical to the legacy namespace here.
+ * @param entryId - profile entry id.
  * @returns the adapted scope, or undefined when the service cannot resolve it.
  */
 export function adaptConfigForm(forms: ConfigFormsLike | undefined, entryId: string): SettingsScopeLike | undefined {
@@ -124,18 +104,9 @@ export function adaptConfigForm(forms: ConfigFormsLike | undefined, entryId: str
 }
 
 /**
- * Bind the settings scope for whichever host generation is running.
- *
- * Prefers the legacy settingsScope (present ≤ 0.1.6); falls back to the 0.1.7
- * config form when its service is already provisioned. Safe to call from any
- * context — including one that declares neither service, which on a Cordis
- * context is the difference between `undefined` and a thrown
- * `cannot get property "settingsScope" without inject`. Callers that apply
- * before `configForms` is provided re-run this inside the optional
- * `ctx.inject(['configForms'], …)` callback (see client index.ts).
+ * Bind the rc.1 form if its service is already provisioned. Callers that
+ * apply first retry inside `ctx.inject(['configForms'], …)`.
  */
-export function bindSettingsScope(ctx: SettingsScopeProvider): SettingsScopeLike | undefined {
-  const legacy = readSeam<{ bind(spec: { namespace: string }): SettingsScopeLike | undefined }>(ctx, 'settingsScope')
-  return legacy?.bind({ namespace: 'deeppilot' })
-    ?? adaptConfigForm(readSeam<ConfigFormsLike>(ctx, 'configForms'), 'deeppilot')
+export function bindConfigForm(ctx: SettingsScopeProvider): SettingsScopeLike | undefined {
+  return adaptConfigForm(ctx.get('configForms') as ConfigFormsLike | undefined, 'deeppilot')
 }

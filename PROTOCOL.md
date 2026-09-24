@@ -572,7 +572,7 @@ APNs 只承载通知投影，不承载回答所需的 requestId 和完整问题�
 
 ### 与 DSH 官方 Web 回答者的共存
 
-DSH `0.1.2-alpha.3` 起，Host 侧的 `approval/request` 与
+在 DSH `0.1.7-rc.1` 中，Host 侧的 `approval/request` 与
 `user-questions/request` 只由官方 API Remotes 接入一次；API Gateway 为每个请求
 保存统一 pending 状态，并把相同请求并行投递给官方 Web Client 与 DeepPilot
 驻留 Remote Client。任一 Client 先回答后，由 Gateway 统一结算并取消其他 Client
