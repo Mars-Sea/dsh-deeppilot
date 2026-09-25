@@ -2,7 +2,7 @@ import type { SessionSummary } from './protocol.ts'
 import type { DeviceScope } from './device-auth.ts'
 import type { PushNotification } from './protocol.ts'
 
-/* Stable bridge-facing structural types mapped to rc.1 controllers by
+/* Stable bridge-facing structural types mapped to rc.2 controllers by
  * DshApiProxy. */
 
 interface RpcOk<T> { ok: true; value: T }
@@ -18,6 +18,7 @@ interface SessionsApiLike {
     Promise<RpcResponseLike<HistoryResult>>
   prompt(req: RpcRequestLike<PromptArgs>): Promise<RpcResponseLike<{ accepted: true }>>
   create(req: RpcRequestLike<{ workspaceId?: string; cwd?: string; agentPreset?: string }>): Promise<RpcResponseLike<{ sessionId: string; agentPreset?: string }>>
+  fork?(req: RpcRequestLike<{ sessionId: string; atSeq?: number }>): Promise<RpcResponseLike<{ sessionId: string }>>
   models?(req: RpcRequestLike<{ sessionId: string }>): Promise<RpcResponseLike<HostSessionModels>>
   selectModel?(req: RpcRequestLike<{
     sessionId: string
@@ -46,6 +47,51 @@ interface WorkspaceApiLike {
     Promise<RpcResponseLike<{ archivedSessionIds: string[] }>>
   unarchiveSession?(req: RpcRequestLike<{ sessionId: string }>):
     Promise<RpcResponseLike<{ archivedSessionIds: string[] }>>
+}
+
+export type ScheduleKind = 'after' | 'at' | 'every' | 'daily' | 'weekly' | 'cron'
+
+export interface ScheduleTaskViewLike {
+  id: string
+  kind: ScheduleKind
+  title: string
+  prompt: string
+  scheduledAt: string
+  state: 'scheduled' | 'overdue'
+  deliveryMode: 'host'
+  afterSeconds?: number
+  everySeconds?: number
+  time?: string
+  timeZone?: string
+  weekdays?: number[]
+  expression?: string
+}
+
+export interface ScheduleHistoryViewLike {
+  id: string
+  records: Array<{
+    scheduledAt: string
+    deliveredAt: string
+    messageId: string
+    prompt?: string
+  }>
+  earlierRecordsUnavailable: boolean
+  earlierRecordsPruned?: boolean
+  retention: { days: number; records: number }
+  nextBefore?: string
+}
+
+export interface ScheduleApiLike {
+  list(req: RpcRequestLike<{ sessionId: string }>):
+    Promise<RpcResponseLike<{ sessionId: string; tasks: ScheduleTaskViewLike[] }>>
+  history(req: RpcRequestLike<{ sessionId: string; id: string; limit: number; before?: string }>):
+    Promise<RpcResponseLike<{ sessionId: string; history: ScheduleHistoryViewLike }>>
+  create(req: RpcRequestLike<{ sessionId: string; title: string; prompt: string; [key: string]: unknown }>):
+    Promise<RpcResponseLike<ScheduleTaskViewLike>>
+  update(req: RpcRequestLike<{ sessionId: string; id: string; expected: unknown; title?: string; prompt?: string; change?: unknown }>):
+    Promise<RpcResponseLike<{ id: string; updated: boolean; record?: ScheduleTaskViewLike; code?: string }>>
+  delete(req: RpcRequestLike<{ sessionId: string; id: string }>):
+    Promise<RpcResponseLike<{ id: string; deleted: boolean; code?: string }>>
 }
 
 interface HostApiLike {
@@ -200,6 +246,7 @@ export function unwrapStreamItem(item: MuxFrameLike | ApiStreamItemLike): MuxFra
 export interface ApiProxyLike {
   sessions: SessionsApiLike
   workspace?: WorkspaceApiLike
+  schedule?: ScheduleApiLike
   host?: HostApiLike
   respond(message: { type: 'client-response'; rpcId: string; result: RpcResult<unknown> }):
     Promise<{ accepted: boolean; reason?: string }>

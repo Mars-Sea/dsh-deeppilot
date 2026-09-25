@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { DeviceStore, MAX_DEVICES } from '../src/token.ts'
+import { DeviceStore, MAX_DEVICES, deviceDisplayName } from '../src/token.ts'
 import { createTestIdentity } from './auth-fixture.ts'
 
 async function makeTempDir(): Promise<string> {
@@ -53,6 +53,39 @@ test('device scopes update and revocation fail closed', async () => {
     await store.drain()
     const reloaded = await DeviceStore.load(join(dir, 'devices-v2.json'))
     assert.equal(reloaded.authorized(paired.deviceId), undefined)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('custom device names persist, survive reconnects, and can be cleared', async () => {
+  const dir = await makeTempDir()
+  try {
+    const path = join(dir, 'devices-v2.json')
+    const store = await DeviceStore.load(path)
+    const identity = createTestIdentity()
+    const paired = store.register({
+      publicKey: identity.publicKey,
+      deviceName: 'iPhone',
+      appVersion: '1.0',
+    }, 1)
+
+    assert.equal(await store.setCustomName(paired.deviceId, '  工作手机  '), '工作手机')
+    store.markAuthenticated(paired.deviceId, 'iPhone 15 Pro', '1.1', 2)
+    assert.equal(deviceDisplayName(store.authorized(paired.deviceId)!), '工作手机')
+    await store.drain()
+
+    const reloaded = await DeviceStore.load(path)
+    assert.equal(reloaded.list()[0]?.customName, '工作手机')
+    assert.equal(deviceDisplayName(reloaded.list()[0]!), '工作手机')
+
+    assert.equal(await store.setCustomName(paired.deviceId, null), 'iPhone 15 Pro')
+    await store.drain()
+    assert.equal((await DeviceStore.load(path)).list()[0]?.customName, undefined)
+
+    assert.equal(store.revoke(paired.deviceId, 3), true)
+    assert.equal(await store.setCustomName(paired.deviceId, 'blocked'), null)
+    await store.drain()
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

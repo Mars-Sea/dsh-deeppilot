@@ -17,6 +17,23 @@ export function validateRequest(type: string, value: unknown): string | undefine
   if (type.startsWith('c2s.session.') && type !== 'c2s.session.create' && !text(p.sessionId)) return 'invalid sessionId'
   if (type === 'c2s.session.create' && (!optional('workspaceId', v => text(v)) || !optional('cwd', v => text(v, 32768)) || (p.workspaceId !== undefined && p.cwd !== undefined))) return 'invalid workspace selection'
   if (type === 'c2s.directory.list' && !optional('path', v => text(v, 32768, false))) return 'invalid path'
+  if (type === 'c2s.schedule.list' && !text(p.sessionId)) return 'invalid sessionId'
+  if (type === 'c2s.schedule.history' && (!text(p.sessionId) || !text(p.id) || !integer(p.limit, 1, 100) || !optional('before', v => text(v)))) return 'invalid schedule history'
+  if (type === 'c2s.schedule.create') {
+    if (!validSendId(p.clientRequestId) || !text(p.sessionId) || !text(p.title, 120) || !text(p.prompt, 256 * 1024)) return 'invalid schedule create fields'
+    const selectors = ['after_seconds', 'at', 'every_seconds', 'daily', 'weekly', 'cron'].filter(key => p[key] !== undefined)
+    if (selectors.length !== 1) return 'schedule requires exactly one selector'
+    if (p.after_seconds !== undefined && !integer(p.after_seconds, 1, Number.MAX_SAFE_INTEGER)) return 'invalid after_seconds'
+    if (p.every_seconds !== undefined && !integer(p.every_seconds, 60, Number.MAX_SAFE_INTEGER)) return 'invalid every_seconds'
+    if (p.at !== undefined && typeof p.at !== 'string' && (typeof p.at !== 'object' || p.at === null || Array.isArray(p.at))) return 'invalid at selector'
+  }
+  if (type === 'c2s.schedule.update') {
+    if (!validSendId(p.clientRequestId) || !text(p.sessionId) || !text(p.id) || !p.expected || typeof p.expected !== 'object' || Array.isArray(p.expected)) return 'invalid schedule update fields'
+    if (!optional('title', v => text(v, 120)) || !optional('prompt', v => text(v, 256 * 1024))) return 'invalid schedule update content'
+    if (p.change !== undefined && (!p.change || typeof p.change !== 'object' || Array.isArray(p.change))) return 'invalid schedule timing change'
+  }
+  if (type === 'c2s.schedule.delete' && (!validSendId(p.clientRequestId) || !text(p.sessionId) || !text(p.id))) return 'invalid schedule delete fields'
+  if (type === 'c2s.session.fork' && (!validSendId(p.clientRequestId) || !optional('atSeq', v => integer(v, 0, Number.MAX_SAFE_INTEGER)))) return 'invalid session fork fields'
   if (type === 'c2s.device.revoke' && !optional('deviceId', v => text(v))) return 'invalid deviceId'
   if (type === 'c2s.workspace.create' && !text(p.path, 32768)) return 'invalid path'
   if (type === 'c2s.session.open' && !optional('tailCount', v => integer(v, 1, 10000))) return 'invalid tailCount'

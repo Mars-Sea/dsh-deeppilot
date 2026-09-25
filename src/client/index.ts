@@ -218,6 +218,21 @@ export function apply(ctx: Context): void {
     await controller.refresh()
   }
 
+  const setDeviceName = async (deviceId: string, customName: string | null): Promise<string | null> => {
+    if (namespace === undefined) {
+      throw new Error(mountError !== undefined
+        ? t(ctx, 'diag.mountFailedShort') + mountError
+        : t(ctx, 'diag.remoteUnmounted'))
+    }
+    if (typeof namespace.setDeviceName !== 'function') {
+      throw new Error(t(ctx, 'devices.renameStaleHost'))
+    }
+    const result = await namespace.setDeviceName(deviceId, customName)
+    if (!result.ok) throw new Error(result.error.message ?? t(ctx, 'devices.renameFailed'))
+    await controller.refresh()
+    return result.value
+  }
+
   const sendTestPush = async (): Promise<PushTestResult> => {
     if (namespace === undefined) {
       throw new Error(mountError !== undefined
@@ -448,6 +463,7 @@ export function apply(ctx: Context): void {
         refresh: () => { void controller.refresh() },
         beginPairing,
         revokeDevice,
+        setDeviceName,
         testRelay: testRelayConnection,
         testPush: sendTestPush,
         setDeepPilotEnabled,

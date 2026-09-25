@@ -62,7 +62,7 @@ export interface Config {
 export const DEFAULT_RELAY_URL = 'https://pilot.hailab.dev'
 
 export const Config = z.object({
-  // rc.1 accepts live settings writes only for fields declared volatile.
+  // rc.2 accepts live settings writes only for fields declared volatile.
   enabled: z.boolean().default(true).volatile(),
   devicesPath: z.string().default(join(bridgeDataDir(), 'devices-v2.json')),
   historyBufferMax: z.natural().min(100).default(2000),

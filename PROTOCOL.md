@@ -96,6 +96,11 @@ LAN Host 回显自己的证书指纹，App 若持有二维码指纹则必须比�
 频率限制返回 429；设备注册表满返回 409。`GET /phone/health` 只返回最小公开状态，
 不承担鉴权。
 
+设备注册表同时保存 App 上报的 `deviceName` 与可选的 `customName`。`customName`
+只用于 DSH 主机设置页和运维日志中的显示，不替代 App 上报名称，也不参与
+`c2s.auth.prove` 的签名输入；App 后续重连不会覆盖它。将 `customName` 清空后，
+设置页恢复显示 App 上报的名称。
+
 ### 2.2 WebSocket 挑战签名
 
 1. 客户端连接 `wss://host/phone`，HTTP Upgrade 不携带凭据。局域网地址同样使用 `wss`：
@@ -152,6 +157,9 @@ app-version:<base64url(appVersion UTF-8)>
 resume-cursor:<resumeCursor or ->
 ```
 
+`deviceName` 是 App 在当前认证请求中声明的原始名称；主机设置页保存的
+`customName` 不在此签名文本中，也不会改变设备身份校验。
+
 4. 服务端仅接受注册、未撤销且签名有效的设备。失败以 **4401** 关闭；超时以
    **4402** 关闭；版本不匹配以 **4500** 关闭。welcome 前客户端只允许发送 proof 与 ping。
 5. scope 在每次认证时载入内存；scope 变更或撤销会立即断开该设备，重连后重新判定。
@@ -165,6 +173,7 @@ scope 与操作映射：
 | `sessions.manage` | 创建/重命名/归档/取消会话，创建工作区，切换模型 |
 | `interactions.respond` | pending 快照、回答 approval 与 question |
 | `notifications.register` | 注册 APNs token 与通知偏好 |
+| `schedule.manage` | 定时任务/提醒的列表、历史、创建、修改和删除；同时需要 `sessions.read` 才能读取任务内容 |
 
 缺少所需 scope 时服务端回 `E_FORBIDDEN`，连接保持打开。当前产品默认配对授予
 全部 scope，普通设置页不提供逐项权限控制，只提供全局连接开关和逐设备删除。
@@ -182,6 +191,7 @@ scope 同样约束服务端**推送**给已认证连接的内容。桥在每次�
 | `s2c.pending.approval`、`s2c.pending.question`、`s2c.pending.cleared` | `interactions.respond` |
 | `s2c.notify`（`category` 为 `approval.required` / `question.asked`） | `interactions.respond` |
 | `s2c.notify`（`category` 为 `turn.completed` / `session.error`） | `sessions.read`（正文可能包含助手输出） |
+| `s2c.schedule.changed` | `schedule.manage`（正文为空，客户端需重新拉取列表） |
 | welcome / ack / error / challenge 及对已通过 scope 检查的 c2s 请求的点对点响应 | 无 |
 
 未知广播类型默认不下发。重放按每帧权限过滤，不要求设备拥有 sessions.read；
@@ -572,7 +582,7 @@ APNs 只承载通知投影，不承载回答所需的 requestId 和完整问题�
 
 ### 与 DSH 官方 Web 回答者的共存
 
-在 DSH `0.1.7-rc.1` 中，Host 侧的 `approval/request` 与
+在 DSH `0.1.7-rc.2` 中，Host 侧的 `approval/request` 与
 `user-questions/request` 只由官方 API Remotes 接入一次；API Gateway 为每个请求
 保存统一 pending 状态，并把相同请求并行投递给官方 Web Client 与 DeepPilot
 驻留 Remote Client。任一 Client 先回答后，由 Gateway 统一结算并取消其他 Client
@@ -717,6 +727,26 @@ token，而离线推送的目标筛选条件是「持有 token 且当前无活�
 - 客户端在删除本地凭据前发送该帧；只有收到 `revoked:true`（或断线重试后仍为该结果）
   才继续删除本地实例，避免删掉凭据却留下推送目标。
 
+### 主机设置页设备自定义名称（DSH Typert 扩展）
+
+设备自定义名称只通过 DSH 主机设置页的 Typert Remote 暴露，不新增 iPhone
+WebSocket 帧，也不改变设备认证协议：
+
+```text
+deeppilot/setDeviceName(deviceId, customName) -> customName | null
+```
+
+- `deviceId` 必须是已配对且未撤销的 43 字符 base64url 标识。
+- `customName` 必须是 1–64 个字符，去除首尾空白后不能为空，禁止 C0/C1 控制字符；
+  传入 `null` 表示清除自定义名称并恢复 App 上报的 `deviceName`。
+- 成功结果回显规范化后的 `customName`；清除时回 `null`。未找到或已撤销设备失败，
+  不得伪造成功。
+- 主机必须将名称原子写入设备注册表后再返回成功；App 后续重连只更新原始
+  `deviceName`，不能覆盖 `customName`。
+- `deeppilot/report` 的设备项可携带 `customName`，并以 `deviceName` 作为有效显示名
+  （有自定义名称时优先使用自定义名称）。旧 Host 不提供该字段时，客户端继续使用
+  `deviceName`。
+
 ## 7. 断线重放
 
 - 每个 s2c 推送帧信封额外携带数值字段 seq（服务端本次启动以来单调递增），覆盖 sessions.delta / session.event / notify / pending.* 。请求响应帧不占 seq。
@@ -762,6 +792,8 @@ token，而离线推送的目标筛选条件是「持有 token 且当前无活�
   本地抑制（不展示不属于任何已配对 Host 的推送，见 §6 通知 Host 路由）并可提示用户
   在主机设置页吊销该设备，否则它只会在本地解绑、继续接收离线推送。
 - v2 同版本新增可选字段时双方必须忽略未知字段。
+- 旧 Host 不认识 `deeppilot/setDeviceName` 时，设置页应显示“不支持设备重命名”的降级提示，
+  不得把失败伪装成保存成功；新客户端仍须正常显示和删除设备。
 - v1 不受支持；服务端不得接受 Bearer、`c2s.hello.auth` 或通过错误重试降级。
 - 后续破坏性变更必须升级 `v`，不能静默重新解释 v2 字段。
 
@@ -858,3 +890,91 @@ history, attachments, or full todo lists. It rejects unknown content-state
 fields, oversized text, invalid counts, stale timestamps, and event/phase
 mismatches. The updated Relay must be deployed before background Live Activity
 updates work through relay mode. System delivery and refresh budgets still apply.
+
+## Schedule 定时任务扩展（可选 v2 能力）
+
+`welcome.capabilities.schedules=true` 表示 Host 挂载了 DSH rc.2 Schedule service。
+所有 Schedule 请求都要求设备 scope `schedule.manage`；旧客户端忽略未知 capability
+和未知帧。没有该能力时请求返回 `E_UNSUPPORTED`。
+
+### 列表与历史
+
+```json
+{ "type": "c2s.schedule.list", "id": "sl-1", "payload": { "sessionId": "session-…" } }
+{ "type": "s2c.schedule.snapshot", "id": "sl-1", "payload": { "sessionId": "session-…", "tasks": [] } }
+```
+
+```json
+{ "type": "c2s.schedule.history", "id": "sh-1", "payload": {
+  "sessionId": "session-…", "id": "schedule-…", "limit": 20, "before": "message-…"
+} }
+{ "type": "s2c.schedule.history", "id": "sh-1", "payload": {
+  "sessionId": "session-…", "history": { "id": "schedule-…", "records": [] }
+} }
+```
+
+`limit` 必须是 1–100 的安全整数；`before` 是上一页返回的最旧 message id，且为
+排他游标。任务和历史只能访问请求中明确给出的 Session。
+
+### 创建、更新、删除
+
+```json
+{ "type": "c2s.schedule.create", "id": "sc-1", "payload": {
+  "clientRequestId": "1730000000000-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "sessionId": "session-…", "title": "检查构建", "prompt": "检查构建状态",
+  "after_seconds": 600
+} }
+```
+
+创建必须提供非空 `title`、非空 `prompt`，并且恰好提供一个 selector：
+
+- `after_seconds`：正安全整数；
+- `at`：未来绝对时间或带 `date`、`time`、`time_zone` 的对象；
+- `every_seconds`：至少 60 秒的安全整数；
+- `daily` / `weekly` / `cron`：对应 DSH rc.2 结构，Host 负责完整校验。
+
+更新使用 `c2s.schedule.update`，必须携带 `clientRequestId`、`sessionId`、`id`
+和最近一次读取的完整 `expected` 记录；可选 `title`、`prompt` 和 `change` 分别
+替换名称、提醒内容或时间规则。过期 `expected` 返回 `E_BUSY`（conflict），不得
+静默覆盖 Host 中的新版本。
+
+删除使用 `c2s.schedule.delete`，必须携带 `clientRequestId`、`sessionId` 和 `id`。
+
+三类变更成功统一回 `s2c.schedule.updated`：
+
+```json
+{ "type": "s2c.schedule.updated", "id": "sc-1", "payload": {
+  "clientRequestId": "1730000000000-…", "sessionId": "session-…", "task": { "id": "schedule-…" }
+} }
+```
+
+删除响应使用 `deleted:true`。同一设备重复发送相同 `clientRequestId` 和相同内容时
+不得重复执行；Host 只返回 `replayed:true`。相同 ID 搭配不同内容返回
+`E_PROTOCOL`。结果未知时不得自动重试，用户应重新读取任务列表确认。
+
+DSH `schedule/changed` 会被投影为无正文的 `s2c.schedule.changed`，客户端收到后
+重新请求当前可见 Session 的任务列表。APNs/Relay 不得携带提醒 prompt。
+
+## Session 分支扩展（可选 v2 能力）
+
+`welcome.capabilities.sessionFork=true` 表示 Host 暴露 DSH rc.2 Session fork。
+请求要求 `sessions.read` 与 `sessions.manage`；旧客户端忽略该 capability。
+
+```json
+{ "type": "c2s.session.fork", "id": "fork-1", "payload": {
+  "clientRequestId": "1730000000000-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "sessionId": "session-…", "atSeq": 42
+} }
+{ "type": "s2c.session.forked", "id": "fork-1", "payload": {
+  "clientRequestId": "1730000000000-…",
+  "sourceSessionId": "session-…", "sessionId": "new-session-…", "atSeq": 42
+} }
+```
+
+`atSeq` 是源会话中用户可见的精确消息/事件边界；省略时 DSH 选择最新完成轮次。
+Host 必须确认源会话是普通、可见且未归档的会话；subagent、归档会话、未知
+`atSeq` 和不存在的源会话均不得创建本地假分支。
+
+同一设备的 `clientRequestId` 和相同请求内容只能执行一次。重启后 Host 从独立
+fork journal 恢复已创建的新 Session id，并返回 `replayed:true`；同一 ID 搭配不同
+内容返回 `E_PROTOCOL`。原会话永远不被修改或归档。

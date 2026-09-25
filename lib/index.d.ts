@@ -30,7 +30,7 @@ declare class PromptDeliveryJournal {
 }
 //#endregion
 //#region src/device-auth.d.ts
-declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register'];
+declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage'];
 type DeviceScope = (typeof DEVICE_SCOPES)[number];
 //#endregion
 //#region src/protocol.d.ts
@@ -233,6 +233,12 @@ interface SessionsApiLike {
     sessionId: string;
     agentPreset?: string;
   }>>;
+  fork?(req: RpcRequestLike<{
+    sessionId: string;
+    atSeq?: number;
+  }>): Promise<RpcResponseLike<{
+    sessionId: string;
+  }>>;
   models?(req: RpcRequestLike<{
     sessionId: string;
   }>): Promise<RpcResponseLike<HostSessionModels>>;
@@ -292,6 +298,82 @@ interface WorkspaceApiLike {
     sessionId: string;
   }>): Promise<RpcResponseLike<{
     archivedSessionIds: string[];
+  }>>;
+}
+type ScheduleKind = 'after' | 'at' | 'every' | 'daily' | 'weekly' | 'cron';
+interface ScheduleTaskViewLike {
+  id: string;
+  kind: ScheduleKind;
+  title: string;
+  prompt: string;
+  scheduledAt: string;
+  state: 'scheduled' | 'overdue';
+  deliveryMode: 'host';
+  afterSeconds?: number;
+  everySeconds?: number;
+  time?: string;
+  timeZone?: string;
+  weekdays?: number[];
+  expression?: string;
+}
+interface ScheduleHistoryViewLike {
+  id: string;
+  records: Array<{
+    scheduledAt: string;
+    deliveredAt: string;
+    messageId: string;
+    prompt?: string;
+  }>;
+  earlierRecordsUnavailable: boolean;
+  earlierRecordsPruned?: boolean;
+  retention: {
+    days: number;
+    records: number;
+  };
+  nextBefore?: string;
+}
+interface ScheduleApiLike {
+  list(req: RpcRequestLike<{
+    sessionId: string;
+  }>): Promise<RpcResponseLike<{
+    sessionId: string;
+    tasks: ScheduleTaskViewLike[];
+  }>>;
+  history(req: RpcRequestLike<{
+    sessionId: string;
+    id: string;
+    limit: number;
+    before?: string;
+  }>): Promise<RpcResponseLike<{
+    sessionId: string;
+    history: ScheduleHistoryViewLike;
+  }>>;
+  create(req: RpcRequestLike<{
+    sessionId: string;
+    title: string;
+    prompt: string;
+    [key: string]: unknown;
+  }>): Promise<RpcResponseLike<ScheduleTaskViewLike>>;
+  update(req: RpcRequestLike<{
+    sessionId: string;
+    id: string;
+    expected: unknown;
+    title?: string;
+    prompt?: string;
+    change?: unknown;
+  }>): Promise<RpcResponseLike<{
+    id: string;
+    updated: boolean;
+    record?: ScheduleTaskViewLike;
+    code?: string;
+  }>>;
+  delete(req: RpcRequestLike<{
+    sessionId: string;
+    id: string;
+  }>): Promise<RpcResponseLike<{
+    id: string;
+    deleted: boolean;
+    code?: string;
   }>>;
 }
 interface HostApiLike {
@@ -445,6 +527,7 @@ interface ApiStreamItemLike {
 interface ApiProxyLike {
   sessions: SessionsApiLike;
   workspace?: WorkspaceApiLike;
+  schedule?: ScheduleApiLike;
   host?: HostApiLike;
   respond(message: {
     type: 'client-response';
@@ -514,7 +597,59 @@ interface PromptDocument {
   truncated?: boolean;
 }
 //#endregion
+//#region src/mutation-journal.d.ts
+type MutationErrorCode = 'E_PROTOCOL' | 'E_NOT_FOUND' | 'E_BUSY' | 'E_UNSUPPORTED' | 'E_INTERNAL';
+type MutationOperationResult<T> = {
+  ok: true;
+  value: T;
+} | {
+  ok: false;
+  code: MutationErrorCode;
+  message?: string;
+};
+type MutationDispatchResult<T> = {
+  ok: true;
+  value?: T;
+  replayed?: boolean;
+} | {
+  ok: false;
+  code: MutationErrorCode;
+  message?: string;
+  replayed?: boolean;
+};
+/**
+ * Small durable at-most-once journal for non-prompt mutations.
+ *
+ * Only a hash of the request content is persisted. The successful value is
+ * kept in memory for the current process so a concurrent retry can receive the
+ * same response; after a restart a replay is acknowledged and the client
+ * refetches the authoritative resource. This avoids duplicating reminder
+ * prompts or conversation data in a second journal.
+ */
+declare class MutationJournal {
+  private readonly path?;
+  private readonly persistValues;
+  private readonly entries;
+  private readonly inFlight;
+  private healthy;
+  constructor(path?: string | undefined, persistValues?: boolean);
+  private key;
+  private expired;
+  private save;
+  dispatch<T>(deviceId: string, id: string, content: unknown, operation: () => Promise<MutationOperationResult<T>>): Promise<MutationDispatchResult<T>>;
+}
+//#endregion
 //#region src/host-bridge.d.ts
+type ScheduleBridgeResult<T> = {
+  ok: true;
+  value: T;
+  replayed?: boolean;
+} | {
+  ok: false;
+  kind: 'unsupported' | 'not-found' | 'invalid' | 'conflict' | 'busy' | 'internal';
+  message: string;
+  replayed?: boolean;
+};
 declare class HostBridge {
   private readonly apiProxy;
   private readonly historyBufferMax;
@@ -536,7 +671,9 @@ declare class HostBridge {
   private started;
   private disposed;
   readonly promptDeliveries: PromptDeliveryJournal;
-  constructor(apiProxy: ApiProxyLike, historyBufferMax?: number, deliveryJournalPath?: string);
+  readonly scheduleMutations: MutationJournal;
+  readonly forkMutations: MutationJournal;
+  constructor(apiProxy: ApiProxyLike, historyBufferMax?: number, deliveryJournalPath?: string, scheduleJournalPath?: string, forkJournalPath?: string);
   private pushOutlet;
   private widgetFingerprint;
   /**
@@ -554,8 +691,10 @@ declare class HostBridge {
     notifyAllCategories: boolean;
     models: boolean;
     sessionManagement: boolean;
+    sessionFork: boolean;
     sessionRestore: boolean;
     projectSelection: boolean;
+    schedules: boolean;
     push: boolean;
     widgetPush: boolean;
     liveActivityPush: boolean;
@@ -677,6 +816,35 @@ declare class HostBridge {
     workspaceId?: string;
     cwd?: string;
   }): Promise<string | null>;
+  forkSession(deviceId: string, payload: {
+    clientRequestId: string;
+    sessionId: string;
+    atSeq?: number;
+  }): Promise<ScheduleBridgeResult<{
+    sessionId: string;
+  }>>;
+  listSchedules(sessionId: string): Promise<ScheduleBridgeResult<ScheduleTaskViewLike[]>>;
+  scheduleHistory(sessionId: string, id: string, limit: number, before?: string): Promise<ScheduleBridgeResult<ScheduleHistoryViewLike>>;
+  createSchedule(deviceId: string, payload: Record<string, unknown> & {
+    sessionId: string;
+    clientRequestId: string;
+    title: string;
+    prompt: string;
+  }): Promise<ScheduleBridgeResult<ScheduleTaskViewLike>>;
+  updateSchedule(deviceId: string, payload: Record<string, unknown> & {
+    sessionId: string;
+    id: string;
+    clientRequestId: string;
+    expected: unknown;
+  }): Promise<ScheduleBridgeResult<ScheduleTaskViewLike>>;
+  deleteSchedule(deviceId: string, payload: {
+    sessionId: string;
+    id: string;
+    clientRequestId: string;
+  }): Promise<ScheduleBridgeResult<{
+    id: string;
+    deleted: true;
+  }>>;
   sendPrompt(sessionId: string, text: string, images?: Array<{
     mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
     data: string;

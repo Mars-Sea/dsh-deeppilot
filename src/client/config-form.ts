@@ -1,5 +1,5 @@
 /**
- * Bind the rc.1 profile config form for the browser half of the plugin.
+ * Bind the rc.2 profile config form for the browser half of the plugin.
  * The adapter preserves the settings page's snapshot and rejected-write
  * behavior while the form reads and writes this plugin's profile entry.
  *
@@ -104,7 +104,7 @@ export function adaptConfigForm(forms: ConfigFormsLike | undefined, entryId: str
 }
 
 /**
- * Bind the rc.1 form if its service is already provisioned. Callers that
+ * Bind the rc.2 form if its service is already provisioned. Callers that
  * apply first retry inside `ctx.inject(['configForms'], …)`.
  */
 export function bindConfigForm(ctx: SettingsScopeProvider): SettingsScopeLike | undefined {

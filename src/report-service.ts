@@ -8,6 +8,7 @@ export type ReportSnapshot = () => Promise<DeepPilotReport>
 
 export type PairingStarter = () => Promise<PairingGrantSnapshot>
 export type DeviceRevoker = (deviceId: string) => Promise<boolean>
+export type DeviceRenamer = (deviceId: string, customName: string | null) => Promise<string | null>
 export type DeviceScopeUpdater = (deviceId: string, scopes: DeviceScope[]) => Promise<DeviceScope[]>
 
 /** Runs the relay connectivity self-test (health + enrollment round-trip). */
@@ -25,6 +26,7 @@ export class DeepPilotReportService extends TypertRemoteService {
   private readonly snapshot: ReportSnapshot
   private readonly pairingStarter: PairingStarter
   private readonly deviceRevoker: DeviceRevoker
+  private readonly deviceRenamer: DeviceRenamer
   private readonly deviceScopeUpdater: DeviceScopeUpdater
 
   private readonly relayTester: RelayTester
@@ -35,6 +37,7 @@ export class DeepPilotReportService extends TypertRemoteService {
     snapshot: ReportSnapshot,
     pairingStarter: PairingStarter,
     deviceRevoker: DeviceRevoker,
+    deviceRenamer: DeviceRenamer,
     deviceScopeUpdater: DeviceScopeUpdater,
     relayTester: RelayTester,
     pushTester: PushTester,
@@ -43,6 +46,7 @@ export class DeepPilotReportService extends TypertRemoteService {
     this.snapshot = snapshot
     this.pairingStarter = pairingStarter
     this.deviceRevoker = deviceRevoker
+    this.deviceRenamer = deviceRenamer
     this.deviceScopeUpdater = deviceScopeUpdater
     this.relayTester = relayTester
     this.pushTester = pushTester
@@ -58,6 +62,10 @@ export class DeepPilotReportService extends TypertRemoteService {
 
   async revokeDevice(deviceId: string): Promise<boolean> {
     return this.deviceRevoker(deviceId)
+  }
+
+  async setDeviceName(deviceId: string, customName: string | null): Promise<string | null> {
+    return this.deviceRenamer(deviceId, customName)
   }
 
   async setDeviceScopes(deviceId: string, scopes: DeviceScope[]): Promise<DeviceScope[]> {

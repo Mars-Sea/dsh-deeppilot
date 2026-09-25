@@ -20,6 +20,7 @@ export const DEVICE_SCOPES = [
   'sessions.manage',
   'interactions.respond',
   'notifications.register',
+  'schedule.manage',
 ] as const
 
 export type DeviceScope = (typeof DEVICE_SCOPES)[number]

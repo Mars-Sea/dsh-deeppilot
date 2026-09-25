@@ -1,5 +1,5 @@
 /**
- * Client-entry activation against the rc.1 config form service. The form may
+ * Client-entry activation against the rc.2 config form service. The form may
  * arrive after this entry applies, so its injection stays optional.
  */
 import assert from 'node:assert/strict'

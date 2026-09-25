@@ -13,7 +13,7 @@ import { DshApiProxy, type DshInteractionKind } from './dsh-api-proxy.ts'
 import { applyReportRemote } from './report-remote.ts'
 import { runRelayProbe } from './relay-test.ts'
 import type { DeepPilotReport, PushTestResult } from './report-wire.ts'
-import { DeviceStore, MAX_DEVICES, bridgeDataDir, ensurePrivateBridgeDataDir, expandHome, migrateLegacyBridgeDataDir } from './token.ts'
+import { DeviceStore, MAX_DEVICES, bridgeDataDir, deviceDisplayName, ensurePrivateBridgeDataDir, expandHome, migrateLegacyBridgeDataDir } from './token.ts'
 import type { ApnsEnvironment } from './token.ts'
 import {
   PairingCodeManager,
@@ -124,7 +124,7 @@ export function apply(ctx: Context, options: unknown): void {
   const currentConfig = (): Config => normalizeOptions(options)
   const enabledNow = (): boolean => currentConfig().enabled === true
 
-  // rc.1 commits volatile config edits into live refs and emits on the owning
+  // rc.2 commits volatile config edits into live refs and emits on the owning
   // fiber. Reconcile transport listeners after the new values are published.
   ;(ctx as unknown as { on: (name: string, listener: () => void) => void }).on(
     'loader/volatile-update',
@@ -288,7 +288,7 @@ export function apply(ctx: Context, options: unknown): void {
         notification,
       })
       return {
-        name: device.deviceName,
+        name: deviceDisplayName(device),
         environment: registration.environment,
         outcome,
         // First 10 hex chars let the operator verify the stored token matches
@@ -608,13 +608,13 @@ export function apply(ctx: Context, options: unknown): void {
           if (connectedIds.has(device.deviceId)) return false
           if (!mayReceivePush(device, notification)) {
             if (currentConfig().debug === true) {
-              log(`push skip "${device.deviceName}": notification permission not granted`)
+              log(`push skip "${deviceDisplayName(device)}": notification permission not granted`)
             }
             return false
           }
           if (registration.categories?.[notification.category] === false) {
             if (currentConfig().debug === true) {
-              log(`push skip "${device.deviceName}": category ${notification.category} muted`)
+              log(`push skip "${deviceDisplayName(device)}": category ${notification.category} muted`)
             }
             return false
           }
@@ -636,10 +636,10 @@ export function apply(ctx: Context, options: unknown): void {
           const registration = device.apns!
           void send({ deviceToken: registration.token, environment: registration.environment, notification })
             .then(({ outcome, reason }) => {
-              log(`push(${transport}) ${notification.category} → "${device.deviceName}" [${registration.environment}] = ${outcome}${reason ? ' (' + reason + ')' : ''}`)
+              log(`push(${transport}) ${notification.category} → "${deviceDisplayName(device)}" [${registration.environment}] = ${outcome}${reason ? ' (' + reason + ')' : ''}`)
               if (shouldPrunePushToken(outcome, reason)) {
                 devices.clearPushToken(device.deviceId)
-                log(`push: pruned stale token of "${device.deviceName}" (${reason ?? 'unknown'}) — app re-registers on next launch`)
+                log(`push: pruned stale token of "${deviceDisplayName(device)}" (${reason ?? 'unknown'}) — app re-registers on next launch`)
                 return
               }
               if (
@@ -724,7 +724,7 @@ export function apply(ctx: Context, options: unknown): void {
   applyReportRemote(ctx, async () => {
     let pairingReady = false
     let devices: Array<{
-      deviceId: string; deviceName: string; appVersion: string; firstSeenTs: number; lastSeenTs: number
+      deviceId: string; deviceName: string; customName?: string; appVersion: string; firstSeenTs: number; lastSeenTs: number
       fingerprint: string; scopes: ReturnType<typeof normalizeDeviceScopes>; revokedAt?: number
       apns?: { environment: 'development' | 'production'; updatedAt: number }
     }> = []
@@ -735,9 +735,10 @@ export function apply(ctx: Context, options: unknown): void {
       // registration fact (environment + freshness).
       devices = (auth.devices?.list() ?? [])
         .filter((device) => device.publicKey !== undefined && device.fingerprint !== undefined)
-        .map(({ deviceId, deviceName, appVersion, firstSeenTs, lastSeenTs, fingerprint, scopes, revokedAt, apns }) => ({
+        .map(({ deviceId, deviceName, customName, appVersion, firstSeenTs, lastSeenTs, fingerprint, scopes, revokedAt, apns }) => ({
         deviceId,
-        deviceName,
+        deviceName: deviceDisplayName({ deviceName, customName }),
+        ...(customName ? { customName } : {}),
         appVersion,
         firstSeenTs,
         lastSeenTs,
@@ -772,6 +773,14 @@ export function apply(ctx: Context, options: unknown): void {
     // Settings-page revocation shares the exact path used by the wire-level
     // c2s.device.revoke frame (index.ts revokeDevice helper).
     return await revokeDevice(deviceId)
+  }, async (deviceId, customName) => {
+    const { devices } = await ready
+    if (!devices) throw new Error('device registry unavailable')
+    const effectiveName = await devices.setCustomName(deviceId, customName)
+    if (effectiveName === null) throw new Error('active device not found')
+    const normalized = customName === null ? '' : sanitizeDeviceField(customName, MAX_DEVICE_NAME_CHARS)
+    log(`device custom name updated id=${auditLabel(deviceId)} custom=${String(normalized.length > 0)}`)
+    return normalized === '' ? null : normalized
   }, async (deviceId, scopes) => {
     const { devices } = await ready
     if (!devices) throw new Error('device registry unavailable')
@@ -1215,7 +1224,13 @@ export function apply(ctx: Context, options: unknown): void {
         log('DSH session bridge unavailable: ' + String(error))
         return
       }
-      const bridge = new HostBridge(proxy, cfg.historyBufferMax, join(dataDir, 'prompt-deliveries-v1.json'))
+      const bridge = new HostBridge(
+        proxy,
+        cfg.historyBufferMax,
+        join(dataDir, 'prompt-deliveries-v1.json'),
+        join(dataDir, 'schedule-mutations-v1.json'),
+        join(dataDir, 'fork-mutations-v1.json'),
+      )
       bridge.setPushOutlet(makePushOutlet())
       state.bridge = bridge
       bridge.start()

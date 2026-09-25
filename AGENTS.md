@@ -30,6 +30,9 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
 - Helper changes: run Go tests, rebuild affected binaries, and verify checksums.
 - Release candidates: run the full checklist below. Use `npm ci` for a clean
   dependency install or after lockfile changes; it is not needed for every edit.
+- For any DSH release audit or compatibility decision, read and update
+  `docs/DSH_RELEASE_MEMORY.md`; keep install, runtime, and phone-protocol risk
+  classified separately.
 
 ### Authorization and completion
 

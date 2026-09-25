@@ -1,5 +1,5 @@
 /**
- * Adapter for the DSH rc.1 controller API.
+ * Adapter for the DSH rc.2 controller API.
  *
  * DeepPilot's phone protocol deliberately speaks one stable in-process
  * `apiProxy` vocabulary. This adapter maps it to the current public
@@ -21,6 +21,8 @@ import type {
   HostSessionModels,
   MuxFrameLike,
   PhoneSessionRow,
+  ScheduleHistoryViewLike,
+  ScheduleTaskViewLike,
   WorkspaceViewLike,
 } from './host-api.ts'
 
@@ -32,6 +34,7 @@ interface SessionControllerLike {
   list(request: { cursor?: string }, signal: AbortSignal): Promise<{ items: readonly unknown[] }>
   inspect(sessionId: string, signal?: AbortSignal): Promise<{ events: readonly unknown[] }>
   create(request: Record<string, unknown>): Promise<{ sessionId: string; agentPreset?: string }>
+  fork(request: { sessionId: string; atSeq?: number }): Promise<{ sessionId: string }>
   modelCatalog(): Promise<unknown>
   selectModel(request: Record<string, unknown>): Promise<{ selected: { provider: string; model: string; reasoningEffort?: string } }>
   rename(request: { sessionId: string; title: string }): Promise<{ title: string; seq: number }>
@@ -48,6 +51,14 @@ interface WorkspaceControllerLike {
   archiveSession(request: { sessionId: string }): Promise<{ archivedSessionIds: readonly string[] }>
   unarchiveSession(request: { sessionId: string }): Promise<{ archivedSessionIds: readonly string[] }>
   follow(signal: AbortSignal): AsyncIterable<{ type: string; value?: unknown }>
+}
+
+interface ScheduleControllerLike {
+  list(request: { sessionId: string }): Promise<readonly unknown[]>
+  history(request: { sessionId: string; id: string; limit: number; before?: string }): Promise<unknown>
+  create(sessionId: string, request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>
+  update(request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>
+  delete(request: { sessionId: string; id: string }, signal?: AbortSignal): Promise<unknown>
 }
 
 interface DirectoryPickerControllerLike {
@@ -77,20 +88,71 @@ export interface DshApiProxyOptions {
 export class DshApiProxy implements ApiProxyLike {
   private readonly session: SessionControllerLike
   private readonly workspaceController: WorkspaceControllerLike | undefined
+  private readonly scheduleController: ScheduleControllerLike | undefined
   private readonly directoryPicker: DirectoryPickerControllerLike | undefined
   private readonly interactions = new Map<string, DeferredInteraction>()
   private readonly shouldSurfaceInteraction: (kind: DshInteractionKind) => boolean
+  private readonly scheduleApi: ApiProxyLike['schedule']
 
   constructor(private readonly ctx: Context, options: DshApiProxyOptions = {}) {
     const session = ctx.get('sessionController') as SessionControllerLike | undefined
     if (session === undefined) throw new Error('DSH sessionController is unavailable')
     this.session = session
     this.workspaceController = ctx.get('workspaceController') as WorkspaceControllerLike | undefined
+    this.scheduleController = ctx.get('schedule') as ScheduleControllerLike | undefined
     // A profile without the optional workspace service cannot restore a
     // session; keep the phone capability bit honest.
     if (this.workspaceController === undefined) delete this.workspace?.unarchiveSession
     this.directoryPicker = ctx.get('directoryPickerController') as DirectoryPickerControllerLike | undefined
     this.shouldSurfaceInteraction = options.shouldSurfaceInteraction ?? (() => true)
+    this.scheduleApi = this.scheduleController === undefined ? undefined : this.createScheduleApi()
+  }
+
+  get schedule(): ApiProxyLike['schedule'] {
+    return this.scheduleApi
+  }
+
+  private createScheduleApi(): NonNullable<ApiProxyLike['schedule']> {
+    const controller = this.scheduleController!
+    return {
+      list: async (request) => this.call(async () => ({
+        sessionId: request.payload!.sessionId,
+        tasks: (await controller.list({ sessionId: request.payload!.sessionId })).map(toScheduleTask),
+      })),
+      history: async (request) => this.call(async () => {
+        const value = await controller.history({
+          sessionId: request.payload!.sessionId,
+          id: request.payload!.id,
+          limit: request.payload!.limit,
+          ...(request.payload!.before !== undefined ? { before: request.payload!.before } : {}),
+        }) as Record<string, unknown>
+        if (typeof value.code === 'string') {
+          throw Object.assign(new Error(String(value.code)), { code: value.code })
+        }
+        return { sessionId: request.payload!.sessionId, history: toScheduleHistory(value) }
+      }),
+      create: async (request) => this.call(async () => {
+        const { sessionId, ...createRequest } = request.payload!
+        return toScheduleTask(await controller.create(sessionId, createRequest))
+      }),
+      update: async (request) => this.call(async () => {
+        const payload = request.payload!
+        const result = await controller.update({
+          ...payload,
+          expected: toScheduleExpected(payload.expected),
+        }) as Record<string, unknown>
+        return {
+          id: String(result.id ?? payload.id),
+          updated: result.updated === true,
+          ...(result.record !== undefined ? { record: toScheduleTask(result.record) } : {}),
+          ...(typeof result.code === 'string' ? { code: result.code } : {}),
+        }
+      }),
+      delete: async (request) => this.call(async () => {
+        const result = await controller.delete({ sessionId: request.payload!.sessionId, id: request.payload!.id }) as Record<string, unknown>
+        return { id: String(result.id), deleted: result.deleted === true, ...(result.code !== undefined ? { code: String(result.code) } : {}) }
+      }),
+    }
   }
 
   /**
@@ -155,6 +217,7 @@ export class DshApiProxy implements ApiProxyLike {
       requestId: request.rpcId ?? randomUUID(),
     }, new AbortController().signal)),
     create: async (request) => this.call(() => this.session.create(request.payload ?? {})),
+    fork: async (request) => this.call(() => this.session.fork(request.payload!)),
     models: async (request) => this.call(async () => projectModels(
       await this.session.modelCatalog(),
       String(request.payload?.sessionId ?? ''),
@@ -318,6 +381,7 @@ export class DshApiProxy implements ApiProxyLike {
       listen('api-session/removed', 'host/session-removed'),
       listen('api-session/status', 'host/session-status', (sessionId, running) => ({ sessionId: String(sessionId), running: running === true })),
       listen('api-session/activity', 'host/session-added'),
+      listen('schedule/changed', 'host/schedule-changed'),
     ]
     const workspaceAbort = new AbortController()
     const stop = (): void => workspaceAbort.abort()
@@ -392,6 +456,56 @@ function toPhoneSessionRow(value: unknown): PhoneSessionRow {
 function toWorkspaceView(value: unknown): WorkspaceViewLike {
   const row = value as Record<string, unknown>
   return { workspaceId: String(row.workspaceId ?? ''), title: String(row.title ?? ''), path: String(row.path ?? ''), sessionIds: Array.isArray(row.sessionIds) ? row.sessionIds.map(String) : [] }
+}
+function toScheduleExpected(value: unknown): Record<string, unknown> {
+  const row = value !== null && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const { state: _state, deliveryMode: _deliveryMode, ...record } = row
+  return record
+}
+function toScheduleTask(value: unknown): ScheduleTaskViewLike {
+  const row = value as Record<string, unknown>
+  const kind = ['after', 'at', 'every', 'daily', 'weekly', 'cron'].includes(String(row.kind))
+    ? String(row.kind) as ScheduleTaskViewLike['kind']
+    : 'at'
+  const optionalNumber = (key: string): number | undefined => typeof row[key] === 'number' && Number.isFinite(row[key]) ? row[key] as number : undefined
+  return {
+    id: String(row.id ?? ''),
+    kind,
+    title: String(row.title ?? ''),
+    prompt: String(row.prompt ?? ''),
+    scheduledAt: String(row.scheduledAt ?? ''),
+    state: row.state === 'overdue' ? 'overdue' : 'scheduled',
+    deliveryMode: 'host',
+    ...(optionalNumber('afterSeconds') !== undefined ? { afterSeconds: optionalNumber('afterSeconds')! } : {}),
+    ...(optionalNumber('everySeconds') !== undefined ? { everySeconds: optionalNumber('everySeconds')! } : {}),
+    ...(typeof row.time === 'string' ? { time: row.time } : {}),
+    ...(typeof row.timeZone === 'string' ? { timeZone: row.timeZone } : {}),
+    ...(Array.isArray(row.weekdays) ? { weekdays: row.weekdays.filter((day): day is number => typeof day === 'number') } : {}),
+    ...(typeof row.expression === 'string' ? { expression: row.expression } : {}),
+  }
+}
+function toScheduleHistory(value: unknown): ScheduleHistoryViewLike {
+  const row = value as Record<string, unknown>
+  const records = Array.isArray(row.records) ? row.records : []
+  return {
+    id: String(row.id ?? ''),
+    records: records.map((entry) => {
+      const item = entry as Record<string, unknown>
+      return {
+        scheduledAt: String(item.scheduledAt ?? ''),
+        deliveredAt: String(item.deliveredAt ?? ''),
+        messageId: String(item.messageId ?? ''),
+        ...(typeof item.prompt === 'string' ? { prompt: item.prompt } : {}),
+      }
+    }),
+    earlierRecordsUnavailable: row.earlierRecordsUnavailable === true,
+    ...(typeof row.earlierRecordsPruned === 'boolean' ? { earlierRecordsPruned: row.earlierRecordsPruned } : {}),
+    retention: {
+      days: Number((row.retention as { days?: unknown } | undefined)?.days ?? 0),
+      records: Number((row.retention as { records?: unknown } | undefined)?.records ?? 0),
+    },
+    ...(typeof row.nextBefore === 'string' ? { nextBefore: row.nextBefore } : {}),
+  }
 }
 async function readWorkspaceBaseline(controller: WorkspaceControllerLike): Promise<{ items: WorkspaceViewLike[]; archivedSessionIds: string[] }> {
   const abort = new AbortController()

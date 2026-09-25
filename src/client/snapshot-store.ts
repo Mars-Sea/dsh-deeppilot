@@ -2,7 +2,7 @@
  * Tiny observable snapshot store consumed by the harness slot renderer's
  * `useSyncExternalStore` hooks.
  *
- * Kept local because the rc.1 browser module table does not publish
+ * Kept local because the rc.2 browser module table does not publish
  * `@deepseek-ai/dsh-client-store` for external plugins. The generated bundle
  * therefore has no unavailable runtime dependency.
  */

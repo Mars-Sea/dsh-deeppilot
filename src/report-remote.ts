@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { DeepPilotReportService } from './report-service.ts'
-import type { DeviceRevoker, DeviceScopeUpdater, PairingStarter, PushTester, RelayTester, ReportSnapshot } from './report-service.ts'
+import type { DeviceRenamer, DeviceRevoker, DeviceScopeUpdater, PairingStarter, PushTester, RelayTester, ReportSnapshot } from './report-service.ts'
 import { REPORT_HOST_CONTRIBUTION } from './report-wire.ts'
 
 interface TypertContributionRegistry {
@@ -16,12 +16,13 @@ export function applyReportRemote(
   snapshot: ReportSnapshot,
   pairingStarter: PairingStarter,
   deviceRevoker: DeviceRevoker,
+  deviceRenamer: DeviceRenamer,
   deviceScopeUpdater: DeviceScopeUpdater,
   relayTester: RelayTester,
   pushTester: PushTester,
 ): void {
   ctx.inject(['typert'], (remoteCtx) => {
-    new DeepPilotReportService(remoteCtx, snapshot, pairingStarter, deviceRevoker, deviceScopeUpdater, relayTester, pushTester)
+    new DeepPilotReportService(remoteCtx, snapshot, pairingStarter, deviceRevoker, deviceRenamer, deviceScopeUpdater, relayTester, pushTester)
     const registry = remoteCtx.typert as unknown as TypertContributionRegistry
     const unregister = registry.register(REPORT_HOST_CONTRIBUTION)
     remoteCtx.effect(() => () => void unregister(), 'dsh-deeppilot: report remote')

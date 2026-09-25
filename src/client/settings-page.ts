@@ -1,4 +1,4 @@
-import { createElement as h, useEffect, useReducer, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import * as QRCode from 'qrcode/lib/browser.js'
 import type { DeepPilotReport, PairingGrantSnapshot, PushTestResult, RelayTestResult } from '../report-wire.ts'
 import { encodePairingLink, selectPairingTargets, type PairingTarget } from '../pairing-qr.ts'
@@ -32,6 +32,20 @@ const TrashIcon = (): any =>
     h('path', { d: 'M6.6 7v4.2' }),
     h('path', { d: 'M9.4 7v4.2' }),
   )
+
+const CheckIcon = (): any =>
+  h('svg', {
+    className: 'pbb-controlIcon', viewBox: '0 0 16 16', width: 14, height: 14,
+    fill: 'none', stroke: 'currentColor', strokeWidth: 1.8,
+    strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
+  }, h('path', { d: 'm3 8.3 3.1 3.1L13 4.8' }))
+
+const CloseIcon = (): any =>
+  h('svg', {
+    className: 'pbb-controlIcon', viewBox: '0 0 16 16', width: 14, height: 14,
+    fill: 'none', stroke: 'currentColor', strokeWidth: 1.6,
+    strokeLinecap: 'round', 'aria-hidden': true,
+  }, h('path', { d: 'm4.5 4.5 7 7m0-7-7 7' }))
 
 async function writeClipboard(t: T, value: string): Promise<void> {
   try {
@@ -83,6 +97,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   const [selectedPairingHost, setSelectedPairingHost] = useState<string | null>(null)
   const [pairingPanel, dispatchPairingPanel] = useReducer(pairingPanelReduce, initialPairingPanelState)
   const qrRequestId = useRef(0)
+  const [troubleshootingOpen, setTroubleshootingOpen] = useState(false)
   const [relayTestBusy, setRelayTestBusy] = useState(false)
   const [relayTestResult, setRelayTestResult] = useState<RelayTestResult | null>(null)
   const [relayTestError, setRelayTestError] = useState('')
@@ -90,7 +105,10 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   const [pushTestResult, setPushTestResult] = useState<PushTestResult | null>(null)
   const [pushTestError, setPushTestError] = useState('')
   const [deviceBusy, setDeviceBusy] = useState<string | null>(null)
+  const [deviceBusyAction, setDeviceBusyAction] = useState<'rename' | 'revoke' | null>(null)
   const [deviceMessage, setDeviceMessage] = useState('')
+  const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null)
+  const [deviceNameDraft, setDeviceNameDraft] = useState('')
 
   useEffect(() => {
     if (typeof props.refresh !== 'function') return
@@ -105,6 +123,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
       setPushTestError(t(props.t, 'push.staleHost'))
       return
     }
+    setTroubleshootingOpen(true)
     setPushTestBusy(true)
     setPushTestError('')
     void props.testPush().then((result: PushTestResult) => {
@@ -122,6 +141,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
       setRelayTestError(t(props.t, 'push.staleHostRelay'))
       return
     }
+    setTroubleshootingOpen(true)
     setRelayTestBusy(true)
     setRelayTestError('')
     void props.testRelay().then((result: RelayTestResult) => {
@@ -198,6 +218,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
     if (typeof props.refresh !== 'function') diag.push(t(props.t, 'diag.missingRefresh'))
     if (typeof props.beginPairing !== 'function') diag.push(t(props.t, 'diag.missingReveal'))
     if (typeof props.revokeDevice !== 'function') diag.push(t(props.t, 'diag.missingRotate'))
+    if (typeof props.setDeviceName !== 'function') diag.push(t(props.t, 'diag.missingRename'))
     if (typeof props.testRelay !== 'function') diag.push(t(props.t, 'diag.missingTestRelay'))
     if (typeof props.testPush !== 'function') diag.push(t(props.t, 'diag.missingTestPush'))
     if (typeof props.setDeepPilotEnabled !== 'function') diag.push(t(props.t, 'diag.missingSetEnabled'))
@@ -350,30 +371,35 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   const advancedRows: any[] = []
   if (report !== null) {
     primaryRows.push(
-      h('div', { className: 'pbb-field', key: 'conn' },
-        h('div', { className: 'pbb-row' },
-          h('span', { className: 'pbb-label' }, t(props.t, 'panel.activeConnections')),
-          h('span', { className: 'pbb-value' }, String(report.activeConnections)))),
-      h('div', { className: 'pbb-field', key: 'identity' },
-        h('div', { className: 'pbb-row' },
-          h('span', { className: 'pbb-label' }, t(props.t, 'panel.identity')),
-          h('code', { className: 'pbb-token ' + (report.pairingReady ? 'pbb-ok' : 'pbb-bad') },
-            report.pairingReady ? t(props.t, 'panel.identityReady') : t(props.t, 'panel.identityNotReady')))),
-    )
+      h('div', { className: 'pbb-stat', key: 'conn' },
+        h('span', { className: 'pbb-statLabel' }, t(props.t, 'panel.activeConnections')),
+        h('span', { className: 'pbb-statValue' }, String(report.activeConnections))),
+      h('div', { className: 'pbb-stat', key: 'identity' },
+        h('span', { className: 'pbb-statLabel' }, t(props.t, 'panel.identity')),
+        h('code', { className: 'pbb-token ' + (report.pairingReady ? 'pbb-ok' : 'pbb-bad') },
+            report.pairingReady ? t(props.t, 'panel.identityReady') : t(props.t, 'panel.identityNotReady'))))
+    if (report.local.phase === 'online' && report.local.tlsFingerprint) {
+      advancedRows.push(
+        h('div', { className: 'pbb-runtimeRow', key: 'tls' },
+          h('div', { className: 'pbb-row' },
+            h('span', { className: 'pbb-label' }, t(props.t, 'local.tlsFingerprint')),
+            h('code', { className: 'pbb-token' }, report.local.tlsFingerprint))),
+      )
+    }
     advancedRows.push(
-      h('div', { className: 'pbb-field', key: 'proto' },
+      h('div', { className: 'pbb-runtimeRow', key: 'proto' },
         h('div', { className: 'pbb-row' },
           h('span', { className: 'pbb-label' }, t(props.t, 'advanced.protocolVersion')),
           h('span', { className: 'pbb-value' }, 'v' + String(report.protocolVersion)))),
-      h('div', { className: 'pbb-field', key: 'server' },
+      h('div', { className: 'pbb-runtimeRow', key: 'server' },
         h('div', { className: 'pbb-row' },
           h('span', { className: 'pbb-label' }, t(props.t, 'advanced.serverVersion')),
           h('span', { className: 'pbb-value' }, report.serverVersion))),
-      h('div', { className: 'pbb-field', key: 'path' },
+      h('div', { className: 'pbb-runtimeRow', key: 'path' },
         h('div', { className: 'pbb-row' },
           h('span', { className: 'pbb-label' }, t(props.t, 'advanced.identityPath')),
           h('span', { className: 'pbb-value' }, report.identityPath))),
-      h('div', { className: 'pbb-field', key: 'buffer' },
+      h('div', { className: 'pbb-runtimeRow', key: 'buffer' },
         h('div', { className: 'pbb-row' },
           h('span', { className: 'pbb-label' }, t(props.t, 'advanced.bufferMax')),
           h('span', { className: 'pbb-value' }, String(report.historyBufferMax) + t(props.t, 'advanced.frames')))),
@@ -384,37 +410,150 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
     if (typeof props.revokeDevice !== 'function') return
     if (typeof window !== 'undefined' && !window.confirm(t(props.t, 'devices.revokeConfirm', { name }))) return
     setDeviceBusy(deviceId)
+    setDeviceBusyAction('revoke')
     setDeviceMessage('')
     void props.revokeDevice(deviceId).then(() => {
       setDeviceMessage(t(props.t, 'devices.revoked'))
     }, (error: unknown) => {
       setDeviceMessage(t(props.t, 'devices.revokeFailed') + (error instanceof Error ? error.message : String(error)))
-    }).finally(() => setDeviceBusy(null))
+    }).finally(() => {
+      setDeviceBusy(null)
+      setDeviceBusyAction(null)
+    })
+  }
+
+  const deviceLabel = (device: { deviceName: string; customName?: string }): string =>
+    (device.customName ?? device.deviceName).trim() || t(props.t, 'devices.unnamed')
+
+  const beginDeviceRename = (device: { deviceId: string; deviceName: string; customName?: string }): void => {
+    setEditingDeviceId(device.deviceId)
+    setDeviceNameDraft(device.customName ?? device.deviceName)
+    setDeviceMessage('')
+  }
+
+  const cancelDeviceRename = (): void => {
+    setEditingDeviceId(null)
+    setDeviceNameDraft('')
+    setDeviceMessage('')
+  }
+
+  const saveDeviceName = (deviceId: string): void => {
+    if (typeof props.setDeviceName !== 'function') return
+    const normalized = deviceNameDraft.trim()
+    if (normalized.length > 64) {
+      setDeviceMessage(t(props.t, 'devices.nameInvalid'))
+      return
+    }
+    setDeviceBusy(deviceId)
+    setDeviceBusyAction('rename')
+    setDeviceMessage('')
+    void props.setDeviceName(deviceId, normalized === '' ? null : normalized).then(() => {
+      setDeviceMessage(normalized === '' ? t(props.t, 'devices.nameCleared') : t(props.t, 'devices.renamed'))
+      setEditingDeviceId(null)
+      setDeviceNameDraft('')
+    }, (error: unknown) => {
+      setDeviceMessage(t(props.t, 'devices.renameFailed') + (error instanceof Error ? error.message : String(error)))
+    }).finally(() => {
+      setDeviceBusy(null)
+      setDeviceBusyAction(null)
+    })
   }
 
   const visibleDevices = report?.devices.filter((device) => device.revokedAt === undefined) ?? []
   const deviceTable = visibleDevices.length > 0
-    ? h('table', { className: 'pbb-table' },
-        h('thead', null, h('tr', null,
-          h('th', null, t(props.t, 'devices.col.name')), h('th', null, t(props.t, 'devices.col.fingerprint')), h('th', null, t(props.t, 'devices.col.lastSeen')), h('th', null, t(props.t, 'devices.col.actions')))),
-        h('tbody', null, visibleDevices.map((d) =>
-          h('tr', { key: d.deviceId },
-            h('td', null, d.deviceName, h('div', { className: 'pbb-diag' }, d.appVersion)),
-            h('td', null, h('code', { className: 'pbb-token' }, d.fingerprint.slice(0, 12))),
-            h('td', null, new Date(d.lastSeenTs).toLocaleString()),
-            h('td', null, h('button', {
-              type: 'button',
-              className: 'pbb-action pbb-actionDangerGhost',
-              disabled: deviceBusy === d.deviceId,
-              'aria-label': deviceBusy === d.deviceId
-                ? t(props.t, 'devices.deleting', { name: d.deviceName })
-                : t(props.t, 'devices.revokeAria', { name: d.deviceName }),
-              onClick: () => revokeDevice(d.deviceId, d.deviceName),
-            },
-              deviceBusy === d.deviceId ? null : TrashIcon(),
-              deviceBusy === d.deviceId
-                ? h('span', { className: 'pbb-actionBusy' }, t(props.t, 'devices.deleting'))
-                : t(props.t, 'devices.revoke')))))))
+    ? h('div', { className: 'pbb-tableWrap' },
+        h('table', { className: 'pbb-table' },
+          h('thead', null, h('tr', null,
+            h('th', null, t(props.t, 'devices.col.name')),
+            h('th', null, t(props.t, 'devices.col.lastSeen')),
+            h('th', { className: 'pbb-tableActionHead' }, t(props.t, 'devices.col.actions')))),
+          h('tbody', null, visibleDevices.map((d) => {
+            const editing = editingDeviceId === d.deviceId
+            const busy = deviceBusy === d.deviceId
+            const label = deviceLabel(d)
+            return h('tr', { key: d.deviceId, 'aria-busy': busy },
+              h('td', null,
+                editing
+                  ? h('form', {
+                    className: 'pbb-deviceRenameForm',
+                    onSubmit: (event: { preventDefault: () => void }) => {
+                      event.preventDefault()
+                      saveDeviceName(d.deviceId)
+                    },
+                  },
+                    h('div', { className: 'pbb-deviceRenameControls' },
+                      h('input', {
+                        className: 'pbb-deviceNameInput',
+                        type: 'text',
+                        value: deviceNameDraft,
+                        maxLength: 64,
+                        autoFocus: true,
+                        disabled: busy,
+                        placeholder: t(props.t, 'devices.namePlaceholder'),
+                        'aria-label': t(props.t, 'devices.nameLabel'),
+                        onChange: (event: { currentTarget: { value: string } }) => setDeviceNameDraft(event.currentTarget.value),
+                        onKeyDown: (event: { key: string; preventDefault: () => void }) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault()
+                            saveDeviceName(d.deviceId)
+                          } else if (event.key === 'Escape') {
+                            event.preventDefault()
+                            cancelDeviceRename()
+                          }
+                        },
+                      }),
+                      h('div', { className: 'pbb-deviceRenameActions' },
+                        h('button', {
+                          type: 'submit',
+                          className: 'pbb-action pbb-deviceIconAction pbb-buttonPrimary',
+                          disabled: busy || deviceNameDraft.length > 64,
+                          title: busy ? t(props.t, 'devices.nameSaving') : t(props.t, 'devices.nameSave'),
+                          'aria-label': busy ? t(props.t, 'devices.nameSaving') : t(props.t, 'devices.nameSave'),
+                        }, busy ? h('span', { className: 'pbb-inlineSpinner', 'aria-hidden': true }) : CheckIcon()),
+                        h('button', {
+                          type: 'button',
+                          className: 'pbb-action pbb-deviceIconAction',
+                          disabled: busy,
+                          title: t(props.t, 'devices.nameCancel'),
+                          'aria-label': t(props.t, 'devices.nameCancel'),
+                          onClick: cancelDeviceRename,
+                        }, CloseIcon()))),
+                    deviceNameDraft.length > 64
+                      ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'devices.nameInvalid'))
+                      : null)
+                  : h('div', null,
+                    h('div', { className: 'pbb-deviceNameRow' },
+                      h('span', { className: 'pbb-deviceName' }, label),
+                      d.customName ? h('span', { className: 'pbb-badge' }, t(props.t, 'devices.customBadge')) : null),
+                    h('span', { className: 'pbb-deviceMeta' },
+                      d.appVersion,
+                      ' · ',
+                      h('code', null, d.fingerprint.slice(0, 12))))),
+              h('td', { className: 'pbb-lastSeen' }, new Date(d.lastSeenTs).toLocaleString()),
+              h('td', { className: 'pbb-tableActionCell' },
+                !editing
+                  ? h('button', {
+                    type: 'button',
+                    className: 'pbb-action',
+                    disabled: busy || editingDeviceId !== null || typeof props.setDeviceName !== 'function',
+                    'aria-label': t(props.t, 'devices.renameAria', { name: label }),
+                    onClick: () => beginDeviceRename(d),
+                  }, t(props.t, 'devices.rename'))
+                  : null,
+                h('button', {
+                  type: 'button',
+                  className: 'pbb-action pbb-actionDangerGhost',
+                  disabled: busy,
+                  'aria-label': busy && deviceBusyAction === 'revoke'
+                    ? t(props.t, 'devices.deleting', { name: label })
+                    : t(props.t, 'devices.revokeAria', { name: label }),
+                  onClick: () => revokeDevice(d.deviceId, label),
+                },
+                  busy && deviceBusyAction === 'revoke' ? null : TrashIcon(),
+                  busy && deviceBusyAction === 'revoke'
+                    ? h('span', { className: 'pbb-actionBusy' }, t(props.t, 'devices.deleting'))
+                    : t(props.t, 'devices.revoke'))))
+          }))))
     : h('p', { className: 'pbb-empty' }, t(props.t, 'devices.empty'))
 
   const switchTitle = t(props.t, 'master.title')
@@ -423,19 +562,82 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
         ? t(props.t, 'master.on')
         : t(props.t, 'master.off'))
     : t(props.t, 'master.loading')
+  const localMeta = report === null ? null : LOCAL_PHASE_META[report.local.phase]
+  const remoteMeta = report === null ? null : REMOTE_PHASE_META[report.remote.phase]
+  const connectionNeedsAttention = localMeta?.dot.includes('pbb-dotBad') === true
+    || remoteMeta?.dot.includes('pbb-dotBad') === true
+  const connectionOnline = localMeta?.dot.includes('pbb-dotOk') === true
+    || remoteMeta?.dot.includes('pbb-dotOk') === true
+  const serviceStatus = !switchReady
+    ? t(props.t, 'status.loading')
+    : !enabled
+      ? t(props.t, 'status.off')
+      : connectionNeedsAttention
+        ? t(props.t, 'status.attention')
+        : connectionOnline
+          ? t(props.t, 'status.ready')
+          : t(props.t, 'status.loading')
+  const serviceDot = !enabled
+    ? ''
+    : connectionNeedsAttention
+      ? ' pbb-dotBad'
+      : connectionOnline
+        ? ' pbb-dotOk'
+        : ' pbb-dotWarn'
+
+  const renderConnectionTile = (
+    key: string,
+    title: string,
+    description: string,
+    checked: boolean,
+    ready: boolean,
+    dot: string,
+    statusLabel: string,
+    onToggle: () => void,
+    extra: any = null,
+  ): any => h('div', { className: 'pbb-connectionTile', key },
+    h('div', { className: 'pbb-connectionTileHeader' },
+      h('span', { className: 'pbb-switchTitle pbb-dotRow' },
+        h('span', {
+          className: 'pbb-dot' + dot,
+          role: 'img',
+          'aria-label': statusLabel,
+          title: statusLabel,
+        }),
+        title),
+      h('button', {
+        type: 'button',
+        role: 'switch',
+        'aria-checked': checked,
+        'aria-label': title,
+        disabled: !ready,
+        className: 'pbb-switch' + (checked ? ' pbb-switchOn' : ''),
+        onClick: onToggle,
+      })),
+    h('span', { className: 'pbb-connectionState' }, statusLabel),
+    h('p', { className: 'pbb-connectionDescription' }, description),
+    extra,
+  )
 
   return h('div', { className: 'pbb-section' },
-    h('div', { className: 'pbb-row' },
-      h('h2', { className: 'pbb-title' }, 'DeepPilot'),
-      h('div', { style: { flex: '1' } }),
+    h('header', { className: 'pbb-pageHeader' },
+      h('div', null,
+        h('h2', { className: 'pbb-title' }, 'DeepPilot'),
+        h('p', { className: 'pbb-intro' }, t(props.t, 'meta.intro'))),
       h('button', {
+        type: 'button',
         className: 'pbb-refresh',
         onClick: () => { if (typeof props.refresh === 'function') props.refresh() },
-      }, t(props.t, 'meta.refresh')),
-    ),
-    h('p', { className: 'pbb-intro' }, t(props.t, 'meta.intro')),
-    h('div', { className: 'pbb-card' },
-      h('div', { className: 'pbb-switchRow' },
+      }, t(props.t, 'meta.refresh'))),
+    h('div', { className: 'pbb-card pbb-primaryCard' },
+      h('div', { className: 'pbb-cardHeader' },
+        h('div', null,
+          h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'connection.title')),
+          h('p', { className: 'pbb-cardDescription' }, t(props.t, 'connection.description'))),
+        h('span', { className: 'pbb-statusBadge' },
+          h('span', { className: 'pbb-dot' + serviceDot }),
+          serviceStatus)),
+      h('div', { className: 'pbb-masterRow' },
         h('div', { className: 'pbb-switchText' },
           h('span', { className: 'pbb-switchTitle' }, switchTitle),
           h('span', { className: 'pbb-switchDesc' }, switchDesc)),
@@ -453,79 +655,56 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
           },
         }),
       ),
-      h('div', { className: 'pbb-switchRow' },
-        h('div', { className: 'pbb-switchText' },
-          h('span', { className: 'pbb-switchTitle pbb-dotRow' },
-            h('span', {
-              className: 'pbb-dot' + (report !== null ? LOCAL_PHASE_META[report.local.phase].dot : ''),
-              role: 'img',
-              'aria-label': report !== null ? t(props.t, LOCAL_PHASE_META[report.local.phase].labelKey) : t(props.t, 'phase.unknown'),
-              title: report !== null ? t(props.t, LOCAL_PHASE_META[report.local.phase].labelKey) : undefined,
-            }),
-            t(props.t, 'local.title')),
-          h('span', { className: 'pbb-switchDesc' }, localSwitchReady
+      h('div', { className: 'pbb-connectionGrid' },
+        renderConnectionTile(
+          'local',
+          t(props.t, 'local.title'),
+          localSwitchReady
             ? (localEnabled ? t(props.t, 'local.on', { port: localPort }) : t(props.t, 'local.off'))
-            : t(props.t, 'master.loading')),
-          report !== null && report.local.message && report.local.phase === 'error'
-            ? h('p', { className: 'pbb-diag pbb-diagBad' }, report.local.message)
-            : null,
-          report !== null && report.local.tlsIdentityRegenerated === true
-            ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'local.tlsRegenerated'))
-            : null,
-          report !== null && report.local.phase === 'online' && report.local.tlsFingerprint
-            ? h('p', { className: 'pbb-diag' }, t(props.t, 'local.tlsFingerprint'), ' ', h('code', { className: 'pbb-token' }, report.local.tlsFingerprint))
-            : null,
-        ),
-        h('button', {
-          type: 'button',
-          role: 'switch',
-          'aria-checked': localEnabled,
-          'aria-label': t(props.t, 'local.title'),
-          disabled: !localSwitchReady,
-          className: 'pbb-switch' + (localEnabled ? ' pbb-switchOn' : ''),
-          onClick: () => {
+            : t(props.t, 'master.loading'),
+          localEnabled,
+          localSwitchReady,
+          localMeta?.dot ?? '',
+          localMeta === null ? t(props.t, 'phase.unknown') : t(props.t, localMeta.labelKey),
+          () => {
             if (typeof props.setDeepPilotLocalEnabled === 'function') props.setDeepPilotLocalEnabled(!localEnabled)
           },
-        }),
-      ),
-      h('div', { className: 'pbb-switchRow' },
-        h('div', { className: 'pbb-switchText' },
-          h('span', { className: 'pbb-switchTitle pbb-dotRow' },
-            h('span', {
-              className: 'pbb-dot' + (report !== null ? REMOTE_PHASE_META[report.remote.phase].dot : ''),
-              role: 'img',
-              'aria-label': report !== null ? t(props.t, REMOTE_PHASE_META[report.remote.phase].labelKey) : t(props.t, 'phase.unknown'),
-              title: report !== null ? t(props.t, REMOTE_PHASE_META[report.remote.phase].labelKey) : undefined,
-            }),
-            t(props.t, 'remote.title')),
-          h('span', { className: 'pbb-switchDesc' }, remoteSwitchReady
-            ? (remoteEnabled ? t(props.t, 'remote.on') : t(props.t, 'remote.off'))
-            : t(props.t, 'master.loading')),
-          report !== null && report.remote.phase === 'login_required'
-            && typeof report.remote.authURL === 'string' && report.remote.authURL.startsWith('https://')
-            ? h('div', { className: 'pbb-rowAction' },
-                h('a', { className: 'pbb-action', href: report.remote.authURL, target: '_blank', rel: 'noreferrer' }, t(props.t, 'remote.openAuth')))
-            : null,
-          report !== null && report.remote.message && (report.remote.phase === 'error' || report.remote.phase === 'unavailable')
-            ? h('p', { className: 'pbb-diag pbb-diagBad' }, report.remote.message)
-            : null,
+          h(Fragment, null,
+            report !== null && report.local.message && report.local.phase === 'error'
+              ? h('p', { className: 'pbb-diag pbb-diagBad' }, report.local.message)
+              : null,
+            report !== null && report.local.tlsIdentityRegenerated === true
+              ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'local.tlsRegenerated'))
+              : null),
         ),
-        h('button', {
-          type: 'button',
-          role: 'switch',
-          'aria-checked': remoteEnabled,
-          'aria-label': t(props.t, 'remote.title'),
-          disabled: !remoteSwitchReady,
-          className: 'pbb-switch' + (remoteEnabled ? ' pbb-switchOn' : ''),
-          onClick: () => {
+        renderConnectionTile(
+          'remote',
+          t(props.t, 'remote.title'),
+          remoteSwitchReady
+            ? (remoteEnabled ? t(props.t, 'remote.on') : t(props.t, 'remote.off'))
+            : t(props.t, 'master.loading'),
+          remoteEnabled,
+          remoteSwitchReady,
+          remoteMeta?.dot ?? '',
+          remoteMeta === null ? t(props.t, 'phase.unknown') : t(props.t, remoteMeta.labelKey),
+          () => {
             if (typeof props.setDeepPilotRemoteEnabled === 'function') {
               props.setDeepPilotRemoteEnabled(!remoteEnabled)
             }
           },
-        }),
-      ),
-      h('details', { className: 'pbb-help' },
-        h('summary', null, t(props.t, 'remote.advancedSettings')),
+          h(Fragment, null,
+            report !== null && report.remote.phase === 'login_required'
+              && typeof report.remote.authURL === 'string' && report.remote.authURL.startsWith('https://')
+              ? h('div', { className: 'pbb-rowAction' },
+                  h('a', { className: 'pbb-action pbb-buttonPrimary', href: report.remote.authURL, target: '_blank', rel: 'noreferrer' }, t(props.t, 'remote.openAuth')))
+              : null,
+            report !== null && report.remote.message && (report.remote.phase === 'error' || report.remote.phase === 'unavailable')
+              ? h('p', { className: 'pbb-diag pbb-diagBad' }, report.remote.message)
+              : null),
+        )),
+      report === null ? null : h('div', { className: 'pbb-statGrid' }, primaryRows),
+      h('details', { className: 'pbb-inlineDetails' },
+        h('summary', null, t(props.t, 'connection.optionsSummary')),
         h('div', { className: 'pbb-helpBody' },
           h('div', { className: 'pbb-limitRow pbb-limitNested' },
             h('div', { className: 'pbb-switchText' },
@@ -659,22 +838,22 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
       ),
     ),
     report === null ? null : h('div', { className: 'pbb-card' },
-      h('div', { className: 'pbb-field' },
-        h('div', { className: 'pbb-row' },
-          h('span', { className: 'pbb-label' }, t(props.t, 'pair.qrPanelTitle')),
-          pairingTarget === null
-            ? h('span', { className: 'pbb-value pbb-bad' }, t(props.t, 'pair.noAddress'))
-            : h('span', { className: 'pbb-tokenActions' },
-                h('span', { className: 'pbb-badge' }, pairingTarget.kind === 'public' ? t(props.t, 'pair.kind.public') : t(props.t, 'pair.kind.lan')),
-                h('button', {
-                  type: 'button',
-                  className: 'pbb-action',
-                  disabled: panel.busy || !report.pairingReady,
-                  onClick: () => {
-                    if (panel.open) hidePairingQR()
-                    else showPairingQR(pairingTarget)
-                  },
-                }, t(props.t, panel.action)))),
+      h('div', { className: 'pbb-cardHeader' },
+        h('div', null,
+          h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'pair.qrPanelTitle')),
+          h('p', { className: 'pbb-cardDescription' }, t(props.t, 'pair.description'))),
+        pairingTarget === null
+          ? h('span', { className: 'pbb-statusBadge pbb-bad' }, t(props.t, 'pair.noAddress'))
+          : h('button', {
+            type: 'button',
+            className: 'pbb-action pbb-buttonPrimary',
+            disabled: panel.busy || !report.pairingReady,
+            onClick: () => {
+              if (panel.open) hidePairingQR()
+              else showPairingQR(pairingTarget)
+            },
+          }, t(props.t, panel.action))),
+      h('div', { className: 'pbb-pairingBody' },
         pairingTarget === null
           ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'pair.noAddressHelp'))
           : null,
@@ -682,7 +861,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
           pairingTargets.map((target) => h('button', {
             type: 'button',
             key: target.host,
-            className: 'pbb-action' + (target.host === pairingTarget?.host ? ' pbb-actionSelected' : ''),
+            className: 'pbb-targetButton' + (target.host === pairingTarget?.host ? ' pbb-targetSelected' : ''),
             // A grant is single-use and cannot be recalled, so a switch clicked
             // while one is already being issued would spend a second code that
             // nothing ever displays. Wait for the in-flight issue instead.
@@ -723,7 +902,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
               h('code', { className: 'pbb-pairCode' }, panel.link),
               h('button', {
                 type: 'button',
-                className: 'pbb-action',
+                className: 'pbb-action pbb-buttonPrimary',
                 onClick: copyPairingInfo,
                 'data-testid': 'pairingInfoCopy',
               }, t(props.t, 'panel.tokenAction.copy')))),
@@ -736,32 +915,54 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
       ),
     ),
     h('div', { className: 'pbb-card' },
-      h('div', { className: 'pbb-field' },
-        primaryRows,
-        advancedRows.length > 0 ? h('details', { className: 'pbb-help' },
-          h('summary', null, t(props.t, 'advanced.summary')),
-          h('div', { className: 'pbb-helpBody' }, advancedRows),
-        ) : null,
-      ),
-    ),
-    h('div', { className: 'pbb-card' },
-      h('div', { className: 'pbb-field' },
-        h('div', { className: 'pbb-row' },
-          h('span', { className: 'pbb-label' }, t(props.t, 'push.relayTitle')),
-          h('span', { className: 'pbb-tokenActions' },
+      h('div', { className: 'pbb-cardHeader' },
+        h('div', null,
+          h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'devices.title')),
+          h('p', { className: 'pbb-cardDescription' }, t(props.t, 'devices.description'))),
+        h('span', { className: 'pbb-countBadge' }, String(visibleDevices.length))),
+      h('div', { className: 'pbb-cardBody' },
+        deviceMessage ? h('p', {
+          className: 'pbb-diag' + (deviceMessage.startsWith(t(props.t, 'devices.renameFailed')) || deviceMessage.startsWith(t(props.t, 'devices.revokeFailed')) ? ' pbb-diagBad' : ''),
+        }, deviceMessage) : null,
+        deviceTable)),
+    h('details', {
+      className: 'pbb-card pbb-disclosure',
+      open: troubleshootingOpen,
+      onToggle: (event: { currentTarget: { open: boolean } }) => setTroubleshootingOpen(event.currentTarget.open),
+    },
+      h('summary', null,
+        h('span', { className: 'pbb-disclosureTitle' }, t(props.t, 'troubleshooting.summary')),
+        h('span', { className: 'pbb-disclosureMeta' },
+          relayTestResult !== null
+            ? (relayTestResult.overall === 'ok' ? t(props.t, 'push.relayOk') : t(props.t, 'push.relayBad'))
+            : pushTestResult !== null
+              ? (pushTestResult.overall === 'sent' ? t(props.t, 'push.pushSent') : t(props.t, 'push.pushFailed'))
+              : t(props.t, 'troubleshooting.title'))),
+      h('div', { className: 'pbb-disclosureBody' },
+        h('div', { className: 'pbb-sectionIntro' },
+          h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'troubleshooting.title')),
+          h('p', { className: 'pbb-cardDescription' }, t(props.t, 'troubleshooting.description'))),
+        h('div', { className: 'pbb-testGrid' },
+          h('div', { className: 'pbb-testItem' },
+            h('div', { className: 'pbb-switchText' },
+              h('span', { className: 'pbb-testTitle' }, t(props.t, 'push.relayTitle')),
+              h('span', { className: 'pbb-testDescription' }, t(props.t, 'push.relayDefault'))),
             h('button', {
               type: 'button',
               className: 'pbb-action',
               disabled: relayTestBusy,
               onClick: runRelayTest,
-            }, relayTestBusy ? t(props.t, 'push.relayTesting') : t(props.t, 'push.testRelay')),
+            }, relayTestBusy ? t(props.t, 'push.relayTesting') : t(props.t, 'push.testRelay'))),
+          h('div', { className: 'pbb-testItem' },
+            h('div', { className: 'pbb-switchText' },
+              h('span', { className: 'pbb-testTitle' }, t(props.t, 'push.testPush')),
+              h('span', { className: 'pbb-testDescription' }, t(props.t, 'push.pushDefault'))),
             h('button', {
               type: 'button',
               className: 'pbb-action',
               disabled: pushTestBusy,
               onClick: sendPushTest,
-            }, pushTestBusy ? t(props.t, 'push.pushSending') : t(props.t, 'push.testPush'))),
-        ),
+            }, pushTestBusy ? t(props.t, 'push.pushSending') : t(props.t, 'push.testPush')))),
         relayTestError ? h('p', { className: 'pbb-diag pbb-diagBad' }, relayTestError) : null,
         relayTestResult === null
           ? h('p', { className: 'pbb-diag' }, t(props.t, 'push.relayDefault'))
@@ -796,29 +997,38 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
             ),
       ),
     ),
-    h('div', { className: 'pbb-card' },
-      h('div', { className: 'pbb-field' },
-        h('div', { className: 'pbb-row' },
-          h('span', { className: 'pbb-label' }, t(props.t, 'devices.title')),
-          h('span', { className: 'pbb-badge' }, String(visibleDevices.length)),
-        ),
-        deviceMessage ? h('p', { className: 'pbb-diag' }, deviceMessage) : null,
-        deviceTable,
-      ),
-    ),
-    report === null ? null : h('div', { className: 'pbb-versionFooter' },
-      h('span', null, 'DeepPilot v' + report.pluginVersion),
-      report.updateAvailable === true
-        ? h('a', {
-          href: typeof report.releaseUrl === 'string' && /^https:\/\//.test(report.releaseUrl)
-            ? report.releaseUrl
-            : 'https://github.com/Mars-Sea/dsh-deeppilot/releases',
-          target: '_blank',
-          rel: 'noreferrer',
-        }, t(props.t, 'update.badge'))
-        : null,
-    ),
-    diag.length > 0 ? h('p', { className: 'pbb-diag' + (failed ? ' pbb-diagBad' : '') },
-      t(props.t, 'diag.prefix') + diag.join(' | ')) : null,
+    report === null ? null : h('details', { className: 'pbb-card pbb-disclosure' },
+      h('summary', null,
+        h('span', { className: 'pbb-disclosureTitle' }, t(props.t, 'system.summary')),
+        h('span', { className: 'pbb-disclosureMeta' }, 'v' + report.pluginVersion)),
+      h('div', { className: 'pbb-disclosureBody' },
+        h('div', { className: 'pbb-sectionIntro' },
+          h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'system.title')),
+          h('p', { className: 'pbb-cardDescription' }, t(props.t, 'system.description'))),
+        h('div', { className: 'pbb-runtimeList' },
+          h('div', { className: 'pbb-runtimeRow' },
+            h('span', { className: 'pbb-label' }, 'DeepPilot'),
+            h('span', { className: 'pbb-value' }, 'v' + report.pluginVersion)),
+          advancedRows,
+          report.updateAvailable === true
+            ? h('div', { className: 'pbb-updateRow' },
+                h('span', null, t(props.t, 'update.badge')),
+                h('a', {
+                  className: 'pbb-action pbb-buttonPrimary',
+                  href: typeof report.releaseUrl === 'string' && /^https:\/\//.test(report.releaseUrl)
+                    ? report.releaseUrl
+                    : 'https://github.com/Mars-Sea/dsh-deeppilot/releases',
+                  target: '_blank',
+                  rel: 'noreferrer',
+                }, t(props.t, 'update.badge')))
+            : null))),
+    diag.length > 0 ? h('details', {
+      className: 'pbb-card pbb-disclosure pbb-diagnostics',
+      open: failed,
+    },
+      h('summary', null, t(props.t, 'diag.summary')),
+      h('div', { className: 'pbb-disclosureBody' },
+        h('p', { className: 'pbb-diag' + (failed ? ' pbb-diagBad' : '') },
+          t(props.t, 'diag.prefix') + diag.join(' | ')))) : null,
   )
 }

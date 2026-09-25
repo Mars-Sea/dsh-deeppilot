@@ -79,7 +79,7 @@ test('normalizeOptions(undefined) returns plain defaults', () => {
 })
 
 test('the dev schemastery really wraps volatile fields, and unwrap hides them', () => {
-  // The rc.1 schema carries { get() } references for volatile fields.
+  // The rc.2 schema carries { get() } references for volatile fields.
   const raw = Config({}) as { local?: unknown; enabled?: unknown }
   const isRef = (value: unknown): boolean =>
     value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function'

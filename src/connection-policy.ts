@@ -67,9 +67,11 @@ export function requiredScope(type: string): DeviceScope | undefined {
   if (type === 'c2s.approval.respond' || type === 'c2s.question.respond') return 'interactions.respond'
   if (type === 'c2s.liveActivity.register' || type === 'c2s.liveActivity.unregister') return 'notifications.register'
   if (type === 'c2s.push.register' || type === 'c2s.widget.push.register') return 'notifications.register'
+  if (type.startsWith('c2s.schedule.')) return 'schedule.manage'
   if (
     type === 'c2s.workspace.create' ||
     type === 'c2s.session.create' ||
+    type === 'c2s.session.fork' ||
     type === 'c2s.session.rename' ||
     type === 'c2s.session.archive' ||
     type === 'c2s.session.unarchive' ||
@@ -89,6 +91,7 @@ const PUSH_SCOPE_BY_TYPE: Partial<Record<string, DeviceScope>> = {
   's2c.pending.approval': 'interactions.respond',
   's2c.pending.question': 'interactions.respond',
   's2c.pending.cleared': 'interactions.respond',
+  's2c.schedule.changed': 'schedule.manage',
 }
 
 export function pushScopeFor(type: string, payload?: unknown): DeviceScope | undefined {
@@ -141,6 +144,19 @@ export function pendingResponseMessage(
     case 'not-pending': return kind + ' not pending'
     case 'bad-response': return kind + ' answer rejected by host: answer does not match the asked questions'
     case 'transport': return 'host connection failed while answering ' + kind
+  }
+}
+
+export function scheduleManagementErrorCode(
+  kind: 'unsupported' | 'not-found' | 'invalid' | 'conflict' | 'busy' | 'internal',
+): keyof typeof ERROR_CODES {
+  switch (kind) {
+    case 'unsupported': return 'E_UNSUPPORTED'
+    case 'not-found': return 'E_NOT_FOUND'
+    case 'invalid': return 'E_PROTOCOL'
+    case 'conflict':
+    case 'busy': return 'E_BUSY'
+    default: return 'E_INTERNAL'
   }
 }
 

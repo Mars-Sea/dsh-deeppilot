@@ -30,6 +30,7 @@ import {
   MAX_PROMPT_TEXT_CHARS,
   PRE_AUTH_FRAME_BYTES,
   managementErrorCode,
+  scheduleManagementErrorCode,
   pendingResponseErrorCode,
   pendingResponseMessage,
   sanitizeDeviceField,
@@ -330,6 +331,9 @@ export class BridgeConnection implements BridgeSink {
       this.fail(env.id, 'E_FORBIDDEN', `scope ${required} required`)
       return
     }
+    if (env.type.startsWith('c2s.schedule.') && !this.scopes.has('sessions.read')) {
+      return this.fail(env.id, 'E_FORBIDDEN', 'scope sessions.read required')
+    }
     const invalid = validateRequest(env.type, env.payload)
     if (invalid) return this.fail(env.id, 'E_PROTOCOL', invalid)
     switch (env.type) {
@@ -427,6 +431,26 @@ export class BridgeConnection implements BridgeSink {
         })
         if (!newId) return this.fail(env.id, 'E_INTERNAL', 'session create failed')
         this.send('s2c.ack', { sessionId: newId }, env.id)
+        return
+      }
+      case 'c2s.session.fork': {
+        const p = env.payload as { sessionId?: string; atSeq?: number; clientRequestId?: string }
+        if (!this.deps.bridge.capabilities.sessionFork) {
+          return this.fail(env.id, 'E_UNSUPPORTED', 'session fork unavailable on this host version')
+        }
+        const result = await this.deps.bridge.forkSession(this.deviceId!, {
+          sessionId: p.sessionId!,
+          clientRequestId: p.clientRequestId!,
+          ...(p.atSeq !== undefined ? { atSeq: p.atSeq } : {}),
+        })
+        if (!result.ok) return this.fail(env.id, scheduleManagementErrorCode(result.kind), result.message)
+        this.send('s2c.session.forked', {
+          clientRequestId: p.clientRequestId!,
+          sourceSessionId: p.sessionId!,
+          sessionId: result.value.sessionId,
+          ...(p.atSeq !== undefined ? { atSeq: p.atSeq } : {}),
+          ...(result.replayed ? { replayed: true } : {}),
+        }, env.id)
         return
       }
       case 'c2s.session.rename': {
@@ -574,6 +598,61 @@ export class BridgeConnection implements BridgeSink {
       case 'c2s.session.delivery': {
         const p = env.payload as { sessionId: string; clientSendId: string }
         this.send('s2c.ack', this.deps.bridge.promptDeliveries.lookup(this.deviceId!, p.sessionId, p.clientSendId), env.id)
+        return
+      }
+      case 'c2s.schedule.list': {
+        const p = env.payload as { sessionId: string }
+        if (!this.deps.bridge.capabilities.schedules) return this.fail(env.id, 'E_UNSUPPORTED', 'schedules unavailable on this host version')
+        const result = await this.deps.bridge.listSchedules(p.sessionId)
+        if (!result.ok) return this.fail(env.id, scheduleManagementErrorCode(result.kind), result.message)
+        this.send('s2c.schedule.snapshot', { sessionId: p.sessionId, tasks: result.value }, env.id)
+        return
+      }
+      case 'c2s.schedule.history': {
+        const p = env.payload as { sessionId: string; id: string; limit: number; before?: string }
+        if (!this.deps.bridge.capabilities.schedules) return this.fail(env.id, 'E_UNSUPPORTED', 'schedules unavailable on this host version')
+        const result = await this.deps.bridge.scheduleHistory(p.sessionId, p.id, p.limit, p.before)
+        if (!result.ok) return this.fail(env.id, scheduleManagementErrorCode(result.kind), result.message)
+        this.send('s2c.schedule.history', { sessionId: p.sessionId, history: result.value }, env.id)
+        return
+      }
+      case 'c2s.schedule.create': {
+        if (!this.deps.bridge.capabilities.schedules) return this.fail(env.id, 'E_UNSUPPORTED', 'schedules unavailable on this host version')
+        const p = env.payload as Record<string, unknown> & { sessionId: string; clientRequestId: string; title: string; prompt: string }
+        const result = await this.deps.bridge.createSchedule(this.deviceId!, p)
+        if (!result.ok) return this.fail(env.id, scheduleManagementErrorCode(result.kind), result.message)
+        this.send('s2c.schedule.updated', {
+          clientRequestId: p.clientRequestId,
+          sessionId: p.sessionId,
+          task: result.value,
+          ...(result.replayed ? { replayed: true } : {}),
+        }, env.id)
+        return
+      }
+      case 'c2s.schedule.update': {
+        if (!this.deps.bridge.capabilities.schedules) return this.fail(env.id, 'E_UNSUPPORTED', 'schedules unavailable on this host version')
+        const p = env.payload as Record<string, unknown> & { sessionId: string; id: string; clientRequestId: string; expected: unknown }
+        const result = await this.deps.bridge.updateSchedule(this.deviceId!, p)
+        if (!result.ok) return this.fail(env.id, scheduleManagementErrorCode(result.kind), result.message)
+        this.send('s2c.schedule.updated', {
+          clientRequestId: p.clientRequestId,
+          sessionId: p.sessionId,
+          task: result.value,
+          ...(result.replayed ? { replayed: true } : {}),
+        }, env.id)
+        return
+      }
+      case 'c2s.schedule.delete': {
+        if (!this.deps.bridge.capabilities.schedules) return this.fail(env.id, 'E_UNSUPPORTED', 'schedules unavailable on this host version')
+        const p = env.payload as { sessionId: string; id: string; clientRequestId: string }
+        const result = await this.deps.bridge.deleteSchedule(this.deviceId!, p)
+        if (!result.ok) return this.fail(env.id, scheduleManagementErrorCode(result.kind), result.message)
+        this.send('s2c.schedule.updated', {
+          clientRequestId: p.clientRequestId,
+          sessionId: p.sessionId,
+          deleted: true,
+          ...(result.replayed ? { replayed: true } : {}),
+        }, env.id)
         return
       }
       case 'c2s.session.sendPrompt': {

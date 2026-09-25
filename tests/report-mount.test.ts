@@ -39,6 +39,9 @@ const reportRemote: ReportRemote = {
   async revokeDevice() {
     return { ok: true, value: true }
   },
+  async setDeviceName(_deviceId, customName) {
+    return { ok: true, value: customName }
+  },
   async setDeviceScopes(_deviceId, scopes) {
     return { ok: true, value: scopes }
   },

@@ -32,7 +32,7 @@ interface ClientTransportHooksLike {
   ownsHost: true
 }
 
-/** The rc.1 Client sends relative RPC paths to its in-process carrier. */
+/** The rc.2 Client sends relative RPC paths to its in-process carrier. */
 export function inProcessRemoteRequest(input: string, init: RequestInit): Request {
   // The shared Fetch handler routes by pathname and never performs a network
   // request. Node's Request still requires an absolute URL for relative paths.

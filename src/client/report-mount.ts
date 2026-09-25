@@ -10,6 +10,8 @@ export interface ReportRemote {
   report(): Promise<RemoteResult<DeepPilotReport>>
   beginPairing(): Promise<RemoteResult<PairingGrantSnapshot>>
   revokeDevice(deviceId: string): Promise<RemoteResult<boolean>>
+  /** Optional so a newer client can degrade against an older host. */
+  setDeviceName?(deviceId: string, customName: string | null): Promise<RemoteResult<string | null>>
   setDeviceScopes(deviceId: string, scopes: DeviceScope[]): Promise<RemoteResult<DeviceScope[]>>
   /** Optional so an older host never breaks a newer client (and vice versa). */
   testRelay?(): Promise<RemoteResult<RelayTestResult>>

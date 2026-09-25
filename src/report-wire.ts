@@ -21,7 +21,10 @@ export interface PairingGrantSnapshot {
 /** One paired device row in the report. */
 export interface ReportDevice {
   deviceId: string
+  /** Effective operator-facing name: customName when set, otherwise the app-reported name. */
   deviceName: string
+  /** User-assigned label; absent means the app-reported name is in use. */
+  customName?: string
   appVersion: string
   firstSeenTs: number
   lastSeenTs: number
@@ -125,6 +128,7 @@ export const REPORT_ENDPOINT = 'deeppilot/report'
 
 export const BEGIN_PAIRING_ENDPOINT = 'deeppilot/beginPairing'
 export const REVOKE_DEVICE_ENDPOINT = 'deeppilot/revokeDevice'
+export const SET_DEVICE_NAME_ENDPOINT = 'deeppilot/setDeviceName'
 export const SET_DEVICE_SCOPES_ENDPOINT = 'deeppilot/setDeviceScopes'
 
 function reject(field: string): never {
@@ -173,9 +177,18 @@ function parseDevice(value: unknown): ReportDevice {
     if (environment !== 'development' && environment !== 'production') reject('device.apns.environment')
     apns = { environment, updatedAt: int(a, 'updatedAt', 'device.apns.updatedAt') }
   }
+  const customName = s.customName
+  if (customName !== undefined && (
+    typeof customName !== 'string' ||
+    customName.length === 0 ||
+    customName.length > 64 ||
+    customName.trim() !== customName ||
+    /[\u0000-\u001f\u007f-\u009f]/u.test(customName)
+  )) reject('device.customName')
   return {
     deviceId: str(s, 'deviceId', 'device.deviceId'),
     deviceName: str(s, 'deviceName', 'device.deviceName'),
+    ...(typeof customName === 'string' ? { customName } : {}),
     appVersion: str(s, 'appVersion', 'device.appVersion'),
     firstSeenTs: int(s, 'firstSeenTs', 'device.firstSeenTs'),
     lastSeenTs: int(s, 'lastSeenTs', 'device.lastSeenTs'),
@@ -358,6 +371,16 @@ const deviceIdSchema: TypertSchema<string> = {
   },
 }
 
+const customNameSchema: TypertSchema<string | null> = {
+  parse(value: unknown): string | null {
+    if (value === null) return null
+    if (typeof value !== 'string') reject('customName')
+    const trimmed = value.trim()
+    if (trimmed.length === 0 || trimmed.length > 64 || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) reject('customName')
+    return trimmed
+  },
+}
+
 const scopesSchema: TypertSchema<DeviceScope[]> = {
   parse(value: unknown): DeviceScope[] {
     if (!Array.isArray(value) || value.some((scope) => typeof scope !== 'string' || !DEVICE_SCOPES.includes(scope as DeviceScope))) {
@@ -374,7 +397,7 @@ const booleanSchema: TypertSchema<boolean> = {
   },
 }
 
-/** The rc.1 Gateway materializes each strict codec through `create()`. */
+/** The rc.2 Gateway materializes each strict codec through `create()`. */
 function strictCodec<T>(typeSymbol: string, schema: TypertSchema<T>): TypertCodec {
   return {
     mode: 'strict',
@@ -432,6 +455,25 @@ export const REVOKE_DEVICE_DESCRIPTOR: InvocationDescriptor = {
   result: strictCodec(`${REPORT_REMOTE_PACKAGE}#Boolean`, booleanSchema),
 }
 
+export const SET_DEVICE_NAME_DESCRIPTOR: InvocationDescriptor = {
+  id: `${REPORT_REMOTE_PACKAGE}#${SET_DEVICE_NAME_ENDPOINT}`,
+  service: 'deeppilotReport',
+  namespace: 'deeppilot',
+  method: 'setDeviceName',
+  invocation: { kind: 'direct' },
+  parameters: [
+    {
+      name: 'deviceId', wire: 'deviceId', source: 'json',
+      codec: strictCodec(`${REPORT_REMOTE_PACKAGE}#DeviceId`, deviceIdSchema),
+    },
+    {
+      name: 'customName', wire: 'customName', source: 'json',
+      codec: strictCodec(`${REPORT_REMOTE_PACKAGE}#CustomDeviceName`, customNameSchema),
+    },
+  ],
+  result: strictCodec(`${REPORT_REMOTE_PACKAGE}#CustomDeviceName`, customNameSchema),
+}
+
 export const SET_DEVICE_SCOPES_DESCRIPTOR: InvocationDescriptor = {
   id: `${REPORT_REMOTE_PACKAGE}#${SET_DEVICE_SCOPES_ENDPOINT}`,
   service: 'deeppilotReport',
@@ -475,6 +517,7 @@ const INVOCATION_DESCRIPTORS = [
   REPORT_DESCRIPTOR,
   BEGIN_PAIRING_DESCRIPTOR,
   REVOKE_DEVICE_DESCRIPTOR,
+  SET_DEVICE_NAME_DESCRIPTOR,
   SET_DEVICE_SCOPES_DESCRIPTOR,
   TEST_RELAY_DESCRIPTOR,
   TEST_PUSH_DESCRIPTOR,

@@ -74,6 +74,73 @@ export interface SessionRenamePayload { sessionId: string; title: string }
 export interface SessionArchivePayload { sessionId: string }
 export interface SessionCancelPayload { sessionId: string }
 export interface SessionCreatePayload { workspaceId?: string; cwd?: string }
+export interface SessionForkPayload { clientRequestId: string; sessionId: string; atSeq?: number }
+export interface SessionForkedPayload { clientRequestId: string; sourceSessionId: string; sessionId: string; atSeq?: number; replayed?: boolean }
+export type ScheduleKind = 'after' | 'at' | 'every' | 'daily' | 'weekly' | 'cron'
+export interface ScheduleTaskView {
+  id: string
+  kind: ScheduleKind
+  title: string
+  prompt: string
+  scheduledAt: string
+  state: 'scheduled' | 'overdue'
+  deliveryMode: 'host'
+  afterSeconds?: number
+  everySeconds?: number
+  time?: string
+  timeZone?: string
+  weekdays?: number[]
+  expression?: string
+}
+export interface ScheduleListPayload { sessionId: string }
+export interface ScheduleHistoryPayload { sessionId: string; id: string; limit: number; before?: string }
+export interface ScheduleCreatePayload {
+  clientRequestId: string
+  sessionId: string
+  title: string
+  prompt: string
+  after_seconds?: number
+  at?: string | { date: string; time: string; time_zone: string }
+  every_seconds?: number
+  daily?: { time: string; time_zone: string }
+  weekly?: { time: string; time_zone: string; weekdays: number[] }
+  cron?: { expression: string; time_zone: string }
+}
+export interface ScheduleUpdatePayload {
+  clientRequestId: string
+  sessionId: string
+  id: string
+  expected: ScheduleTaskView
+  title?: string
+  prompt?: string
+  change?: { kind: 'at' | 'every' | 'daily' | 'weekly' | 'cron'; [key: string]: unknown }
+}
+export interface ScheduleDeletePayload { clientRequestId: string; sessionId: string; id: string }
+export interface ScheduleSnapshotPayload { sessionId: string; tasks: ScheduleTaskView[] }
+export interface ScheduleHistoryRecord {
+  scheduledAt: string
+  deliveredAt: string
+  messageId: string
+  prompt?: string
+}
+export interface ScheduleHistoryPayloadResult {
+  sessionId: string
+  history: {
+    id: string
+    records: ScheduleHistoryRecord[]
+    earlierRecordsUnavailable: boolean
+    earlierRecordsPruned?: boolean
+    retention: { days: number; records: number }
+    nextBefore?: string
+  }
+}
+export interface ScheduleUpdatedPayload {
+  clientRequestId: string
+  sessionId: string
+  task?: ScheduleTaskView
+  deleted?: boolean
+  replayed?: boolean
+}
 export interface DirectoryListPayload { path?: string }
 export interface WorkspaceCreatePayload { path: string }
 export interface PromptImagePayload { mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string; name?: string }
@@ -131,11 +198,15 @@ export interface WelcomeCapabilities {
   notifyAllCategories?: boolean
   models: boolean
   sessionManagement: boolean
+  /** Bridge can fork a session at an exact event boundary. */
+  sessionFork?: boolean
   /** Bridge can list archived sessions and restore them
    * (c2s.sessions.archived / c2s.session.unarchive). Absent on hosts whose
    * workspace controller predates unarchiveSession. */
   sessionRestore?: boolean
   projectSelection: boolean
+  /** Host exposes the optional DSH Schedule service. */
+  schedules?: boolean
   /** Bridge has APNs configured; clients may send c2s.push.register. */
   push?: boolean
   widgetPush?: boolean

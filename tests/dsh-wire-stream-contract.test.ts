@@ -4,7 +4,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { DshApiProxy } from '../src/dsh-api-proxy.ts'
 import { inProcessRemoteRequest } from '../src/dsh-remote-interactions.ts'
 
-/** The rc.1 Gateway requires the cancellation signal in argument five. */
+/** The rc.2 Gateway requires the cancellation signal in argument five. */
 
 interface HostBinding {
   endpoint: unknown
@@ -90,7 +90,7 @@ async function openMuxOnce(gateway: unknown): Promise<HostBinding> {
   return bindings[0]!
 }
 
-test('the rc.1 Host receives the cancellation signal as its fifth argument', async () => {
+test('the rc.2 Host receives the cancellation signal as its fifth argument', async () => {
   const binding = await openMuxOnce(rc1Gateway([]))
 
   assert.equal(binding.endpoint, '$events')
@@ -101,7 +101,7 @@ test('the rc.1 Host receives the cancellation signal as its fifth argument', asy
   assert.equal(binding.peer, undefined, 'the in-process carrier speaks for the operator')
 })
 
-test('resident Client Fetch accepts the rc.1 relative RPC path', async () => {
+test('resident Client Fetch accepts the rc.2 relative RPC path', async () => {
   const body = JSON.stringify({ method: '$events/result' })
   const request = inProcessRemoteRequest('api/$events/result', {
     method: 'POST',

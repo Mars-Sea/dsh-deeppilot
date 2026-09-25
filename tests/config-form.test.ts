@@ -81,7 +81,7 @@ test('adaptConfigForm forwards subscribe to the form', () => {
   assert.equal(ticks, 1)
 })
 
-test('bindConfigForm binds the rc.1 config form', () => {
+test('bindConfigForm binds the rc.2 config form', () => {
   const form = fakeForm()
   const scope = bindConfigForm({ get: () => ({ get: () => form.face }) })
   assert.ok(scope)

@@ -15,6 +15,8 @@ import type {
   PhoneSessionRow,
   PromptArgs,
   PushOutlet,
+  ScheduleHistoryViewLike,
+  ScheduleTaskViewLike,
   SessionEventLike,
   SessionManagementResult,
   ModelBridgeResult,
@@ -33,6 +35,7 @@ import {
   projectHistory,
 } from './host-event-projection.ts'
 import { documentPromptBlock, type PromptDocument } from './document-payload.ts'
+import { openMutationJournal, type MutationJournal } from './mutation-journal.ts'
 import { pushScopeFor } from './connection-policy.ts'
 
 export {
@@ -58,6 +61,10 @@ interface PendingQuestion {
   sessionId: string
   questions: unknown
 }
+
+export type ScheduleBridgeResult<T> =
+  | { ok: true; value: T; replayed?: boolean }
+  | { ok: false; kind: 'unsupported' | 'not-found' | 'invalid' | 'conflict' | 'busy' | 'internal'; message: string; replayed?: boolean }
 
 const MAX_RING_DEFAULT = 2000;
 
@@ -88,12 +95,20 @@ export class HostBridge {
   private disposed = false
 
   readonly promptDeliveries: PromptDeliveryJournal
+  readonly scheduleMutations: MutationJournal
+  readonly forkMutations: MutationJournal
 
   constructor(
     private readonly apiProxy: ApiProxyLike,
     private readonly historyBufferMax: number = MAX_RING_DEFAULT,
     deliveryJournalPath?: string,
-  ) { this.promptDeliveries = openDeliveryJournal(deliveryJournalPath) }
+    scheduleJournalPath?: string,
+    forkJournalPath?: string,
+  ) {
+    this.promptDeliveries = openDeliveryJournal(deliveryJournalPath)
+    this.scheduleMutations = openMutationJournal(scheduleJournalPath)
+    this.forkMutations = openMutationJournal(forkJournalPath, true)
+  }
 
   private pushOutlet: PushOutlet | undefined;
   private widgetFingerprint = ''
@@ -119,9 +134,12 @@ export class HostBridge {
         typeof this.apiProxy.sessions.selectModel === 'function',
       sessionManagement: typeof this.apiProxy.sessions.rename === 'function' &&
         typeof this.apiProxy.workspace?.archiveSession === 'function',
+      sessionFork: typeof this.apiProxy.sessions.fork === 'function',
       sessionRestore: typeof this.apiProxy.workspace?.unarchiveSession === 'function',
       projectSelection: typeof this.apiProxy.workspace?.list === 'function' &&
         typeof this.apiProxy.workspace?.create === 'function',
+      schedules: typeof this.apiProxy.schedule?.list === 'function' &&
+        typeof this.apiProxy.schedule?.create === 'function',
       push: this.pushOutlet?.isAvailable() === true,
       widgetPush: true,
       liveActivityPush: true,
@@ -370,6 +388,9 @@ export class HostBridge {
         void this.refreshSummaries();
         break;
       }
+      case 'host/schedule-changed':
+        this.record('s2c.schedule.changed', {})
+        break
       case 'host/session-status': {
         const p = frame as { sessionId?: string; running?: boolean };
         const row = this.summaries.get(String(p.sessionId));
@@ -1060,6 +1081,155 @@ export class HostBridge {
     }
   }
 
+  async forkSession(
+    deviceId: string,
+    payload: { clientRequestId: string; sessionId: string; atSeq?: number },
+  ): Promise<ScheduleBridgeResult<{ sessionId: string }>> {
+    const fork = this.apiProxy.sessions.fork
+    if (typeof fork !== 'function') return { ok: false, kind: 'unsupported', message: 'session fork unavailable on this host version' }
+    if (!this.summaries.has(payload.sessionId)) return { ok: false, kind: 'not-found', message: 'session not found' }
+    if (this.archivedSessionIds.has(payload.sessionId) || this.subagentSessionIds.has(payload.sessionId)) {
+      return { ok: false, kind: 'invalid', message: 'archived or subagent sessions cannot be forked' }
+    }
+    const result = await this.forkMutations.dispatch(
+      deviceId,
+      payload.clientRequestId,
+      { sessionId: payload.sessionId, ...(payload.atSeq !== undefined ? { atSeq: payload.atSeq } : {}) },
+      async () => {
+        const response = await fork.call(this.apiProxy.sessions, {
+          rpcId: randomUUID(),
+          payload: { sessionId: payload.sessionId, ...(payload.atSeq !== undefined ? { atSeq: payload.atSeq } : {}) },
+        })
+        if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'session fork returned no result' }
+        if (!response.result.ok) return scheduleMutationError(response.result.error)
+        return { ok: true, value: { sessionId: response.result.value.sessionId } }
+      },
+    )
+    if (result.ok) {
+      await this.refreshSummaries()
+      return { ok: true, value: result.value as { sessionId: string }, replayed: result.replayed }
+    }
+    return { ok: false, kind: scheduleErrorKind(result.code), message: result.message ?? result.code, replayed: result.replayed }
+  }
+
+  async listSchedules(sessionId: string): Promise<ScheduleBridgeResult<ScheduleTaskViewLike[]>> {
+    const schedule = this.apiProxy.schedule
+    if (schedule === undefined) return { ok: false, kind: 'unsupported', message: 'schedules unavailable on this host version' }
+    try {
+      const response = await schedule.list({ rpcId: randomUUID(), payload: { sessionId } })
+      if (!response.result) return { ok: false, kind: 'internal', message: 'schedule list returned no result' }
+      if (!response.result.ok) return scheduleHostError(response.result.error)
+      return { ok: true, value: response.result.value.tasks }
+    } catch (error) {
+      return { ok: false, kind: 'internal', message: String(error) }
+    }
+  }
+
+  async scheduleHistory(
+    sessionId: string,
+    id: string,
+    limit: number,
+    before?: string,
+  ): Promise<ScheduleBridgeResult<ScheduleHistoryViewLike>> {
+    const schedule = this.apiProxy.schedule
+    if (schedule === undefined) return { ok: false, kind: 'unsupported', message: 'schedules unavailable on this host version' }
+    try {
+      const response = await schedule.history({
+        rpcId: randomUUID(),
+        payload: { sessionId, id, limit, ...(before !== undefined ? { before } : {}) },
+      })
+      if (!response.result) return { ok: false, kind: 'internal', message: 'schedule history returned no result' }
+      if (!response.result.ok) return scheduleHostError(response.result.error)
+      return { ok: true, value: response.result.value.history }
+    } catch (error) {
+      return { ok: false, kind: 'internal', message: String(error) }
+    }
+  }
+
+  async createSchedule(
+    deviceId: string,
+    payload: Record<string, unknown> & { sessionId: string; clientRequestId: string; title: string; prompt: string },
+  ): Promise<ScheduleBridgeResult<ScheduleTaskViewLike>> {
+    const schedule = this.apiProxy.schedule
+    if (schedule === undefined) return { ok: false, kind: 'unsupported', message: 'schedules unavailable on this host version' }
+    const { clientRequestId, sessionId, ...request } = payload
+    const result = await this.scheduleMutations.dispatch(
+      deviceId,
+      clientRequestId,
+      { sessionId, request },
+      async () => {
+        const response = await schedule.create({ rpcId: randomUUID(), payload: { sessionId, ...request } })
+        if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule create returned no result' }
+        if (!response.result.ok) return scheduleMutationError(response.result.error)
+        return { ok: true, value: response.result.value }
+      },
+    )
+    if (result.ok) {
+      this.record('s2c.schedule.changed', {})
+      return { ok: true, value: result.value as ScheduleTaskViewLike, replayed: result.replayed }
+    }
+    return { ok: false, kind: scheduleErrorKind(result.code), message: result.message ?? result.code, replayed: result.replayed }
+  }
+
+  async updateSchedule(
+    deviceId: string,
+    payload: Record<string, unknown> & { sessionId: string; id: string; clientRequestId: string; expected: unknown },
+  ): Promise<ScheduleBridgeResult<ScheduleTaskViewLike>> {
+    const schedule = this.apiProxy.schedule
+    if (schedule === undefined) return { ok: false, kind: 'unsupported', message: 'schedules unavailable on this host version' }
+    const { clientRequestId, ...request } = payload
+    const result = await this.scheduleMutations.dispatch(
+      deviceId,
+      clientRequestId,
+      request,
+      async () => {
+        const response = await schedule.update({ rpcId: randomUUID(), payload: request })
+        if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule update returned no result' }
+        if (!response.result.ok) return scheduleMutationError(response.result.error)
+        const value = response.result.value
+        if (value.updated !== true || value.record === undefined) {
+          return { ok: false, code: scheduleCodeToError(value.code), message: value.code ?? 'schedule update rejected' }
+        }
+        return { ok: true, value: value.record }
+      },
+    )
+    if (result.ok) {
+      this.record('s2c.schedule.changed', {})
+      return { ok: true, value: result.value as ScheduleTaskViewLike, replayed: result.replayed }
+    }
+    return { ok: false, kind: scheduleErrorKind(result.code), message: result.message ?? result.code, replayed: result.replayed }
+  }
+
+  async deleteSchedule(
+    deviceId: string,
+    payload: { sessionId: string; id: string; clientRequestId: string },
+  ): Promise<ScheduleBridgeResult<{ id: string; deleted: true }>> {
+    const schedule = this.apiProxy.schedule
+    if (schedule === undefined) return { ok: false, kind: 'unsupported', message: 'schedules unavailable on this host version' }
+    const result = await this.scheduleMutations.dispatch(
+      deviceId,
+      payload.clientRequestId,
+      { sessionId: payload.sessionId, id: payload.id },
+      async () => {
+        const response = await schedule.delete({
+          rpcId: randomUUID(),
+          payload: { sessionId: payload.sessionId, id: payload.id },
+        })
+        if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule delete returned no result' }
+        if (!response.result.ok) return scheduleMutationError(response.result.error)
+        if (response.result.value.deleted !== true) {
+          return { ok: false, code: 'E_NOT_FOUND', message: response.result.value.code ?? 'schedule not found' }
+        }
+        return { ok: true, value: { id: response.result.value.id, deleted: true as const } }
+      },
+    )
+    if (result.ok) {
+      this.record('s2c.schedule.changed', {})
+      return { ok: true, value: result.value as { id: string; deleted: true }, replayed: result.replayed }
+    }
+    return { ok: false, kind: scheduleErrorKind(result.code), message: result.message ?? result.code, replayed: result.replayed }
+  }
+
   async sendPrompt(
     sessionId: string,
     text: string,
@@ -1408,6 +1578,60 @@ function hostModelError(error: { code: string; message?: string }): ModelBridgeR
       return { ok: false, kind: 'unavailable', message }
     default:
       return { ok: false, kind: 'internal', message }
+  }
+}
+
+function scheduleHostError(error: { code: string; message?: string }): ScheduleBridgeResult<never> {
+  const message = error.message ?? error.code
+  switch (error.code) {
+    case 'schedule_not_found':
+    case 'delivery_cursor_not_found':
+      return { ok: false, kind: 'not-found', message }
+    case 'schedule_conflict':
+      return { ok: false, kind: 'conflict', message }
+    case 'invalid_prompt':
+    case 'invalid_selector':
+    case 'invalid_rule':
+    case 'invalid_time_zone':
+    case 'not_future':
+    case 'time_out_of_range':
+    case 'frequency_too_high':
+      return { ok: false, kind: 'invalid', message }
+    case 'schedule_ended':
+      return { ok: false, kind: 'invalid', message }
+    default:
+      return { ok: false, kind: 'internal', message }
+  }
+}
+
+function scheduleMutationError(error: { code: string; message?: string }): { ok: false; code: 'E_PROTOCOL' | 'E_NOT_FOUND' | 'E_BUSY' | 'E_UNSUPPORTED' | 'E_INTERNAL'; message: string } {
+  const result = scheduleHostError(error)
+  if (result.ok) return { ok: false, code: 'E_INTERNAL', message: 'unexpected schedule result' }
+  return {
+    ok: false,
+    code: result.kind === 'not-found' ? 'E_NOT_FOUND'
+      : result.kind === 'conflict' ? 'E_BUSY'
+        : result.kind === 'invalid' ? 'E_PROTOCOL'
+          : result.kind === 'unsupported' ? 'E_UNSUPPORTED' : 'E_INTERNAL',
+    message: result.message,
+  }
+}
+
+function scheduleCodeToError(code: string | undefined): 'E_PROTOCOL' | 'E_NOT_FOUND' | 'E_BUSY' | 'E_UNSUPPORTED' | 'E_INTERNAL' {
+  if (code === 'schedule_not_found') return 'E_NOT_FOUND'
+  if (code === 'schedule_conflict') return 'E_BUSY'
+  if (code === 'schedule_ended') return 'E_PROTOCOL'
+  if (code === 'invalid_prompt' || code === 'invalid_selector' || code === 'invalid_rule' || code === 'invalid_time_zone' || code === 'not_future' || code === 'time_out_of_range' || code === 'frequency_too_high') return 'E_PROTOCOL'
+  return 'E_INTERNAL'
+}
+
+function scheduleErrorKind(code: string): 'unsupported' | 'not-found' | 'invalid' | 'conflict' | 'busy' | 'internal' {
+  switch (code) {
+    case 'E_NOT_FOUND': return 'not-found'
+    case 'E_BUSY': return 'conflict'
+    case 'E_PROTOCOL': return 'invalid'
+    case 'E_UNSUPPORTED': return 'unsupported'
+    default: return 'internal'
   }
 }
 

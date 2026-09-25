@@ -6,7 +6,7 @@ import { HostBridge, projectHistory } from '../src/host-bridge.ts'
 import type { BridgeSink } from '../src/host-bridge.ts'
 import { unwrapStreamItem } from '../src/host-api.ts'
 
-test('rc.1 raw history opens through the stable bridge shape', async () => {
+test('rc.2 raw history opens through the stable bridge shape', async () => {
   const rawEvents = [
     {
       type: 'user/message',
@@ -69,7 +69,7 @@ test('rc.1 raw history opens through the stable bridge shape', async () => {
   bridge.dispose()
 })
 
-test('rc.1 history adapter preserves sequence pagination while wrapping events', async () => {
+test('rc.2 history adapter preserves sequence pagination while wrapping events', async () => {
   const rawEvents = [
     { type: 'user/message', seq: 1, data: { content: [], source: { kind: 'user' } } },
     { type: 'assistant/message', seq: 2, data: { message: { content: [{ type: 'text', text: 'answer' }] } } },
@@ -97,7 +97,7 @@ test('rc.1 history adapter preserves sequence pagination while wrapping events',
   })
 })
 
-test('rc.1 history adapter skips raw pages with no phone message projection', async () => {
+test('rc.2 history adapter skips raw pages with no phone message projection', async () => {
   const rawEvents = [
     {
       type: 'user/message',
@@ -124,7 +124,7 @@ test('rc.1 history adapter skips raw pages with no phone message projection', as
   bridge.dispose()
 })
 
-test('rc.1 history adapter accumulates raw pages up to the requested phone message count', async () => {
+test('rc.2 history adapter accumulates raw pages up to the requested phone message count', async () => {
   const rawEvents = [
     { type: 'user/message', seq: 1, time: 10, data: 'oldest' },
     { type: 'turn/start', seq: 2, time: 20, data: {} },

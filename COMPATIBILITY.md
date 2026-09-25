@@ -1,11 +1,11 @@
 # Compatibility
 
-This branch targets **DSH 0.1.7-rc.1**. The DSH peer dependencies and the development packages are pinned to that exact release. Earlier DSH builds and later release candidates are outside this branch's support scope.
+This branch targets **DSH 0.1.7-rc.2**. The DSH peer dependencies and the development packages are pinned to that exact release. Earlier DSH builds and later release candidates are outside this branch's support scope.
 
 | Component | Current contract | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | Package engine and CI |
-| DSH CLI and Host API | `0.1.7-rc.1` | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against rc.1 |
+| DSH CLI and Host API | `0.1.7-rc.2` | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against rc.2 |
 | iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
 
@@ -21,8 +21,14 @@ This branch targets **DSH 0.1.7-rc.1**. The DSH peer dependencies and the develo
 
 - Protocol v2 is the only supported phone wire version. Protocol-v1 devices must pair again. The LAN listener uses its own TLS identity and certificate pinning; old LAN pairings without a fingerprint must also pair again.
 - The current app accepts the `deeppilot://pair` link and the JSON pairing payload. Bearer authentication, URL credentials, and first-frame shared tokens are rejected; devices register a P-256 public key and sign each WebSocket challenge.
-- The plugin's persisted device and Funnel state migration remains separate from DSH API version support. Session logs written by earlier DSH builds are readable only when the rc.1 Host's own history reader accepts them; this plugin does not rewrite those logs.
+- The plugin's persisted device and Funnel state migration remains separate from DSH API version support. Session logs written by earlier DSH builds are readable only when the current Host's own history reader accepts them; this plugin does not rewrite those logs.
 - An unavailable optional OS facility, transport, or controller disables its dependent capability without crashing the Host.
+
+## rc.2 feature planning
+
+The source-level audit of `dsh-v0.1.7-rc.2` found no breaking change in the DSH service surfaces currently used by the plugin. The exact rc.2 package pins, corrected registry lockfile, compatibility assertions, generated output, unit tests, typecheck, build, and config-schema check now pass locally. A real rc.2 `web` profile smoke test and the clean-install release gate remain before publishing. The planned phone additions for durable schedules and session forking are specified in [`docs/DEEPPILOT_FEATURE_PLAN.md`](./docs/DEEPPILOT_FEATURE_PLAN.md); they are not advertised until the protocol, iOS mirror, and integration tests land.
+
+The complete audit evidence and re-audit procedure remain in [`docs/DSH_RELEASE_MEMORY.md`](./docs/DSH_RELEASE_MEMORY.md).
 
 ## Evidence limits
 

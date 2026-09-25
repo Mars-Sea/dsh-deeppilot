@@ -45,6 +45,31 @@ test('reportSchema accepts a healthy report', () => {
   assert.equal(parsed.local.tlsIdentityRegenerated, undefined)
 })
 
+test('reportSchema carries the optional custom device name and rejects malformed labels', () => {
+  const parsed = reportSchema.parse(validReport({
+    devices: [{
+      deviceId: 'd',
+      deviceName: '工作手机',
+      customName: 'Work phone',
+      appVersion: '1.0',
+      firstSeenTs: 1,
+      lastSeenTs: 2,
+      fingerprint: 'abcdef012345',
+    }],
+  }))
+  assert.equal(parsed.devices[0]?.deviceName, '工作手机')
+  assert.equal(parsed.devices[0]?.customName, 'Work phone')
+
+  for (const customName of ['', 'x'.repeat(65), 'bad\nname', ' padded ']) {
+    assert.throws(() => reportSchema.parse(validReport({
+      devices: [{
+        deviceId: 'd', deviceName: 'iPhone', customName, appVersion: '1.0',
+        firstSeenTs: 1, lastSeenTs: 2, fingerprint: 'abcdef012345',
+      }],
+    })), /device\.customName/)
+  }
+})
+
 test('reportSchema carries the LAN TLS identity fields and rejects wrong types', () => {
   const regenerated = reportSchema.parse(validReport({
     local: { phase: 'online', port: 3098, endpoints: [], tlsFingerprint: 'sha256:x', tlsIdentityRegenerated: true, updatedAt: 0 },
@@ -150,9 +175,9 @@ function strictCodecs(): { subject: string; codec: Record<string, unknown> }[] {
   return found
 }
 
-test('every strict codec materializes through the rc.1 create contract', () => {
+test('every strict codec materializes through the rc.2 create contract', () => {
   const codecs = strictCodecs()
-  assert.equal(codecs.length, 9, 'the contribution declares nine strict codecs')
+  assert.equal(codecs.length, 12, 'the contribution declares twelve strict codecs')
   for (const { subject, codec } of codecs) {
     assert.equal(codec.mode, 'strict', `${subject} stays strict`)
     const create = codec.create as (() => { parse?: unknown }) | undefined

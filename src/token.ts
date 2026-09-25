@@ -1,4 +1,5 @@
 import type { LiveActivityState } from './protocol.ts'
+import { MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
 import { randomBytes } from 'node:crypto'
 import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -80,7 +81,10 @@ export interface LiveActivityRegistration extends DeviceApnsInfo {
 
 export interface DeviceRecord {
   deviceId: string
+  /** Name reported by the phone. Refreshed on every authenticated hello. */
   deviceName: string
+  /** User-assigned name from the DSH settings page; survives app reconnects. */
+  customName?: string
   appVersion: string
   /** Uncompressed P-256 X9.63 public key, base64url encoded. */
   publicKey?: string
@@ -93,6 +97,11 @@ export interface DeviceRecord {
   apns?: DeviceApnsInfo
   widgetApns?: DeviceApnsInfo
   liveActivity?: LiveActivityRegistration
+}
+
+/** Name shown to the operator: a user label when present, otherwise the app-reported model name. */
+export function deviceDisplayName(record: Pick<DeviceRecord, 'deviceName' | 'customName'>): string {
+  return record.customName?.trim() ? record.customName : record.deviceName
 }
 
 /** Hex shape of an APNs device token as delivered by iOS (usually 64 chars). */
@@ -152,6 +161,7 @@ export class DeviceStore {
     const next: DeviceRecord = {
       deviceId,
       deviceName: record.deviceName,
+      ...(existing?.customName ? { customName: existing.customName } : {}),
       appVersion: record.appVersion,
       publicKey: record.publicKey,
       fingerprint: fingerprintForPublicKey(record.publicKey),
@@ -181,6 +191,29 @@ export class DeviceStore {
     record.appVersion = appVersion || record.appVersion
     record.lastSeenTs = now
     void this.flush()
+  }
+
+  /**
+   * Set or clear the operator-facing device label. The phone-reported name is
+   * intentionally left untouched so a reconnect cannot erase this value.
+   * Returns the effective display name, or null when the device is not active.
+   */
+  async setCustomName(deviceId: string, customName: string | null): Promise<string | null> {
+    const record = this.authorized(deviceId)
+    if (!record) return null
+    const normalized = customName === null ? '' : sanitizeDeviceField(customName, MAX_DEVICE_NAME_CHARS)
+    if (normalized === (record.customName ?? '')) return deviceDisplayName(record)
+    const previous = record.customName
+    if (normalized === '') delete record.customName
+    else record.customName = normalized
+    try {
+      await this.flush()
+    } catch (error) {
+      if (previous === undefined) delete record.customName
+      else record.customName = previous
+      throw error
+    }
+    return deviceDisplayName(record)
   }
 
   revoke(deviceId: string, now: number): boolean {
