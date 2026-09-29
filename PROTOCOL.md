@@ -582,7 +582,7 @@ APNs 只承载通知投影，不承载回答所需的 requestId 和完整问题�
 
 ### 与 DSH 官方 Web 回答者的共存
 
-在 DSH `0.1.7-rc.2` 中，Host 侧的 `approval/request` 与
+在 DSH `0.2.0-rc.1` 中，Host 侧的 `approval/request` 与
 `user-questions/request` 只由官方 API Remotes 接入一次；API Gateway 为每个请求
 保存统一 pending 状态，并把相同请求并行投递给官方 Web Client 与 DeepPilot
 驻留 Remote Client。任一 Client 先回答后，由 Gateway 统一结算并取消其他 Client
@@ -893,7 +893,11 @@ updates work through relay mode. System delivery and refresh budgets still apply
 
 ## Schedule 定时任务扩展（可选 v2 能力）
 
-`welcome.capabilities.schedules=true` 表示 Host 挂载了 DSH rc.2 Schedule service。
+`welcome.capabilities.schedules=true` 表示 Host 挂载了 DSH Schedule service。
+注意：DSH 0.2.0 起出厂 Web composition 不再内置 Schedule，该 service 由可选
+bundle `@deepseek-ai/dsh-experimental-schedule-bundle` 提供，默认关闭，需用户在
+插件管理中启用「Automation tasks」后 `ctx.get('schedule')` 才可用。因此本能力位
+反映的是实际挂载结果，而非宿主版本——未启用时为 `false`。
 所有 Schedule 请求都要求设备 scope `schedule.manage`；旧客户端忽略未知 capability
 和未知帧。没有该能力时请求返回 `E_UNSUPPORTED`。
 
@@ -931,7 +935,7 @@ updates work through relay mode. System delivery and refresh budgets still apply
 - `after_seconds`：正安全整数；
 - `at`：未来绝对时间或带 `date`、`time`、`time_zone` 的对象；
 - `every_seconds`：至少 60 秒的安全整数；
-- `daily` / `weekly` / `cron`：对应 DSH rc.2 结构，Host 负责完整校验。
+- `daily` / `weekly` / `cron`：对应 DSH Schedule 结构，Host 负责完整校验。
 
 更新使用 `c2s.schedule.update`，必须携带 `clientRequestId`、`sessionId`、`id`
 和最近一次读取的完整 `expected` 记录；可选 `title`、`prompt` 和 `change` 分别
@@ -957,7 +961,7 @@ DSH `schedule/changed` 会被投影为无正文的 `s2c.schedule.changed`，客�
 
 ## Session 分支扩展（可选 v2 能力）
 
-`welcome.capabilities.sessionFork=true` 表示 Host 暴露 DSH rc.2 Session fork。
+`welcome.capabilities.sessionFork=true` 表示 Host 暴露 DSH Session fork。
 请求要求 `sessions.read` 与 `sessions.manage`；旧客户端忽略该 capability。
 
 ```json

@@ -88,32 +88,54 @@ export interface DshApiProxyOptions {
 export class DshApiProxy implements ApiProxyLike {
   private readonly session: SessionControllerLike
   private readonly workspaceController: WorkspaceControllerLike | undefined
-  private readonly scheduleController: ScheduleControllerLike | undefined
+  private scheduleController: ScheduleControllerLike | undefined
+  private scheduleApi: ApiProxyLike['schedule'] | undefined
   private readonly directoryPicker: DirectoryPickerControllerLike | undefined
   private readonly interactions = new Map<string, DeferredInteraction>()
   private readonly shouldSurfaceInteraction: (kind: DshInteractionKind) => boolean
-  private readonly scheduleApi: ApiProxyLike['schedule']
 
   constructor(private readonly ctx: Context, options: DshApiProxyOptions = {}) {
     const session = ctx.get('sessionController') as SessionControllerLike | undefined
     if (session === undefined) throw new Error('DSH sessionController is unavailable')
     this.session = session
     this.workspaceController = ctx.get('workspaceController') as WorkspaceControllerLike | undefined
-    this.scheduleController = ctx.get('schedule') as ScheduleControllerLike | undefined
     // A profile without the optional workspace service cannot restore a
     // session; keep the phone capability bit honest.
     if (this.workspaceController === undefined) delete this.workspace?.unarchiveSession
     this.directoryPicker = ctx.get('directoryPickerController') as DirectoryPickerControllerLike | undefined
     this.shouldSurfaceInteraction = options.shouldSurfaceInteraction ?? (() => true)
-    this.scheduleApi = this.scheduleController === undefined ? undefined : this.createScheduleApi()
+    this.resolveSchedule()
+  }
+
+  /**
+   * Resolve the optional Schedule service lazily, on every read.
+   *
+   * The bridge is built from a `ctx.inject` on sessionController / connection
+   * / typertGateway, and `schedule` is deliberately NOT in that list: it only
+   * exists when the user enables the optional Automation tasks bundle. On a
+   * DSH 0.2.0 host those three services become ready well before
+   * ScheduleService finishes its own async init, so a value captured here in
+   * the constructor stayed `undefined` for the bridge's whole lifetime and
+   * welcome advertised `schedules=false` even with the bundle mounted.
+   *
+   * Once resolved the controller is kept: services are not torn down and
+   * rebuilt underneath a live bridge, so re-resolving per call would be pure
+   * overhead.
+   */
+  private resolveSchedule(): void {
+    if (this.scheduleController !== undefined) return
+    const controller = this.ctx.get('schedule') as ScheduleControllerLike | undefined
+    if (controller === undefined) return
+    this.scheduleController = controller
+    this.scheduleApi = this.createScheduleApi(controller)
   }
 
   get schedule(): ApiProxyLike['schedule'] {
+    this.resolveSchedule()
     return this.scheduleApi
   }
 
-  private createScheduleApi(): NonNullable<ApiProxyLike['schedule']> {
-    const controller = this.scheduleController!
+  private createScheduleApi(controller: ScheduleControllerLike): NonNullable<ApiProxyLike['schedule']> {
     return {
       list: async (request) => this.call(async () => ({
         sessionId: request.payload!.sessionId,

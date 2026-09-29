@@ -14,3 +14,7 @@ devices.json
 /tailscale/
 *.log
 .dsh-home-*/
+# scripts/smoke-live.mts writes a real profile home here by default. It holds a
+# device registry and, when copied in for a model-backed run, a credentials
+# file — it must never be staged.
+.dsh-smoke-home/

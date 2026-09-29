@@ -1,11 +1,11 @@
 # Compatibility
 
-This branch targets **DSH 0.1.7-rc.2**. The DSH peer dependencies and the development packages are pinned to that exact release. Earlier DSH builds and later release candidates are outside this branch's support scope.
+This branch targets **DSH 0.2.0-rc.1**. The DSH peer dependencies and the development packages are pinned to that exact release. Earlier DSH builds and later release candidates are outside this branch's support scope.
 
 | Component | Current contract | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | Package engine and CI |
-| DSH CLI and Host API | `0.1.7-rc.2` | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against rc.2 |
+| DSH CLI and Host API | `0.2.0-rc.1` | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.1 CLI |
 | iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
 
@@ -24,9 +24,53 @@ This branch targets **DSH 0.1.7-rc.2**. The DSH peer dependencies and the develo
 - The plugin's persisted device and Funnel state migration remains separate from DSH API version support. Session logs written by earlier DSH builds are readable only when the current Host's own history reader accepts them; this plugin does not rewrite those logs.
 - An unavailable optional OS facility, transport, or controller disables its dependent capability without crashing the Host.
 
-## rc.2 feature planning
+## Schedules require an optional DSH bundle
 
-The source-level audit of `dsh-v0.1.7-rc.2` found no breaking change in the DSH service surfaces currently used by the plugin. The exact rc.2 package pins, corrected registry lockfile, compatibility assertions, generated output, unit tests, typecheck, build, and config-schema check now pass locally. A real rc.2 `web` profile smoke test and the clean-install release gate remain before publishing. The planned phone additions for durable schedules and session forking are specified in [`docs/DEEPPILOT_FEATURE_PLAN.md`](./docs/DEEPPILOT_FEATURE_PLAN.md); they are not advertised until the protocol, iOS mirror, and integration tests land.
+DSH 0.2.0 moved automation out of the shipped Web composition. The shipped
+`packages/bundle/web-app/cordis.patch.yml` no longer carries the `time-context`,
+`schedule`, or `ui-schedule` rows; they are supplied by the optional
+`@deepseek-ai/dsh-experimental-schedule-bundle`, which ships switched off and is
+enabled by the user through **Automation tasks** in the plugin manager.
+
+The plugin needs no change for this. It still resolves the service through
+`ctx.get('schedule')`, never declares `schedule` in `inject`, and reports
+`welcome.capabilities.schedules = false` with a stable `E_UNSUPPORTED` for every
+schedule frame when the service is absent. What changes is that a stock 0.2.0
+Host now always takes that degraded path, so the phone tells the user to enable
+Automation tasks instead of reporting a generic capability gap.
+
+The capability is resolved lazily rather than captured when the bridge is
+built. The bridge mounts on `sessionController` / `connection` /
+`typertGateway`, all of which become ready before the optional Schedule service
+finishes its own initialization, so a probe taken at that moment would report
+`false` for the bridge's whole lifetime. With the bundle enabled, a live
+0.2.0-rc.1 host advertises `schedules=true` and the schedule
+list/create/history/delete flow passes.
+
+## 0.2.0-rc.1 audit outcome
+
+The source-level audit of `dsh-v0.2.0-rc.1` against the previous baseline
+`dsh-v0.1.7-rc.2` found no breaking change in the DSH service surfaces the
+plugin calls. Of the 78 service-surface files compared, 75 are byte-identical
+and the three that changed are additive: `fork()` gained an optional
+`onCreated` callback, and a `run()` helper call gained an internal `'hidden'`
+argument. The `api/gateway` package, including the `wireStream.open` argument
+order, is unchanged, as are the Typert protocol exports, `configForms`, and
+every `schedule` source file.
+
+The exact 0.2.0-rc.1 package pins, the regenerated registry lockfile (228
+packages, all carrying `resolved` and `integrity`), the compatibility
+assertions, generated output, unit tests, typecheck, build, Go helper tests,
+helper checksums, and a config-schema check against a real 0.2.0-rc.1 CLI all
+pass locally. A real 0.2.0-rc.1 `web` profile smoke test also passes: 25 checks,
+0 failures, driven by `scripts/smoke-live.mts` in the source repository (it is
+a maintainer tool and is not part of the published package) against a booted
+profile. Approval and question round trips are the one gap —
+the stock profile auto-approves tool calls, so those paths need a profile with
+a restrictive tool policy. The planned phone additions for durable schedules
+and session forking are specified in
+[`docs/DEEPPILOT_FEATURE_PLAN.md`](./docs/DEEPPILOT_FEATURE_PLAN.md); they are
+not advertised until the protocol, iOS mirror, and integration tests land.
 
 The complete audit evidence and re-audit procedure remain in [`docs/DSH_RELEASE_MEMORY.md`](./docs/DSH_RELEASE_MEMORY.md).
 

@@ -9,7 +9,7 @@
 
 The open-source DSH companion plugin for **DeepPilot**, a native iPhone client
 for using DeepSeek Harness remotely. It connects the app directly to the DSH
-Host on your own Mac and does not replace or modify the DSH Web UI.
+Host on your own computer and does not replace or modify the DSH Web UI.
 
 > DeepPilot is currently in TestFlight review. The invitation link will accept
 > testers after Apple approves the build.
@@ -32,12 +32,12 @@ Host on your own Mac and does not replace or modify the DSH Web UI.
 
 ## Install from npm
 
-This source checkout targets Node.js 22+ and **DSH 0.1.7-rc.2** with a `web` profile. The package includes
+This source checkout targets Node.js 22+ and **DSH 0.2.0-rc.1** with a `web` profile. The package includes
 Funnel helpers for macOS, Linux, and Windows on amd64/arm64; trusted-LAN mode
 does not require the helper.
 
 The current working tree pins its DSH packages and compatibility checks to
-`0.1.7-rc.2`. A previously published plugin package may still carry its own
+`0.2.0-rc.1`. A previously published plugin package may still carry its own
 older compatibility declaration until a release is made from this tree.
 
 ```sh
@@ -80,12 +80,12 @@ DeepPilot state under `$DSH_HOME/deeppilot/`.
 
 ## Publishing (maintainers)
 
-Release from this branch only after validating against DSH `0.1.7-rc.2`:
+Release from this branch only after validating against DSH `0.2.0-rc.1`:
 
 1. Bump `version` in `package.json` and in the root `""` entry of
    `package-lock.json`, then run `npm test && npm run typecheck && npm run build`
    and inspect `npm pack --dry-run --json`. The compatibility metadata test
-   enforces the exact rc.2 peer and development dependency versions.
+   enforces the exact audited peer and development dependency versions.
 2. Commit the release and push it. `npm publish` runs `prepack` (build) and
    `prepublishOnly` (test + typecheck) automatically.
 3. Publish pre-releases without touching `latest`:
@@ -95,7 +95,7 @@ Release from this branch only after validating against DSH `0.1.7-rc.2`:
    ```
 
    After a successful publish, verify the dist tag and install the package in
-   a DSH `0.1.7-rc.2` profile before pointing users at it.
+   a DSH `0.2.0-rc.1` profile before pointing users at it.
 4. Tag the release commit `vX.Y.Z` and prepare a GitHub Release
    (English + 简体中文 notes) that links this README section.
 5. Publish stable releases with `npm publish --tag latest`, which moves

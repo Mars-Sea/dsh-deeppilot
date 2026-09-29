@@ -1,13 +1,13 @@
-# DeepPilot rc.2 功能实施规划
+# DeepPilot 定时任务与分支功能实施规划
 
 > 状态：M1–M3 Host facade、协议、权限和幂等实现已完成；iOS UI、真机联调和发布验证尚未完成。
-> 目标：把 DSH `0.1.7-rc.2` 的两个高价值能力安全地暴露给 DeepPilot：
+> 目标：把 DSH `0.2.0-rc.1` 的两个高价值能力安全地暴露给 DeepPilot：
 > 1. 定时任务/提醒；
 > 2. 从某一轮创建会话分支。
 
 ## 总体原则
 
-- 先完成 DSH rc.2 依赖升级和基线验证，再实现手机协议。
+- 先完成 DSH 依赖升级和基线验证，再实现手机协议。
 - DSH Host Service 只在 `DshApiProxy` 后面适配，手机端不直接依赖 DSH Controller 类型。
 - 新能力全部采用可选 capability；旧 iOS 客户端继续使用协议 v2 的既有行为。
 - `PROTOCOL.md` 与 `src/protocol.ts` 必须同步修改，私有 iOS 仓库必须同步更新 Swift mirror。
@@ -18,9 +18,9 @@
 
 | 阶段 | 内容 | 退出条件 |
 | --- | --- | --- |
-| M0 | DSH rc.2 依赖、lockfile、兼容性测试和配置 schema 升级 | rc.2 CLI/schema 检查、typecheck、build 通过 |
+| M0 | DSH 依赖、lockfile、兼容性测试和配置 schema 升级 | 真实 DSH CLI/schema 检查、typecheck、build 通过 |
 | M1 | 协议和 Host adapter 设计落地 | `PROTOCOL.md`、TypeScript mirror、授权矩阵、幂等 journal 设计完成 |
-| M2 | 手机端定时任务/提醒 MVP | 创建、列表、更新、删除、历史记录在真实 iPhone + DSH rc.2 上通过 |
+| M2 | 手机端定时任务/提醒 MVP | 创建、列表、更新、删除、历史记录在真实 iPhone + 已启用「自动化任务」的 DSH 上通过 |
 | M3 | 手机端会话分支 MVP | 从消息/轮次创建新会话、旧会话不变、重连和重复请求通过 |
 | M4 | 稳定性与发布 | 安全审计、回归测试、npm pack、真实 DSH web profile 验证完成 |
 
@@ -38,7 +38,13 @@
 - 查看任务当前状态、下一次执行时间和最近投递记录；
 - 修改、暂停（通过删除/重建或后续扩展）和删除任务。
 
-DSH rc.2 负责持久化、定时触发、Session 恢复和 delivery history；DeepPilot 只负责安全的手机控制面和状态展示。
+DSH 负责持久化、定时触发、Session 恢复和 delivery history；DeepPilot 只负责安全的手机控制面和状态展示。
+
+> **前提：DSH 0.2.0 起定时任务不再内置。** 出厂 Web composition 不再挂载
+> `time-context` / `schedule` / `ui-schedule`，该 service 由可选 bundle
+> `@deepseek-ai/dsh-experimental-schedule-bundle` 提供，默认关闭。真实宿主验证
+> 定时任务前，必须先在插件管理中启用「Automation tasks」，否则
+> `ctx.get('schedule')` 为 undefined，只会得到 `E_UNSUPPORTED`。
 
 ### 1.2 Host 适配
 
@@ -247,10 +253,10 @@ Bridge 在成功后：
 
 ## 实施顺序建议
 
-1. 先完成 rc.2 依赖升级、lockfile、兼容性测试和配置 schema 检查；
+1. 先完成依赖升级、lockfile、兼容性测试和配置 schema 检查；
 2. 先实现 Schedule 的 Host facade、协议、幂等 journal 和服务端测试；
 3. 再实现 Fork 的 Host facade、协议和幂等 journal；
 4. 两个能力都完成后，再修改私有 iOS UI；
-5. 最后做真实 DSH rc.2 web profile + iPhone 的端到端验证。
+5. 最后做真实 DSH web profile + iPhone 的端到端验证（定时任务需先启用「自动化任务」）。
 
 不建议先做手机 UI 再补 Host 协议，因为 DSH 的 fork 边界和 schedule update conflict 规则会直接影响协议字段和错误处理。

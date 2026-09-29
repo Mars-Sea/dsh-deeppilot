@@ -520,3 +520,32 @@ test('restore capability reflects whether the optional workspace service is pres
     bridge.dispose()
   }
 })
+
+test('schedule capability follows the optional service mounting after the bridge exists', () => {
+  // The bridge is built from a ctx.inject on sessionController / connection /
+  // typertGateway, so on a DSH 0.2.0 host the optional Schedule service is
+  // almost never ready at construction time. Resolving it once in the
+  // constructor pinned `schedules` to false for the bridge's whole lifetime,
+  // even with the Automation tasks bundle mounted and serving.
+  let controller: Record<string, unknown> | undefined
+  const proxy = new DshApiProxy({ get: (key: string) =>
+    key === 'sessionController' ? {} : key === 'schedule' ? controller : undefined,
+  } as never)
+  const bridge = new HostBridge(proxy, 100)
+  try {
+    assert.equal(bridge.capabilities.schedules, false, '服务未挂载时不得通告日程能力')
+    controller = {
+      list: async () => [],
+      create: async () => ({}),
+      history: async () => ({}),
+      update: async () => ({}),
+      delete: async () => ({}),
+    }
+    assert.equal(bridge.capabilities.schedules, true, '服务后挂载时必须能通告日程能力')
+    // Repeated reads must keep working, and must not rebuild the adapter.
+    assert.equal(bridge.capabilities.schedules, true)
+    assert.equal(proxy.schedule, proxy.schedule)
+  } finally {
+    bridge.dispose()
+  }
+})

@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 **DeepPilot** 的开源 DSH 配套插件。DeepPilot 是一款原生 iPhone 客户端，
-可远程使用 DeepSeek Harness；插件让 App 直接连接用户自己 Mac 上的 DSH Host，
+可远程使用 DeepSeek Harness；插件让 App 直接连接用户自己电脑上的 DSH Host，
 不会替换或修改 DSH Web UI。
 
 > DeepPilot 目前正在等待 TestFlight 审核。Apple 审核通过后，邀请链接即可加入测试。
@@ -30,10 +30,10 @@
 
 ## 从 npm 安装
 
-当前源码仅面向 Node.js 22+ 与带 `web` profile 的 **DSH 0.1.7-rc.2**。npm 包内置 macOS、Linux、Windows
+当前源码仅面向 Node.js 22+ 与带 `web` profile 的 **DSH 0.2.0-rc.1**。npm 包内置 macOS、Linux、Windows
 的 amd64/arm64 Funnel helper；可信局域网模式不依赖 helper。
 
-当前工作树的 DSH 包和兼容性检查均固定为 `0.1.7-rc.2`。从此工作树发布新版本前，
+当前工作树的 DSH 包和兼容性检查均固定为 `0.2.0-rc.1`。从此工作树发布新版本前，
 已发布的旧插件包仍可能带有各自的旧兼容声明。
 
 ```sh
@@ -68,12 +68,12 @@ dsh plugin --profile web remove dsh-deeppilot
 
 ## 发布说明（维护者）
 
-此分支仅在 DSH `0.1.7-rc.2` 下完成验证后发布：
+此分支仅在 DSH `0.2.0-rc.1` 下完成验证后发布：
 
 1. 同步修改 `package.json` 与 `package-lock.json` 根 `""` 条目中的
    `version`，然后运行 `npm test && npm run typecheck && npm run build`，
    并检查 `npm pack --dry-run --json`。兼容性元数据测试会校验 peer 与开发依赖
-   均固定为 rc.2。
+   均固定为当前审计基线。
 2. 提交发布并推送。`npm publish` 会自动执行 `prepack`（构建）与
    `prepublishOnly`（测试 + 类型检查）。
 3. 发布预发布版本，不要动 `latest`：
@@ -82,7 +82,7 @@ dsh plugin --profile web remove dsh-deeppilot
    npm publish --tag alpha
    ```
 
-   发布成功后检查 dist tag，并在 DSH `0.1.7-rc.2` profile 中安装验证发布的包。
+   发布成功后检查 dist tag，并在 DSH `0.2.0-rc.1` profile 中安装验证发布的包。
 4. 为发布提交打 `vX.Y.Z` tag，并准备包含英文与简体中文说明的
    GitHub Release，链接本 README 的发布说明。
 5. 稳定版用 `npm publish --tag latest` 发布，使 `latest` 切换到新版本。

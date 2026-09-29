@@ -5,8 +5,176 @@
 
 ## Current decision
 
+- **Audited release:** `dsh-v0.2.0-rc.1` (published 2026-09-28; official release
+  page: <https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.0-rc.1>).
+- **Comparison baseline:** `dsh-v0.1.7-rc.2` (the previous plugin baseline).
+- **Plugin runtime verdict:** **no breaking change in the DSH APIs that DeepPilot
+  currently calls**. 75 of 78 compared service-surface files are byte-identical;
+  the three that changed are additive.
+- **Install/deployment verdict:** the exact peer/dev pins, the registry lockfile
+  (228 packages, all carrying `resolved` and `integrity`), the compatibility
+  assertions, generated `lib/`, 303 unit tests, typecheck, build, Go helper
+  tests, helper checksums, and a config-schema check against a **real
+  `0.2.0-rc.1` CLI** all pass locally. A real `0.2.0-rc.1` `web` profile smoke
+  test now also passes — 25 checks, 0 failures — via
+  `scripts/smoke-live.mts`. Two behaviours remain unverified there and are
+  listed under the 2026-09-29 findings: approval/question round trips (the
+  stock profile auto-approves tools) and the immediate consistency of the
+  archived list.
+- **Protocol verdict:** no required DeepPilot phone-protocol break. Protocol v2,
+  pairing state, and device records are unchanged; already-paired phones need no
+  action.
+- **One behavioural change:** DSH 0.2.0 moved automation out of the shipped Web
+  composition. See "Automation is now an optional bundle" below. The plugin needs
+  no code change; the phone's copy now points at the bundle.
+
+## 2026-09-28 — audit of `dsh-v0.2.0-rc.1`
+
+### Scope and method
+
+Compared `dsh-v0.1.7-rc.2...dsh-v0.2.0-rc.1` (261 commits, 1109 files). Rather
+than read release notes, every DSH package the plugin actually imports was
+compared file by file: `api/session-controller` (34 files),
+`api/workspace-controller` (10), `schedule/schedule` (10), `api/gateway` (11),
+and `typert/protocol` + `settings/settings` (13). Release notes were treated as
+a hint, never as evidence.
+
+### Findings by risk class
+
+| Area | Finding | DeepPilot impact |
+| --- | --- | --- |
+| Install | All ten peer and five dev packages publish `0.2.0-rc.1` on npm. `cordis` stays `4.0.4`, `schemastery` stays `3.18.4`, Node `engines` and pnpm `11.7.0` are unchanged. The lockfile had to be regenerated from the registry: the old one still pinned `0.1.7-rc.2` and made both `npm ci` and `npm install` fail with ERESOLVE. | Resolved. `npm ci`, typecheck, build, and the real-CLI config-schema check all pass. |
+| Session / Workspace controllers | `client/contract/sessions.ts` and `client/sessions/service.ts` changed only to add an **optional** `onCreated?: (childId: SessionId) => void` to `fork()`. `workspace-controller/src/default-directory.ts` changed only to pass an extra internal `'hidden'` argument to its own `run()` helper. | Additive. The plugin's hand-written `SessionControllerLike` / `WorkspaceControllerLike` mirrors still match. |
+| Schedule service | **All ten `schedule/schedule/src` files are byte-identical to rc.2.** The change is packaging, not API: see below. | The existing facade needs no change. |
+| Gateway / Remote Events | **All eleven `api/gateway/src` files are byte-identical**, including `stream-protocol.ts` and `stream-server.ts`. `typertGateway.wireStream.open(endpoint, payload, uplink, peer, signal)` keeps its argument order — the order DSH changed once in 0.1.7. | The highest-risk integration seam is unchanged. Approval and question delivery re-run clean on the new baseline. |
+| Typert / settings | `typert/protocol` and `settings/settings` sources are byte-identical, so `TypertRemoteService`, `InvocationDescriptor`, `TypertCodec`, `TypertRemoteContribution`, `TypertSchema`, and `configForms.get` are all unaffected. | No change. |
+| Phone protocol | No DSH-facing wire change. Protocol v2, `schedule.manage` scope, and the mutation journal are untouched. | Paired phones keep working. |
+
+### Automation is now an optional bundle
+
+The shipped `packages/bundle/web-app/cordis.patch.yml` in rc.2 carried
+`time-context`, `schedule`, and `ui-schedule` at lines 118–126 and 370–371. In
+0.2.0-rc.1 that file contains no schedule rows at all. Those three rows are now
+inserted by `packages/experimental/schedule-bundle`
+(`@deepseek-ai/dsh-experimental-schedule-bundle`), which `OPTIONAL_BUNDLES` in
+`packages/boot/app-boot/src/profile.ts` ships **switched off**; the user enables
+it as **Automation tasks** in the plugin manager.
+
+This is the only substantive product change in the release. The plugin's
+existing design is already correct: it resolves the service via
+`ctx.get('schedule')`, never puts `schedule` in `inject`, and degrades to a
+stable `E_UNSUPPORTED` with `welcome.capabilities.schedules = false`. What
+changed is that a stock host now always takes that degraded path, so the iOS
+copy for the two schedule errors now names the bundle instead of reporting a
+generic capability gap. `PROTOCOL.md` records that the capability bit reflects
+actual mounting, not the host version.
+
+### Re-audit procedure used
+
+To redo this comparison: `git clone --filter=blob:none --no-checkout
+https://github.com/deepseek-ai/deepseek-harness.git`, fetch both tags, list each
+package's `src/**/*.ts` from `git/trees/<sha>?recursive=1` at both commits, and
+diff the two file sets file by file. Avoid `git grep` on a blob-filtered clone —
+it re-fetches blobs and times out. Record which files are byte-identical, not
+merely which packages still exist.
+
+## 2026-09-29 — live smoke test on a real `web` profile (0.2.0-rc.1)
+
+### How it was run
+
+`scripts/smoke-live.mts` drives the phone protocol against a real
+`dsh --profile <name> web` host that has this working copy linked in. It
+asserts the seams unit tests fake out: the LAN TLS listener, the
+challenge/prove handshake, and every Host RPC the bridge forwards through
+`ctx.apiProxy`. It is repeatable, so the next DSH release can re-run it instead
+of trusting a source diff.
+
+```sh
+npx tsx scripts/smoke-live.mts register   # pre-authorize a device, then restart the host
+npx tsx scripts/smoke-live.mts run [--prompt] [--interactions]
+```
+
+The pairing-code happy path is intentionally not driven: the code only exists
+inside the host process and can only be minted through the plugin's own
+`deeppilot/beginPairing` Host RPC, i.e. from a DSH client session. The script
+asserts instead that `/phone/pair` is mounted and refuses a bogus code, and
+covers the real challenge/prove handshake with a pre-authorized device.
+
+### Result: 25 checks pass, 0 fail
+
+Verified on a real 0.2.0-rc.1 `web` profile: `/phone/health`, the WSS upgrade,
+challenge/prove → welcome with all six scopes, session list/create/open/tail,
+history paging, the model catalog and a live model switch, workspace
+list/create, archive → archived list → unarchive, the pending approval/question
+snapshot, a real model turn (`clientSendId` receipt `accepted`,
+`message.final` + `turn.end` observed), disconnect/reconnect replay
+(`resumed=true`, `s2c.resume.done` received), and — with the Automation tasks
+bundle mounted — the schedule list/create/history/delete flow.
+
+The TLS pin check is worth keeping: the bridge pins the **SPKI** digest
+(`src/lan-tls.ts:35`), not the certificate DER, and the script's independently
+computed pin matched the one the plugin logged on a live host.
+
+### Finding 1 — `--patch` does not install the plugin
+
+Composing the plugin through `dsh --profile X --patch ./cordis.patch.yml`
+leaves the profile with `deeppilot: failed to import` and no reason logged.
+`dsh-app-boot/lib/index.js:3904` shows why: a bare specifier in a patch layer is
+never resolved into a package, so the loader never creates a fiber for it. The
+plugin only mounts after `dsh plugin --profile X add dsh-deeppilot@link:<path>`.
+The install docs should say so; the silent failure looks exactly like a broken
+plugin.
+
+### Finding 2 — `capabilities.schedules` stayed false even with the bundle enabled (fixed)
+
+The optimistic reading of "Automation is now an optional bundle" above did not
+hold on a real host. With
+`@deepseek-ai/dsh-experimental-schedule-bundle` **installed and mounted** — the
+bundle's three rows (`time-context`, `schedule`, `ui-schedule`) do reach the
+composed profile, and `ScheduleService` still exposes
+`create/list/catalog/history/delete/update` — welcome advertised
+`schedules=false` and every `c2s.schedule.*` request took the `E_UNSUPPORTED`
+path.
+
+Root cause: the bridge is constructed from a `ctx.inject` on
+`sessionController` / `connection` / `typertGateway` (`src/index.ts:1212`), and
+`schedule` is deliberately **not** in that list. `DshApiProxy` then resolved
+`ctx.get('schedule')` once in its constructor and cached it in a `readonly`
+field. On DSH 0.2.0 those three services become ready well before
+`ScheduleService` finishes its own async init, so the cached value was
+`undefined` for the bridge's entire lifetime. Reordering `dsh.profile.bundles`
+to mount the schedule bundle first did not help, which is what ruled out a
+pure composition-order cause.
+
+Fix: resolve the optional service lazily on every read and keep it once found
+(`src/dsh-api-proxy.ts`). `capabilities` is already a getter, so a device that
+connects after the service is up now gets `schedules=true`, and the full
+create/list/history/delete flow passes on a live host. Covered by
+`tests/dsh-api-proxy.test.ts`.
+
+A profile that has not enabled the bundle still reports `schedules=false` and
+still degrades to `E_UNSUPPORTED` — that path is unchanged.
+
+### Finding 3 — approvals are auto-approved on a default profile
+
+`--interactions` produced a real `tool.start`/`tool.end` pair for a "create
+this file" instruction but no `s2c.pending.approval`, so the stock profile
+auto-approves and the approval round trip stays unverified. The question round
+trip is also unverified: dispatching a second prompt into the same session
+timed out on the delivery ack. Both need a profile with a restrictive tool
+policy before they can be called verified.
+
+### Finding 4 — the archived mirror is stale right after archiving
+
+`archiveSession` updates `archivedSessionIds` but does not call
+`refreshSummaries()`, so `c2s.sessions.archived` can omit the session that was
+just archived until an unrelated event triggers a refresh (it converged within
+10 s in practice). Pre-existing behaviour, not a 0.2.0 regression, but the app
+must not assume the archived list is immediately consistent.
+
+## Previous decision — `dsh-v0.1.7-rc.2`
+
 - **Audited release:** `dsh-v0.1.7-rc.2` (official release page: <https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.7-rc.2>).
-- **Comparison baseline:** `dsh-v0.1.7-rc.1` (the previous plugin baseline).
 - **Plugin runtime verdict:** **no confirmed breaking change in the DSH APIs
   that DeepPilot currently calls**.
 - **Install/deployment verdict:** the exact peer/dev pins and lockfile are now
@@ -48,6 +216,9 @@ Prioritized for DeepPilot, in this order:
    or edit a task, delete it, and show delivery history. Keep all operations
    behind `sessions.manage` plus a dedicated schedule scope; never log reminder
    prompts. A reminder must remain bound to its original Host Session.
+   *(Implemented in 0.8.3. As of DSH 0.2.0 this capability is no longer
+   bundled by default — see "Automation is now an optional bundle" above, and
+   any real-host verification must enable Automation tasks first.)*
 2. **Host Session search.** `sessionController.search(query)` returns bounded
    snippets without activating an Agent. This maps naturally to a phone search
    screen and can reduce the amount of history transferred over a mobile link.
@@ -72,6 +243,11 @@ background continuation) should not be copied into the phone plugin unless
 they solve a mobile-specific need.
 
 ## Required rc.2 upgrade gate
+
+> Superseded by the 2026-09-28 `0.2.0-rc.1` audit at the top of this file. The
+> gate below still applies to that release with one change: a schedule smoke
+> test additionally requires the user to enable the **Automation tasks** bundle,
+> because a stock 0.2.0 Host does not mount the Schedule service.
 
 Do not call the rc.2 baseline fully supported until all of these are true:
 

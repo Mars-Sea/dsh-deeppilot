@@ -11,7 +11,7 @@ const packageJson = JSON.parse(
   devDependencies?: Record<string, string>
 }
 
-const DSH_BASELINE = '0.1.7-rc.2'
+const DSH_BASELINE = '0.2.0-rc.1'
 const DSH_PEERS = [
   '@deepseek-ai/dsh',
   '@deepseek-ai/dsh-api-gateway',
@@ -31,7 +31,7 @@ const HOST_RUNTIME_PEERS = [
   'react',
 ]
 
-test('package metadata requires the rc.2 DSH host', () => {
+test('package metadata requires the audited DSH host', () => {
   for (const name of DSH_PEERS) {
     assert.equal(packageJson.peerDependencies?.[name], DSH_BASELINE, name)
   }
@@ -40,16 +40,26 @@ test('package metadata requires the rc.2 DSH host', () => {
   }
 })
 
-test('the DSH peer range admits only rc.2', () => {
+test('the DSH peer range admits only the audited host', () => {
   const range = packageJson.peerDependencies?.['@deepseek-ai/dsh']
   assert.ok(range, '@deepseek-ai/dsh peer range present')
   assert.equal(semver.satisfies(DSH_BASELINE, range), true)
-  for (const version of ['0.1.6', '0.1.7-alpha.2', '0.1.7', '0.1.7-rc.1']) {
+  // 0.1.7-rc.2 is the previously audited baseline: an exact pin must reject
+  // it, and so must every earlier 0.1.x plus a hypothetical 0.2.0 GA, so the
+  // plugin can never activate on an unaudited host.
+  for (const version of [
+    '0.1.6',
+    '0.1.7-alpha.2',
+    '0.1.7',
+    '0.1.7-rc.1',
+    '0.1.7-rc.2',
+    '0.2.0',
+  ]) {
     assert.equal(semver.satisfies(version, range), false, `peer range must exclude ${version}`)
   }
 })
 
-test('typechecked DSH packages are pinned to rc.2', () => {
+test('typechecked DSH packages are pinned to the audited host', () => {
   for (const name of [
     '@deepseek-ai/dsh-api-gateway',
     '@deepseek-ai/dsh-client-connection',
