@@ -626,9 +626,8 @@ test('subagent sessions stay off the phone list and out of turn notifications', 
   const { proxy, getPush } = makeFakeProxy()
   proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
     { sessionId: 'session-main', updatedAt: 300, running: false, blank: false, projections: { values: { title: 'Main' } } },
-    // Both subagent markers the host uses: explicit origin and a parent link.
+    // The host's only subagent marker is the explicit `origin` field.
     { sessionId: 'session-sub-a', updatedAt: 250, running: true, blank: false, origin: 'subagent', projections: { values: { title: 'Sub A' } } },
-    { sessionId: 'session-sub-b', updatedAt: 240, running: false, blank: false, parentSessionId: 'session-main', projections: { values: { title: 'Sub B' } } },
   ] } } })
 
   const bridge = new HostBridge(proxy, 100)
@@ -654,6 +653,45 @@ test('subagent sessions stay off the phone list and out of turn notifications', 
     collected.filter((x) => x.type === 's2c.notify').length,
     0,
     'subagent turn completion must not notify devices',
+  )
+  bridge.dispose()
+})
+
+test('forked sessions surface on the phone list and receive turn notifications', async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
+    { sessionId: 'session-main', updatedAt: 300, running: false, blank: false, projections: { values: { title: 'Main' } } },
+    // c2s.session.fork children carry parentSessionId as fork lineage, with
+    // no `origin` set — they are ordinary top-level sessions, not workers.
+    { sessionId: 'session-branch', updatedAt: 240, running: false, blank: false, parentSessionId: 'session-main', projections: { values: { title: 'Branch' } } },
+  ] } } })
+
+  const bridge = new HostBridge(proxy, 100)
+  const collected: Array<{ type: string; payload: any }> = []
+  bridge.start()
+  bridge.addSink(makeSink(collected))
+  await bridge.refreshSummaries()
+
+  assert.deepEqual(
+    bridge.listSessions().map((item) => item.id).sort(),
+    ['session-branch', 'session-main'],
+    'a forked session must not be mistaken for a subagent and hidden from the list',
+  )
+
+  getPush()({
+    type: 'session/event', rpcId: 'r1', sessionId: 'session-branch',
+    event: { type: 'assistant/message', seq: 10, data: { message: { role: 'assistant', content: [{ type: 'text', text: '分支完成' }] } } },
+  })
+  getPush()({
+    type: 'session/event', rpcId: 'r2', sessionId: 'session-branch',
+    event: { type: 'turn/end', seq: 11, data: { reason: { kind: 'completed' } } },
+  })
+  await new Promise((r) => setTimeout(r, 20))
+
+  assert.equal(
+    collected.filter((x) => x.type === 's2c.notify').length,
+    1,
+    'a forked session must still notify devices when its turn finishes',
   )
   bridge.dispose()
 })

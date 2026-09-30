@@ -401,7 +401,7 @@ export function apply(ctx: Context, options: unknown): void {
         enrollmentCell.clientId = 'u_' + randomBytes(16).toString('base64url')
         persistEnrollment()
       }
-      const client = new RelayClient({ url, debug: currentConfig().debug === true, log })
+      const client = new RelayClient({ url, debug: currentConfig().diagnostics?.debug === true, log })
       const token = await client.enroll(enrollmentCell.clientId, enrollmentCell.enrollKey ?? '')
       if (!token) {
         log('push relay enrollment failed (' + url + '); will retry on next trigger')
@@ -461,7 +461,7 @@ export function apply(ctx: Context, options: unknown): void {
     if (resolved.kind === 'relay') {
       // resolvePushConfig already guarantees a token exists in the cell
       // (config token or a completed enrollment).
-      const client = new RelayClient({ url: resolved.url, token: resolved.token, debug: currentConfig().debug === true, log })
+      const client = new RelayClient({ url: resolved.url, token: resolved.token, debug: currentConfig().diagnostics?.debug === true, log })
       cachedSender = {
         fingerprint,
         send: (request) => client.send(request),
@@ -480,7 +480,7 @@ export function apply(ctx: Context, options: unknown): void {
         keyId: resolved.keyId,
         keyPath: resolved.keyPath,
         bundleId: resolved.bundleId,
-        debug: currentConfig().debug === true,
+        debug: currentConfig().diagnostics?.debug === true,
         log,
       })
       cachedSender = {
@@ -607,13 +607,13 @@ export function apply(ctx: Context, options: unknown): void {
           if (!registration) return false
           if (connectedIds.has(device.deviceId)) return false
           if (!mayReceivePush(device, notification)) {
-            if (currentConfig().debug === true) {
+            if (currentConfig().diagnostics?.debug === true) {
               log(`push skip "${deviceDisplayName(device)}": notification permission not granted`)
             }
             return false
           }
           if (registration.categories?.[notification.category] === false) {
-            if (currentConfig().debug === true) {
+            if (currentConfig().diagnostics?.debug === true) {
               log(`push skip "${deviceDisplayName(device)}": category ${notification.category} muted`)
             }
             return false
@@ -763,7 +763,6 @@ export function apply(ctx: Context, options: unknown): void {
       pairingReady,
       activeConnections: connections.size,
       historyBufferMax: currentConfig().historyBufferMax ?? 2000,
-      debug: currentConfig().debug === true,
       lanAddresses,
       local: localStatus(lanAddresses),
       remote: remoteStatus(),
@@ -968,7 +967,7 @@ export function apply(ctx: Context, options: unknown): void {
                 serverVersion: SERVER_VERSION,
                 audience,
                 log,
-                debug: currentConfig().debug === true,
+                debug: currentConfig().diagnostics?.debug === true,
                 onClosed: (closed) => connections.delete(closed),
                 onAuthenticationSettled: (ok) => {
                   admission.release()

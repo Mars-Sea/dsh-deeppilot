@@ -94,7 +94,6 @@ export interface DeepPilotReport {
   /** Currently connected phone sockets. */
   activeConnections: number
   historyBufferMax: number
-  debug: boolean
   /** Private IPv4 candidates for local QR pairing. */
   lanAddresses: string[]
   /** Independent TLS-only LAN listener; this never represents DSH's own web port. */
@@ -337,7 +336,6 @@ function parseReport(value: unknown): DeepPilotReport {
     pairingReady: bool(s, 'pairingReady', 'pairingReady'),
     activeConnections: int(s, 'activeConnections', 'activeConnections'),
     historyBufferMax: int(s, 'historyBufferMax', 'historyBufferMax'),
-    debug: bool(s, 'debug', 'debug'),
     lanAddresses: lanAddresses as string[],
     local: parseLocal(s.local),
     remote: parseRemote(s.remote),

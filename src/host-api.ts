@@ -184,10 +184,15 @@ export interface PhoneSessionRow {
  * Subagent sessions are host-internal workers of a parent conversation.
  * They must never surface on the phone: not in the project/session list,
  * and not as turn-completion pushes for a session the device cannot open.
+ *
+ * `parentSessionId` alone is NOT a subagent signal: a session forked from
+ * another one (c2s.session.fork) also carries it, as fork lineage, while
+ * being an ordinary top-level session the phone must show. Only the host's
+ * explicit `origin` marks a worker — mirror the same rule already used for
+ * the live mux stream (see dsh-api-proxy.ts's `isSubagent` derivation).
  */
 export function isSubagentRow(row: PhoneSessionRow): boolean {
-  return row.origin === 'subagent' ||
-    (typeof row.parentSessionId === 'string' && row.parentSessionId.length > 0);
+  return row.origin === 'subagent';
 }
 
 export interface HistoryResult {

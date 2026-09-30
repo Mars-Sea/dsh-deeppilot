@@ -30,11 +30,13 @@
 
 ## 从 npm 安装
 
-当前源码仅面向 Node.js 22+ 与带 `web` profile 的 **DSH 0.2.0-rc.1**。npm 包内置 macOS、Linux、Windows
+当前源码面向 Node.js 22+ 与带 `web` profile 的 **DSH `0.2.x` 系列（`0.2.0-rc.2`
+及以上，低于 `0.3.0`）**。npm 包内置 macOS、Linux、Windows
 的 amd64/arm64 Funnel helper；可信局域网模式不依赖 helper。
 
-当前工作树的 DSH 包和兼容性检查均固定为 `0.2.0-rc.1`。从此工作树发布新版本前，
-已发布的旧插件包仍可能带有各自的旧兼容声明。
+当前工作树接受 `>=0.2.0-rc.2 <0.3.0-0` 范围内的任意 DSH 版本，构建与类型检查针对
+`0.2.0-rc.2`。从此工作树发布新版本前，已发布的旧插件包仍可能带有各自旧的精确
+版本兼容声明。
 
 ```sh
 dsh plugin --profile web add dsh-deeppilot
@@ -50,7 +52,8 @@ DeepPilot App 中扫码。二维码下方同时显示一段可复制的「配对
 自签证书（私钥位于 `$DSH_HOME/deeppilot/lan-tls/`），配对二维码携带其公钥指纹，
 App 只信任与该指纹一致的主机。DSH 可以继续只监听 `127.0.0.1:3080`；插件不再在
 DSH Web 服务上注册任何 `/phone` 路由。启用系统防火墙时，请仅在你使用的网络放行
-入站 TCP `3098`；端口可在“高级设置”中修改。
+入站 TCP `3098`；端口可在 DeepPilot 设置页里修改（具体分区随 DSH 版本可能调整，
+以设置页实际布局为准）。
 
 从仍在局域网提供明文 `ws://` 的旧版本插件升级：通过局域网配对的设备需要重新扫码
 配对，以接收证书指纹；经 Funnel 配对的设备不受影响。
@@ -68,12 +71,12 @@ dsh plugin --profile web remove dsh-deeppilot
 
 ## 发布说明（维护者）
 
-此分支仅在 DSH `0.2.0-rc.1` 下完成验证后发布：
+此分支仅在 DSH `0.2.0-rc.2` 下完成验证后发布：
 
 1. 同步修改 `package.json` 与 `package-lock.json` 根 `""` 条目中的
    `version`，然后运行 `npm test && npm run typecheck && npm run build`，
-   并检查 `npm pack --dry-run --json`。兼容性元数据测试会校验 peer 与开发依赖
-   均固定为当前审计基线。
+   并检查 `npm pack --dry-run --json`。兼容性元数据测试会校验 peer 依赖是否为
+   审计过的版本范围、开发依赖是否固定为精确的审计基线版本。
 2. 提交发布并推送。`npm publish` 会自动执行 `prepack`（构建）与
    `prepublishOnly`（测试 + 类型检查）。
 3. 发布预发布版本，不要动 `latest`：
@@ -82,7 +85,7 @@ dsh plugin --profile web remove dsh-deeppilot
    npm publish --tag alpha
    ```
 
-   发布成功后检查 dist tag，并在 DSH `0.2.0-rc.1` profile 中安装验证发布的包。
+   发布成功后检查 dist tag，并在 DSH `0.2.0-rc.2` profile 中安装验证发布的包。
 4. 为发布提交打 `vX.Y.Z` tag，并准备包含英文与简体中文说明的
    GitHub Release，链接本 README 的发布说明。
 5. 稳定版用 `npm publish --tag latest` 发布，使 `latest` 切换到新版本。
@@ -99,11 +102,15 @@ dsh plugin --profile web remove dsh-deeppilot
 模式都只暴露经过认证的 DeepPilot 连接、单次配对与健康检查端点，不会暴露完整
 DSH Web UI。
 
-DeepPilot 设置页在默认折叠的“高级设置”中提供“每个公网来源的连接上限”，默认
-`8`，可设置为 `1`–`16`。修改后 Funnel helper 会短暂重启，已连接的远程客户端
-会自动重连一次。设备列表支持为每台已配对设备设置自定义名称；名称会保存在主机
-设备注册表中，即使 iPhone 重连或上报了新的系统名称也不会被覆盖。留空保存可恢复
-iPhone 上报的默认名称。
+DeepPilot 设置页提供“每个公网来源的连接上限”，默认 `8`，可设置为 `1`–`16`
+（具体分区随 DSH 版本可能调整，以设置页实际布局为准）。修改后 Funnel helper
+会短暂重启，已连接的远程客户端会自动重连一次。设备列表支持为每台已配对设备设置
+自定义名称；名称会保存在主机设备注册表中，即使 iPhone 重连或上报了新的系统名称
+也不会被覆盖。留空保存可恢复 iPhone 上报的默认名称。
+
+设置页的“测试与故障排查”分组下有一个 `debug` 开关，打开后会在 DSH host 的
+终端输出里打印握手、推送等诊断信息（例如 `s2c.welcome` 里实际发出的能力位），
+不会打印配对令牌、APNs token 或消息内容；改这个开关立即生效，不需要重启 DSH。
 
 离线推送是可选功能。中继模式只发送目标 APNs 设备 Token 和有限的通知内容；
 完整会话历史与实时输出不会经过中继。启用远程访问或推送前，请阅读

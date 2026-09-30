@@ -14,8 +14,11 @@ export interface Config {
   devicesPath?: string
   /** Replay ring buffer bound (frames) per deployment. */
   historyBufferMax?: number
-  /** Verbose per-frame diagnostics (never prints token or message bodies). */
-  debug?: boolean
+  /** Testing & troubleshooting, rendered as its own settings section. */
+  diagnostics?: {
+    /** Verbose per-frame diagnostics (never prints token or message bodies). */
+    debug?: boolean
+  }
   /** Independent LAN transport. Never exposes the wider DSH web server. */
   local?: {
     enabled?: boolean
@@ -66,7 +69,12 @@ export const Config = z.object({
   enabled: z.boolean().default(true).volatile(),
   devicesPath: z.string().default(join(bridgeDataDir(), 'devices-v2.json')),
   historyBufferMax: z.natural().min(100).default(2000),
-  debug: z.boolean().default(false).volatile(),
+  diagnostics: z.object({
+    debug: z.boolean().default(false)
+      .description('打印握手、推送等诊断日志；不会打印配对令牌、APNs token 或消息内容'),
+  }).default({
+    debug: false,
+  }).volatile(),
   local: z.object({
     enabled: z.boolean().default(true),
     port: z.natural()

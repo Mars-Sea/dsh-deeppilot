@@ -18,3 +18,8 @@ devices.json
 # device registry and, when copied in for a model-backed run, a credentials
 # file — it must never be staged.
 .dsh-smoke-home/
+# Local working notes, not part of the published repository: they cross-reference
+# the private iOS checkout (`../app-private/...`), which readers of this public
+# repository cannot resolve. Keep them on disk, never in a commit.
+docs/提交历史.md
+docs/决策记录.md

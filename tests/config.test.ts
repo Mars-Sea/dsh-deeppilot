@@ -61,7 +61,7 @@ test('normalizeOptions unwraps a reactive options getter result', () => {
 test('normalizeOptions(undefined) returns plain defaults', () => {
   const config = normalizeOptions(undefined)
   assert.equal(config.enabled, true)
-  assert.equal(config.debug, false)
+  assert.equal(config.diagnostics?.debug, false)
   assert.equal(config.local?.enabled, true)
   assert.equal(typeof config.local?.port, 'number')
   assert.equal(config.remote?.enabled, false)

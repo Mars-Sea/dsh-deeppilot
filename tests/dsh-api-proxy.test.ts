@@ -446,11 +446,16 @@ for (const listed of [true, false]) {
   test(`adapter and bridge suppress worker completion pushes (${listed ? 'listed' : 'before list refresh'})`, async () => {
     const harness = new RemoteEventHarness()
     const ctx = new Context()
+    // `parentSessionId` alone is not tested here as a suppression signal: a
+    // forked (c2s.session.fork) session also carries it as lineage while
+    // being an ordinary top-level session — see host-bridge.test.ts's
+    // "forked sessions surface on the phone list" case. Only `origin:
+    // 'subagent'` identifies a real worker, on both the list row and the
+    // live Session header below.
     let rows: Array<Record<string, unknown>> = [
       { sessionId: 'main', updatedAt: 1, running: true },
       ...(listed ? [
         { sessionId: 'worker-origin', origin: 'subagent', updatedAt: 1, running: true },
-        { sessionId: 'worker-parent', parentSessionId: 'main', updatedAt: 1, running: true },
       ] : []),
     ]
     ctx.provide('sessionController', { list: async () => ({ items: rows }) })
@@ -485,7 +490,6 @@ for (const listed of [true, false]) {
       // Listed workers can have older event sources without identity hints.
       // Newly created workers must be recognized from the live Session header.
       emit('worker-origin', listed ? {} : { origin: 'subagent' })
-      emit('worker-parent', listed ? {} : { origin: 'subagent' }, true)
       // Ordinary fork lineage must still notify, including before list refresh.
       emit('main', { parentSession: 'fork-source' })
       await waitForMain(1)
@@ -495,7 +499,6 @@ for (const listed of [true, false]) {
       rows = [rows[0]!]
       await bridge.refreshSummaries()
       emit('worker-origin', {})
-      emit('worker-parent', {}, true)
       emit('main', {}, true)
       await waitForMain(2)
       assert.deepEqual(pushes.map(p => [p.sessionId, p.category]), [

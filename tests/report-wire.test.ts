@@ -18,7 +18,6 @@ function validReport(extra: Record<string, unknown> = {}) {
     pairingReady: true,
     activeConnections: 0,
     historyBufferMax: 2000,
-    debug: false,
     lanAddresses: [],
     local: {
       phase: 'online' as const,

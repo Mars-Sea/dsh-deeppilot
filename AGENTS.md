@@ -20,7 +20,9 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
 - mux/host stream items are `{ rpcId, payload: MuxFrame }`; unwrap `payload`
   before reading frame fields while preserving the outer request id.
 - Never log pairing tokens, APNs tokens, relay credentials, or message bodies.
-  Per-frame diagnostics must remain behind the `debug` setting.
+  Per-frame diagnostics must remain behind the `diagnostics.debug` setting
+  (the settings page's switch); the old top-level `debug` field is removed and
+  must not be reintroduced.
 - Keep `/phone` and `/phone/health` compatible with the current iOS client.
 
 ## Validation by change scope
@@ -33,6 +35,14 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
 - For any DSH release audit or compatibility decision, read and update
   `docs/DSH_RELEASE_MEMORY.md`; keep install, runtime, and phone-protocol risk
   classified separately.
+- The DSH peer range (`package.json` `peerDependencies`) trusts the whole
+  audited 0.2.x line: `>=0.2.0-rc.2 <0.3.0-0` installs on any later 0.2.x host,
+  including future rc's and the eventual 0.2.0 GA, without a manual version
+  bump. This does not remove the audit obligation above — still source-diff
+  and record each new DSH release — it only means a passing audit no longer
+  has to be followed by a `package.json` edit before users can install. Widen
+  the range past `0.3.0-0` only after auditing that release, since a 0.x minor
+  bump is allowed to contain breaking changes under semver.
 
 ### Authorization and completion
 

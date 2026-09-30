@@ -12,6 +12,7 @@ export interface SettingsSectionValue {
   enabled?: boolean
   local?: { enabled?: boolean; port?: number; [key: string]: unknown }
   remote?: { enabled?: boolean; maxConnectionsPerSource?: number; [key: string]: unknown }
+  diagnostics?: { debug?: boolean; [key: string]: unknown }
   [key: string]: unknown
 }
 

@@ -1,6 +1,6 @@
 /**
  * Compose cordis.patch.yml against a minimal DSH profile and assert that the
- * exported Config schema survives the pinned 0.2.0-rc.1 loader.
+ * exported Config schema survives the pinned 0.2.0-rc.2 loader.
  *
  * Uses `dsh --dump-config-schema`: the CLI imports
  * the plugin's Config schema without mounting anything, so this guards three
@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const DSH_VERSION = '0.2.0-rc.1'
+const DSH_VERSION = '0.2.0-rc.2'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 // The profile must live INSIDE this package tree: the loader resolves the
 // bare specifier "dsh-deeppilot" from the profile's cordis.yml, where Node's
@@ -109,7 +109,7 @@ try {
     throw new Error('deeppilot config schema exposes no object properties to verify')
   }
   const isVolatile = (key) => props[key]?.['x-cordis']?.volatile === true
-  for (const key of ['enabled', 'local', 'remote', 'debug']) {
+  for (const key of ['enabled', 'local', 'remote', 'diagnostics']) {
     if (!isVolatile(key)) {
       throw new Error(`${key} must be declared volatile so 0.1.7 settings writes are accepted`)
     }

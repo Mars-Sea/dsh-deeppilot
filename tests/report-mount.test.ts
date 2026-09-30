@@ -16,7 +16,6 @@ const reportRemote: ReportRemote = {
         pairingReady: true,
         activeConnections: 0,
         historyBufferMax: 2000,
-        debug: false,
         lanAddresses: [],
         local: {
           phase: 'online',

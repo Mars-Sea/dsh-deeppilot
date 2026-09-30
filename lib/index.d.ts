@@ -862,8 +862,11 @@ interface Config {
   devicesPath?: string;
   /** Replay ring buffer bound (frames) per deployment. */
   historyBufferMax?: number;
-  /** Verbose per-frame diagnostics (never prints token or message bodies). */
-  debug?: boolean;
+  /** Testing & troubleshooting, rendered as its own settings section. */
+  diagnostics?: {
+    /** Verbose per-frame diagnostics (never prints token or message bodies). */
+    debug?: boolean;
+  };
   /** Independent LAN transport. Never exposes the wider DSH web server. */
   local?: {
     enabled?: boolean;
@@ -909,7 +912,11 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
   enabled: z<boolean, boolean, "volatile-defined">;
   devicesPath: z<string, string, "defined">;
   historyBufferMax: z<number, number, "defined">;
-  debug: z<boolean, boolean, "volatile-defined">;
+  diagnostics: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+    debug: z<boolean, boolean, "defined">;
+  }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+    debug: z<boolean, boolean, "defined">;
+  }>>>, "volatile-defined">;
   local: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     port: z<number, number, "defined">;
@@ -957,7 +964,11 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
   enabled: z<boolean, boolean, "volatile-defined">;
   devicesPath: z<string, string, "defined">;
   historyBufferMax: z<number, number, "defined">;
-  debug: z<boolean, boolean, "volatile-defined">;
+  diagnostics: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+    debug: z<boolean, boolean, "defined">;
+  }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+    debug: z<boolean, boolean, "defined">;
+  }>>>, "volatile-defined">;
   local: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     port: z<number, number, "defined">;

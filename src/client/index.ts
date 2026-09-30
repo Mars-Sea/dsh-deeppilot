@@ -72,6 +72,12 @@ export interface LocalEnabledState {
   enabled: boolean
 }
 
+/** Diagnostics toggle state ("测试与故障排查" panel), read from `diagnostics.debug`. */
+export interface DebugState {
+  status: 'loading' | 'ready' | 'unavailable'
+  enabled: boolean
+}
+
 export interface LocalPortState {
   status: 'loading' | 'ready' | 'unavailable'
   value: number
@@ -365,6 +371,34 @@ export function apply(ctx: Context): void {
     }
   }
 
+  // Diagnostics toggle: defaults false, unlike enabled/local which default true.
+  const debugStore = createSnapshotStore<DebugState>({ status: 'loading', enabled: false })
+  const adoptDebug = (): void => {
+    if (scope === undefined) return
+    const snap = scope.getSnapshot()
+    if (snap.status === 'ready') {
+      debugStore.set({ status: 'ready', enabled: snap.value?.diagnostics?.debug === true })
+    } else if (snap.status === 'unavailable') {
+      debugStore.set({ status: 'unavailable', enabled: false })
+    }
+  }
+  scopeAdoptions.push(adoptDebug)
+  const lastConfirmedDebug = (): boolean => {
+    const snap = scope?.getSnapshot()
+    if (snap?.status === 'ready') return snap.value?.diagnostics?.debug === true
+    return debugStore.getSnapshot().enabled
+  }
+  const setDeepPilotDebug = (value: boolean): void => {
+    const previous = lastConfirmedDebug()
+    debugStore.set({ status: 'ready', enabled: value })
+    if (scope === undefined) return
+    const currentDiagnostics = scope.getSnapshot().value?.diagnostics ?? {}
+    void scope.set('diagnostics', { ...currentDiagnostics, debug: value }).then(() => {}, (error: unknown) => {
+      debugStore.set({ status: 'ready', enabled: previous })
+      console.error('[deeppilot] failed to persist diagnostics.debug=' + String(value) + ': ' + (error instanceof Error ? error.message : String(error)))
+    })
+  }
+
   const remoteEnabledStore = createSnapshotStore<RemoteEnabledState>({ status: 'loading', enabled: false })
   const remoteConnectionLimitStore = createSnapshotStore<RemoteConnectionLimitState>({
     status: 'loading',
@@ -459,6 +493,7 @@ export function apply(ctx: Context): void {
           deepPilotLocalPort: localPortStore,
           deepPilotRemoteEnabled: remoteEnabledStore,
           deepPilotRemoteConnectionLimit: remoteConnectionLimitStore,
+          deepPilotDebug: debugStore,
         },
         refresh: () => { void controller.refresh() },
         beginPairing,
@@ -471,6 +506,7 @@ export function apply(ctx: Context): void {
         setDeepPilotLocalPort,
         setDeepPilotRemoteEnabled,
         setDeepPilotRemoteConnectionLimit,
+        setDeepPilotDebug,
         // Bound translation function for the page. The page never imports
         // t() directly so it can be re-supplied if the host swaps the
         // locale face at runtime (a feature today; exercised in tests).

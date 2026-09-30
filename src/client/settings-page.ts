@@ -4,7 +4,7 @@ import type { DeepPilotReport, PairingGrantSnapshot, PushTestResult, RelayTestRe
 import { encodePairingLink, selectPairingTargets, type PairingTarget } from '../pairing-qr.ts'
 import { initialPairingPanelState, pairingPanelReduce, pairingPanelView } from './pairing-panel.ts'
 import { translateWith as t } from './i18n.ts'
-import type { EnabledState, LocalEnabledState, LocalPortState, PageState, RemoteConnectionLimitState, RemoteEnabledState } from './index.ts'
+import type { DebugState, EnabledState, LocalEnabledState, LocalPortState, PageState, RemoteConnectionLimitState, RemoteEnabledState } from './index.ts'
 import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, MAX_FUNNEL_CONNECTIONS_PER_SOURCE } from '../funnel-policy.ts'
 import { DEFAULT_LOCAL_PORT, MAX_LOCAL_PORT, MIN_LOCAL_PORT } from '../local-policy.ts'
 
@@ -193,6 +193,8 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   let remoteSwitchReady = false
   let remoteConnectionLimit = DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE
   let remoteConnectionLimitReady = false
+  let debugEnabled = false
+  let debugSwitchReady = false
   let failed = false
 
   try {
@@ -254,6 +256,14 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
       diag.push(t(props.t, 'diag.missingRemoteLimitHook'))
     }
     if (typeof props.setDeepPilotRemoteConnectionLimit !== 'function') diag.push(t(props.t, 'diag.missingSetRemoteLimit'))
+    if (typeof props.useDeepPilotDebug === 'function') {
+      const state = props.useDeepPilotDebug((s: DebugState) => s)
+      debugEnabled = state.enabled
+      debugSwitchReady = state.status === 'ready'
+    } else {
+      diag.push(t(props.t, 'diag.missingDebugHook'))
+    }
+    if (typeof props.setDeepPilotDebug !== 'function') diag.push(t(props.t, 'diag.missingSetDebug'))
   } catch (error) {
     diag.push(t(props.t, 'diag.renderError') + (error instanceof Error ? error.message : String(error)))
     failed = true
@@ -962,7 +972,22 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
               className: 'pbb-action',
               disabled: pushTestBusy,
               onClick: sendPushTest,
-            }, pushTestBusy ? t(props.t, 'push.pushSending') : t(props.t, 'push.testPush')))),
+            }, pushTestBusy ? t(props.t, 'push.pushSending') : t(props.t, 'push.testPush'))),
+          h('div', { className: 'pbb-testItem' },
+            h('div', { className: 'pbb-switchText' },
+              h('span', { className: 'pbb-testTitle' }, t(props.t, 'troubleshooting.debugTitle')),
+              h('span', { className: 'pbb-testDescription' }, t(props.t, 'troubleshooting.debugDescription'))),
+            h('button', {
+              type: 'button',
+              role: 'switch',
+              'aria-checked': debugEnabled,
+              'aria-label': t(props.t, 'troubleshooting.debugTitle'),
+              disabled: !debugSwitchReady,
+              className: 'pbb-switch' + (debugEnabled ? ' pbb-switchOn' : ''),
+              onClick: () => {
+                if (typeof props.setDeepPilotDebug === 'function') props.setDeepPilotDebug(!debugEnabled)
+              },
+            }))),
         relayTestError ? h('p', { className: 'pbb-diag pbb-diagBad' }, relayTestError) : null,
         relayTestResult === null
           ? h('p', { className: 'pbb-diag' }, t(props.t, 'push.relayDefault'))

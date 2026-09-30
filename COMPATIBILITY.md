@@ -1,11 +1,18 @@
 # Compatibility
 
-This branch targets **DSH 0.2.0-rc.1**. The DSH peer dependencies and the development packages are pinned to that exact release. Earlier DSH builds and later release candidates are outside this branch's support scope.
+This branch targets the **DSH `0.2.x` line, from `0.2.0-rc.2` onward**. The DSH
+peer dependencies accept `>=0.2.0-rc.2 <0.3.0-0`: any later `0.2.x` host,
+including future release candidates and the eventual `0.2.0` GA, installs
+without a plugin update. The development packages this branch builds and
+typechecks against are pinned to the exact audited release, currently
+`0.2.0-rc.2`. Every `0.1.x` build and any `0.3.0` or later release are outside
+this branch's support scope; a `0.3.x` line requires its own audit and its own
+range before the plugin will install there.
 
 | Component | Current contract | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | Package engine and CI |
-| DSH CLI and Host API | `0.2.0-rc.1` | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.1 CLI |
+| DSH CLI and Host API | `>=0.2.0-rc.2 <0.3.0-0` (audited against `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI |
 | iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
 
@@ -46,6 +53,32 @@ finishes its own initialization, so a probe taken at that moment would report
 `false` for the bridge's whole lifetime. With the bundle enabled, a live
 0.2.0-rc.1 host advertises `schedules=true` and the schedule
 list/create/history/delete flow passes.
+
+## Configuration migration
+
+The verbose-diagnostics field moved from the top-level `debug` to
+`diagnostics.debug` and gained a settings-page switch. A config file that still
+carries the old top-level `debug: true` is accepted but that value is ignored:
+verbose logging must be turned on again from the settings page. No other config
+field changed shape, and the old key is not read anywhere in this version.
+
+## 0.2.0-rc.2 audit outcome
+
+The source-level audit of `dsh-v0.2.0-rc.2` against `dsh-v0.2.0-rc.1` found no
+breaking change in the DSH service surfaces the plugin calls: 9 of the 10 peer
+packages are source-identical (only their `package.json` `version` field
+changed), `dsh-api-remotes` gained one unrelated remote mount, `api/gateway`
+gained an additive `hasLiveClient()` method with the `wireStream.open`
+argument order unchanged, and the one `schedule/schedule` source change was an
+internal model-framing string with no exported signature change.
+
+Because this audit found the same "additive only" pattern as the two prior
+ones, the DSH peer range moved from an exact pin to `>=0.2.0-rc.2 <0.3.0-0`
+(see [`AGENTS.md`](./AGENTS.md)): every future `0.2.x` host trusts this audit
+history instead of requiring its own `package.json` update before it can
+install the plugin. A source diff is still expected for each new DSH release
+and recorded in `docs/DSH_RELEASE_MEMORY.md`, but a clean result now only
+needs a documentation update, not a peer-range widening.
 
 ## 0.2.0-rc.1 audit outcome
 

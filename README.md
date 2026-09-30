@@ -32,13 +32,15 @@ Host on your own computer and does not replace or modify the DSH Web UI.
 
 ## Install from npm
 
-This source checkout targets Node.js 22+ and **DSH 0.2.0-rc.1** with a `web` profile. The package includes
-Funnel helpers for macOS, Linux, and Windows on amd64/arm64; trusted-LAN mode
-does not require the helper.
+This source checkout targets Node.js 22+ and the **DSH `0.2.x` line, `0.2.0-rc.2`
+or later** (up to, but excluding, `0.3.0`), with a `web` profile. The package
+includes Funnel helpers for macOS, Linux, and Windows on amd64/arm64;
+trusted-LAN mode does not require the helper.
 
-The current working tree pins its DSH packages and compatibility checks to
-`0.2.0-rc.1`. A previously published plugin package may still carry its own
-older compatibility declaration until a release is made from this tree.
+The current working tree accepts any DSH release in `>=0.2.0-rc.2 <0.3.0-0`
+and is built/typechecked against `0.2.0-rc.2`. A previously published plugin
+package may still carry its own older, exact-pinned compatibility declaration
+until a release is made from this tree.
 
 ```sh
 dsh plugin --profile web add dsh-deeppilot
@@ -59,8 +61,9 @@ and is TLS-only. The plugin generates a self-signed certificate on first start
 public-key fingerprint so the app pins that exact Host. DSH may continue
 listening only on `127.0.0.1:3080`; the plugin no longer registers any `/phone`
 routes on the DSH web server. If a firewall is enabled, allow inbound TCP
-`3098` on the networks you use. The port can be changed under **Advanced
-settings**.
+`3098` on the networks you use. The port can be changed on the DeepPilot
+settings page (its exact section may move between DSH versions; go by the
+settings page's current layout).
 
 Upgrading from a plugin version that served plain `ws://` on the LAN: devices
 paired over the LAN must pair again so they receive the certificate
@@ -80,12 +83,13 @@ DeepPilot state under `$DSH_HOME/deeppilot/`.
 
 ## Publishing (maintainers)
 
-Release from this branch only after validating against DSH `0.2.0-rc.1`:
+Release from this branch only after validating against DSH `0.2.0-rc.2`:
 
 1. Bump `version` in `package.json` and in the root `""` entry of
    `package-lock.json`, then run `npm test && npm run typecheck && npm run build`
    and inspect `npm pack --dry-run --json`. The compatibility metadata test
-   enforces the exact audited peer and development dependency versions.
+   enforces the audited DSH peer range and the exact development dependency
+   version.
 2. Commit the release and push it. `npm publish` runs `prepack` (build) and
    `prepublishOnly` (test + typecheck) automatically.
 3. Publish pre-releases without touching `latest`:
@@ -95,7 +99,7 @@ Release from this branch only after validating against DSH `0.2.0-rc.1`:
    ```
 
    After a successful publish, verify the dist tag and install the package in
-   a DSH `0.2.0-rc.1` profile before pointing users at it.
+   a DSH `0.2.0-rc.2` profile before pointing users at it.
 4. Tag the release commit `vX.Y.Z` and prepare a GitHub Release
    (English + 简体中文 notes) that links this README section.
 5. Publish stable releases with `npm publish --tag latest`, which moves
@@ -114,13 +118,20 @@ Funnel mode uses Tailscale-issued certificates. The app refuses plain `ws://`.
 Both the LAN listener and optional Funnel mode expose only the DeepPilot
 connection, one-time pairing, and health endpoints, not the complete DSH Web UI.
 
-The DeepPilot settings page exposes **Connections per public source** under
-the collapsed **Advanced settings** section. It defaults to `8`, accepts
-`1`–`16`, and briefly restarts the Funnel helper when changed, so connected
-remote clients reconnect once. The device list also supports a custom name for
-each paired device. Names are stored in the host registry and survive iPhone
-reconnects or changes to the system-reported name; saving an empty value restores
-the iPhone-reported default.
+The DeepPilot settings page exposes **Connections per public source**. It
+defaults to `8`, accepts `1`–`16`, and briefly restarts the Funnel helper when
+changed, so connected remote clients reconnect once (its exact section may
+move between DSH versions; go by the settings page's current layout). The
+device list also supports a custom name for each paired device. Names are
+stored in the host registry and survive iPhone reconnects or changes to the
+system-reported name; saving an empty value restores the iPhone-reported
+default.
+
+The settings page's **Testing & troubleshooting** group has a `debug` toggle.
+Turning it on prints handshake and push diagnostics to the DSH host's terminal
+output (for example, the actual capability bits sent in `s2c.welcome`); it
+never prints pairing tokens, APNs tokens, or message content, and takes effect
+immediately without restarting DSH.
 
 Offline push is optional. Relay mode sends only the target APNs device token
 and a limited notification payload; full conversation history and live output

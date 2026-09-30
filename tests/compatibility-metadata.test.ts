@@ -11,7 +11,13 @@ const packageJson = JSON.parse(
   devDependencies?: Record<string, string>
 }
 
-const DSH_BASELINE = '0.2.0-rc.1'
+// The floor of the audited 0.2.x line: the lowest host version DeepPilot has
+// been source-diffed and smoke-tested against. DSH_PEER_RANGE (below) trusts
+// every later 0.2.x host up to, but excluding, 0.3.0 without a further audit;
+// DSH_BASELINE is only the fixed version this package builds and typechecks
+// against, so it must stay an exact release, never a range.
+const DSH_BASELINE = '0.2.0-rc.2'
+const DSH_PEER_RANGE = '>=0.2.0-rc.2 <0.3.0-0'
 const DSH_PEERS = [
   '@deepseek-ai/dsh',
   '@deepseek-ai/dsh-api-gateway',
@@ -31,31 +37,49 @@ const HOST_RUNTIME_PEERS = [
   'react',
 ]
 
-test('package metadata requires the audited DSH host', () => {
+test('package metadata declares the audited 0.2.x peer range', () => {
   for (const name of DSH_PEERS) {
-    assert.equal(packageJson.peerDependencies?.[name], DSH_BASELINE, name)
+    assert.equal(packageJson.peerDependencies?.[name], DSH_PEER_RANGE, name)
   }
   for (const name of HOST_RUNTIME_PEERS) {
     assert.equal(packageJson.peerDependenciesMeta?.[name]?.optional, true, `${name} optional peer`)
   }
 })
 
-test('the DSH peer range admits only the audited host', () => {
+test('the DSH peer range admits the audited 0.2.x line and rejects everything outside it', () => {
   const range = packageJson.peerDependencies?.['@deepseek-ai/dsh']
   assert.ok(range, '@deepseek-ai/dsh peer range present')
-  assert.equal(semver.satisfies(DSH_BASELINE, range), true)
-  // 0.1.7-rc.2 is the previously audited baseline: an exact pin must reject
-  // it, and so must every earlier 0.1.x plus a hypothetical 0.2.0 GA, so the
-  // plugin can never activate on an unaudited host.
+  assert.equal(range, DSH_PEER_RANGE)
+  // The floor (DSH_BASELINE) and every later 0.2.x host — future rc's and the
+  // eventual 0.2.0 GA — install without a further audit or a manual version
+  // bump; a real source diff is still expected per DSH release (see
+  // docs/DSH_RELEASE_MEMORY.md), but it no longer gates installability.
+  for (const version of [
+    DSH_BASELINE,
+    '0.2.0-rc.3',
+    '0.2.0-rc.20',
+    '0.2.0',
+    '0.2.1',
+    '0.2.1-rc.1',
+  ]) {
+    assert.equal(semver.satisfies(version, range, { includePrerelease: true }), true, `peer range must admit ${version}`)
+  }
+  // 0.1.7-rc.2 (the previous plugin baseline) and every earlier 0.1.x are
+  // outside the audited line. 0.3.0 and its prereleases are the next
+  // audit boundary: minor bumps below 1.0.0 may contain breaking changes,
+  // so they must not install without a deliberate range widening.
   for (const version of [
     '0.1.6',
     '0.1.7-alpha.2',
     '0.1.7',
     '0.1.7-rc.1',
     '0.1.7-rc.2',
-    '0.2.0',
+    '0.2.0-rc.1',
+    '0.3.0-rc.1',
+    '0.3.0',
+    '1.0.0',
   ]) {
-    assert.equal(semver.satisfies(version, range), false, `peer range must exclude ${version}`)
+    assert.equal(semver.satisfies(version, range, { includePrerelease: true }), false, `peer range must exclude ${version}`)
   }
 })
 
