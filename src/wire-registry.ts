@@ -169,7 +169,7 @@ export interface FrameContext extends BridgeSink {
   readonly pendingLiveActivityId: string | undefined
   setPendingLiveActivityId(activityId: string | undefined): void
   markRevoked(): void
-  /** c2s.auth.prove 的实现仍在连接里：机制属于连接，行只登记事实。 */
+  /** c2s.auth.prove 的机制由连接门实现（认证是安全判定，不属于特性模块）。 */
   prove(): Promise<void>
   enrollPushKey(enrollKey: string): Promise<void> | void
   revokeSiblings(deviceId: string): Promise<unknown> | unknown
