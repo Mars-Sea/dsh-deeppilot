@@ -33,6 +33,9 @@ export * from './host-api.ts'
 import {
   MAX_MESSAGE_PROJECTION_BYTES,
   MAX_SESSION_PAGE_MESSAGES_BYTES,
+  DEFAULT_HISTORY_PAGE_MESSAGES,
+  MAX_HISTORY_PAGE_MESSAGES,
+  MIN_TAIL_MESSAGES,
   canonicalSessionMessages,
   limitMessageProjection,
   limitSessionPageMessages,
@@ -1416,9 +1419,14 @@ function receiptFailureReason(receipt: { accepted: boolean; reason?: string } | 
 
 // ---------- projection helpers ----------
 
+/**
+ * 尾部条数收敛到 [MIN_TAIL_MESSAGES, MAX_HISTORY_PAGE_MESSAGES]。
+ * 区间与 wire 行校验（tailCount 1..10000、limit 1..500）共用投影 module 的
+ * 常量——「一页能要多少条消息」本是一条规则，原先散在三处。
+ */
 function clampTail(n: number): number {
-  if (!Number.isFinite(n)) return 100;
-  return Math.max(10, Math.min(500, Math.floor(n)));
+  if (!Number.isFinite(n)) return DEFAULT_HISTORY_PAGE_MESSAGES;
+  return Math.max(MIN_TAIL_MESSAGES, Math.min(MAX_HISTORY_PAGE_MESSAGES, Math.floor(n)));
 }
 
 function localTimeZone(): string | undefined {

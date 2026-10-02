@@ -18,7 +18,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { projectHistory } from '../src/host-event-projection.ts'
+import { historyWindow, projectHistory, type HistoryWindow } from '../src/host-event-projection.ts'
 
 const SNAPSHOT = new URL('./history-window-parity.snapshot.json', import.meta.url)
 const RECORD = process.env.RECORD === '1'
@@ -82,8 +82,14 @@ function makeEvent(random: () => number, index: number): unknown {
   return { ...base, data: {} }
 }
 
+/** 被测实现：默认新 historyWindow；LEGACY=1 时跑抄下来的旧算法。 */
+function underTest(source: RawEvent[], before: number | undefined, limit: number): { events: Array<{ event: RawEvent }>; hasMore: boolean } {
+  if (process.env.LEGACY === '1') return legacyWindow(source, before, limit)
+  return historyWindow(source, { beforeSeq: before, limit })
+}
+
 /** 现算法，逐字抄自 dsh-api-proxy.ts 的 sessions.history。 */
-function legacyWindow(source: RawEvent[], before: number | undefined, limit: number): { events: RawEvent[]; hasMore: boolean } {
+function legacyWindow(source: RawEvent[], before: number | undefined, limit: number): HistoryWindow {
   const filtered = source
     .filter((event): event is RawEvent =>
       typeof event === 'object' && event !== null
@@ -91,7 +97,7 @@ function legacyWindow(source: RawEvent[], before: number | undefined, limit: num
       && typeof (event as { seq?: unknown }).seq === 'number')
     .filter((event) => before === undefined || event.seq < before)
   let end = filtered.length
-  let events: Array<{ event: RawEvent }> = []
+  let events: HistoryWindow['events'] = []
   while (end > 0 && projectHistory(events).length < limit) {
     const start = Math.max(0, end - limit)
     events = [
@@ -134,10 +140,16 @@ function buildCases(): Case[] {
   return cases
 }
 
-/** 输出签名：窗口里的原始事件 + hasMore + 窗口投影出的消息行。 */
-function signature(result: { events: Array<{ event: RawEvent }>; hasMore: boolean }): unknown {
+/**
+ * 输出签名：可观测契约 = 窗口投影出的消息行 + hasMore。
+ *
+ * 刻意不记录窗口的原始下标：旧算法按 limit 整数倍从末端取块，窗口里会多带若干
+ * 投影为空的前导事件，而新实现按消息归属取起点。两者投影出的消息完全相同，
+ * 原始下标是是实现细节。hasMore 的语义按用户选定的 A 收敛为「窗口之前还有能
+ * 产出消息的事件」。
+ */
+function signature(result: HistoryWindow): Record<string, unknown> {
   return {
-    seqs: result.events.map((entry) => entry.event.seq),
     hasMore: result.hasMore,
     messages: projectHistory(result.events).map((message) => ({
       seq: message.seq,
@@ -151,7 +163,7 @@ test('历史分页窗口与固化快照一致', async (t) => {
   const cases = buildCases()
   const actual = cases.map((testCase) => ({
     label: testCase.label,
-    ...signature(legacyWindow(testCase.source as RawEvent[], testCase.before, testCase.limit)),
+    ...signature(underTest(testCase.source as RawEvent[], testCase.before, testCase.limit)),
   }))
 
   if (RECORD || !existsSync(SNAPSHOT)) {

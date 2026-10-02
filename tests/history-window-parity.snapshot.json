@@ -1,80 +1,56 @@
 [
  {
   "label": "s0-l1-all",
-  "seqs": [],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s0-l2-all",
-  "seqs": [],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s0-l3-all",
-  "seqs": [],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s0-l5-all",
-  "seqs": [],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s0-l8-all",
-  "seqs": [],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s1-l1-all",
-  "seqs": [
-   1
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s1-l2-all",
-  "seqs": [
-   1
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s1-l3-all",
-  "seqs": [
-   1
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s1-l5-all",
-  "seqs": [
-   1
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s1-l8-all",
-  "seqs": [
-   1
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s2-l1-all",
-  "seqs": [
-   1,
-   2
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -89,10 +65,6 @@
  },
  {
   "label": "s2-l2-all",
-  "seqs": [
-   1,
-   2
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -107,10 +79,6 @@
  },
  {
   "label": "s2-l3-all",
-  "seqs": [
-   1,
-   2
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -125,10 +93,6 @@
  },
  {
   "label": "s2-l5-all",
-  "seqs": [
-   1,
-   2
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -143,10 +107,6 @@
  },
  {
   "label": "s2-l8-all",
-  "seqs": [
-   1,
-   2
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -161,205 +121,106 @@
  },
  {
   "label": "s3-l1-all",
-  "seqs": [
-   1,
-   2,
-   3
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s3-l1-b2",
-  "seqs": [
-   1
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s3-l2-all",
-  "seqs": [
-   1,
-   2,
-   3
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s3-l2-b2",
-  "seqs": [
-   1
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s3-l3-all",
-  "seqs": [
-   1,
-   2,
-   3
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s3-l3-b2",
-  "seqs": [
-   1
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s3-l5-all",
-  "seqs": [
-   1,
-   2,
-   3
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s3-l5-b2",
-  "seqs": [
-   1
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s3-l8-all",
-  "seqs": [
-   1,
-   2,
-   3
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s3-l8-b2",
-  "seqs": [
-   1
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s5-l1-all",
-  "seqs": [
-   1,
-   2,
-   3,
-   4,
-   5
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s5-l1-b3",
-  "seqs": [
-   1,
-   2
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s5-l2-all",
-  "seqs": [
-   1,
-   2,
-   3,
-   4,
-   5
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s5-l2-b3",
-  "seqs": [
-   1,
-   2
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s5-l3-all",
-  "seqs": [
-   1,
-   2,
-   3,
-   4,
-   5
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s5-l3-b3",
-  "seqs": [
-   1,
-   2
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s5-l5-all",
-  "seqs": [
-   1,
-   2,
-   3,
-   4,
-   5
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s5-l5-b3",
-  "seqs": [
-   1,
-   2
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s5-l8-all",
-  "seqs": [
-   1,
-   2,
-   3,
-   4,
-   5
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s5-l8-b3",
-  "seqs": [
-   1,
-   2
-  ],
   "hasMore": false,
   "messages": []
  },
  {
   "label": "s8-l1-all",
-  "seqs": [
-   7,
-   8
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -374,11 +235,6 @@
  },
  {
   "label": "s8-l1-b4",
-  "seqs": [
-   1,
-   2,
-   3
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -393,12 +249,6 @@
  },
  {
   "label": "s8-l2-all",
-  "seqs": [
-   5,
-   6,
-   7,
-   8
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -417,11 +267,6 @@
  },
  {
   "label": "s8-l2-b4",
-  "seqs": [
-   1,
-   2,
-   3
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -436,16 +281,6 @@
  },
  {
   "label": "s8-l3-all",
-  "seqs": [
-   1,
-   2,
-   3,
-   4,
-   5,
-   6,
-   7,
-   8
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -472,11 +307,6 @@
  },
  {
   "label": "s8-l3-b4",
-  "seqs": [
-   1,
-   2,
-   3
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -491,16 +321,6 @@
  },
  {
   "label": "s8-l5-all",
-  "seqs": [
-   1,
-   2,
-   3,
-   4,
-   5,
-   6,
-   7,
-   8
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -527,11 +347,6 @@
  },
  {
   "label": "s8-l5-b4",
-  "seqs": [
-   1,
-   2,
-   3
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -546,16 +361,6 @@
  },
  {
   "label": "s8-l8-all",
-  "seqs": [
-   1,
-   2,
-   3,
-   4,
-   5,
-   6,
-   7,
-   8
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -582,11 +387,6 @@
  },
  {
   "label": "s8-l8-b4",
-  "seqs": [
-   1,
-   2,
-   3
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -601,12 +401,6 @@
  },
  {
   "label": "s13-l1-all",
-  "seqs": [
-   10,
-   11,
-   12,
-   13
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -621,9 +415,6 @@
  },
  {
   "label": "s13-l1-b7",
-  "seqs": [
-   6
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -634,16 +425,6 @@
  },
  {
   "label": "s13-l2-all",
-  "seqs": [
-   4,
-   6,
-   7,
-   8,
-   10,
-   11,
-   12,
-   13
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -662,13 +443,7 @@
  },
  {
   "label": "s13-l2-b7",
-  "seqs": [
-   3,
-   4,
-   4,
-   6
-  ],
-  "hasMore": true,
+  "hasMore": false,
   "messages": [
    {
     "seq": 3,
@@ -682,19 +457,6 @@
  },
  {
   "label": "s13-l3-all",
-  "seqs": [
-   2,
-   3,
-   4,
-   4,
-   6,
-   7,
-   8,
-   10,
-   11,
-   12,
-   13
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -717,13 +479,6 @@
  },
  {
   "label": "s13-l3-b7",
-  "seqs": [
-   2,
-   3,
-   4,
-   4,
-   6
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -738,19 +493,6 @@
  },
  {
   "label": "s13-l5-all",
-  "seqs": [
-   2,
-   3,
-   4,
-   4,
-   6,
-   7,
-   8,
-   10,
-   11,
-   12,
-   13
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -773,13 +515,6 @@
  },
  {
   "label": "s13-l5-b7",
-  "seqs": [
-   2,
-   3,
-   4,
-   4,
-   6
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -794,19 +529,6 @@
  },
  {
   "label": "s13-l8-all",
-  "seqs": [
-   2,
-   3,
-   4,
-   4,
-   6,
-   7,
-   8,
-   10,
-   11,
-   12,
-   13
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -829,13 +551,6 @@
  },
  {
   "label": "s13-l8-b7",
-  "seqs": [
-   2,
-   3,
-   4,
-   4,
-   6
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -850,9 +565,6 @@
  },
  {
   "label": "s21-l1-all",
-  "seqs": [
-   21
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -867,11 +579,6 @@
  },
  {
   "label": "s21-l1-b11",
-  "seqs": [
-   7,
-   8,
-   10
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -886,15 +593,6 @@
  },
  {
   "label": "s21-l2-all",
-  "seqs": [
-   15,
-   16,
-   17,
-   18,
-   19,
-   20,
-   21
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -917,12 +615,6 @@
  },
  {
   "label": "s21-l2-b11",
-  "seqs": [
-   6,
-   7,
-   8,
-   10
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -941,17 +633,6 @@
  },
  {
   "label": "s21-l3-all",
-  "seqs": [
-   13,
-   13,
-   15,
-   16,
-   17,
-   18,
-   19,
-   20,
-   21
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -978,16 +659,6 @@
  },
  {
   "label": "s21-l3-b11",
-  "seqs": [
-   1,
-   2,
-   4,
-   5,
-   6,
-   7,
-   8,
-   10
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -1010,22 +681,6 @@
  },
  {
   "label": "s21-l5-all",
-  "seqs": [
-   7,
-   8,
-   10,
-   11,
-   12,
-   13,
-   13,
-   15,
-   16,
-   17,
-   18,
-   19,
-   20,
-   21
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -1064,16 +719,6 @@
  },
  {
   "label": "s21-l5-b11",
-  "seqs": [
-   1,
-   2,
-   4,
-   5,
-   6,
-   7,
-   8,
-   10
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -1096,27 +741,6 @@
  },
  {
   "label": "s21-l8-all",
-  "seqs": [
-   1,
-   2,
-   4,
-   5,
-   6,
-   7,
-   8,
-   10,
-   11,
-   12,
-   13,
-   13,
-   15,
-   16,
-   17,
-   18,
-   19,
-   20,
-   21
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -1163,16 +787,6 @@
  },
  {
   "label": "s21-l8-b11",
-  "seqs": [
-   1,
-   2,
-   4,
-   5,
-   6,
-   7,
-   8,
-   10
-  ],
   "hasMore": false,
   "messages": [
    {
@@ -1195,12 +809,6 @@
  },
  {
   "label": "s40-l1-all",
-  "seqs": [
-   37,
-   38,
-   39,
-   40
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -1211,9 +819,6 @@
  },
  {
   "label": "s40-l1-b20",
-  "seqs": [
-   18
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -1228,16 +833,6 @@
  },
  {
   "label": "s40-l2-all",
-  "seqs": [
-   33,
-   34,
-   34,
-   36,
-   37,
-   38,
-   39,
-   40
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -1252,17 +847,6 @@
  },
  {
   "label": "s40-l2-b20",
-  "seqs": [
-   11,
-   12,
-   13,
-   14,
-   15,
-   16,
-   17,
-   18,
-   18
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -1285,17 +869,6 @@
  },
  {
   "label": "s40-l3-all",
-  "seqs": [
-   32,
-   33,
-   34,
-   34,
-   36,
-   37,
-   38,
-   39,
-   40
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -1318,20 +891,6 @@
  },
  {
   "label": "s40-l3-b20",
-  "seqs": [
-   8,
-   9,
-   10,
-   11,
-   12,
-   13,
-   14,
-   15,
-   16,
-   17,
-   18,
-   18
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -1362,23 +921,6 @@
  },
  {
   "label": "s40-l5-all",
-  "seqs": [
-   26,
-   27,
-   28,
-   29,
-   29,
-   31,
-   32,
-   33,
-   34,
-   34,
-   36,
-   37,
-   38,
-   39,
-   40
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -1413,24 +955,7 @@
  },
  {
   "label": "s40-l5-b20",
-  "seqs": [
-   5,
-   6,
-   7,
-   8,
-   9,
-   10,
-   11,
-   12,
-   13,
-   14,
-   15,
-   16,
-   17,
-   18,
-   18
-  ],
-  "hasMore": true,
+  "hasMore": false,
   "messages": [
    {
     "seq": 6,
@@ -1476,38 +1001,6 @@
  },
  {
   "label": "s40-l8-all",
-  "seqs": [
-   11,
-   12,
-   13,
-   14,
-   15,
-   16,
-   17,
-   18,
-   18,
-   20,
-   21,
-   21,
-   23,
-   24,
-   25,
-   26,
-   27,
-   28,
-   29,
-   29,
-   31,
-   32,
-   33,
-   34,
-   34,
-   36,
-   37,
-   38,
-   39,
-   40
-  ],
   "hasMore": true,
   "messages": [
    {
@@ -1562,27 +1055,6 @@
  },
  {
   "label": "s40-l8-b20",
-  "seqs": [
-   1,
-   2,
-   3,
-   4,
-   5,
-   6,
-   7,
-   8,
-   9,
-   10,
-   11,
-   12,
-   13,
-   14,
-   15,
-   16,
-   17,
-   18,
-   18
-  ],
   "hasMore": false,
   "messages": [
    {

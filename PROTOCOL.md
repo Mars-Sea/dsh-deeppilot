@@ -332,6 +332,7 @@ Message 投影：
 - `truncated: true` 表示该条 Message 的 UTF-8 JSON 序列化投影原本超过 256KB，
   Bridge 已缩短正文/推理/摘要或附件元数据，使最终单条投影不超过 256KB。
 - 一次 `s2c.session.tail` / `s2c.history.page` 的 `messages` JSON 数组不超过 900KB；超出时保留最接近请求边界的较新后缀，并令 `hasMore: true`，客户端继续分页即可完整取回，禁止发送一个超大整帧后让客户端静默丢弃。
+- `hasMore` 的语义是「请求边界之前**还有能产出消息**的历史」。窗口起点之前只剩投影为空的事件（如 `system/message`、`turn/*`、流式 `assistant/chunk`）时，Bridge 置 `hasMore: false`——客户端据此停止翻页，不会收到空页。
 - `attachments`：仅 user 行携带的附件清单。图片的 `kind=image`，`attachmentId` 是宿主附件服务的持久引用，
   供 c2s.session.attachment 读回原图；`width`/`height` 为像素尺寸（可选，供客户端预留布局）。
   文本文档的 `kind=document`，由 Bridge 以带边界的模型文本提交；当前 Host 没有通用二进制附件服务，

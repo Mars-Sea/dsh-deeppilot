@@ -10,6 +10,7 @@
  */
 
 import { validSendId } from './connection-policy.ts'
+import { normalizePageLimit } from './host-event-projection.ts'
 import {
   IMAGE_MEDIA_TYPES,
   MAX_BASE64_CHARS_PER_IMAGE,
@@ -371,7 +372,7 @@ export const sessionRows: readonly WireFrameRow[] = [
       const page = await ctx.bridge.historyPage(
         payload.sessionId as string,
         payload.beforeSeq,
-        Math.min((payload.limit as number | undefined) ?? 100, 500),
+        normalizePageLimit(payload.limit),
       )
       if (!page) return ctx.fail('E_NOT_FOUND', 'history unavailable')
       ctx.send('s2c.history.page', page)

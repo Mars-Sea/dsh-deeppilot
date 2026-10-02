@@ -561,3 +561,97 @@ function summarizeResult(content: unknown): string {
   const text = contentText(content).replace(/\s+/g, ' ').trim();
   return truncate(text, 90);
 }
+
+// ---------- 历史分页窗口 ----------
+
+/** 参与窗口计算的原始事件：可投影的最小形状。 */
+export interface HistoryWindowEvent {
+  type: string
+  seq: number
+  time?: number
+  data?: unknown
+}
+
+export interface HistoryWindowOptions {
+  /** 只取 seq 严格小于该值的事件（翻页边界）。 */
+  beforeSeq?: number
+  /** 目标消息条数；小于 1 一律按 1 处理。 */
+  limit: number
+}
+
+export interface HistoryWindow {
+  /** 窗口内的原始事件，旧→新，含投影为空者。 */
+  events: Array<{ event: HistoryWindowEvent }>
+  /** 起点之前是否还有更多事件（客户端可继续翻页）。 */
+  hasMore: boolean
+}
+
+/** 一页能要多少条消息：wire 校验与 bridge clamp 共用这一条规则。 */
+export const MIN_HISTORY_PAGE_MESSAGES = 1
+export const MAX_HISTORY_PAGE_MESSAGES = 500
+/** 打开会话时的默认尾部条数。 */
+export const DEFAULT_HISTORY_PAGE_MESSAGES = 100
+/** 打开会话时至少要拉多少条：少于这个数客户端一屏都铺不满。 */
+export const MIN_TAIL_MESSAGES = 10
+
+/** 把 wire 声明的页大小收敛到合法区间。 */
+export function normalizePageLimit(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value)
+    ? Math.max(MIN_HISTORY_PAGE_MESSAGES, Math.min(MAX_HISTORY_PAGE_MESSAGES, value))
+    : DEFAULT_HISTORY_PAGE_MESSAGES
+}
+
+/**
+ * 会话历史的分页窗口：从候选事件里取出「投影后末尾 `limit` 条消息」所在的那
+ * 一段原始事件。
+ *
+ * 迁移前这段循环住在 host adapter（dsh-api-proxy.ts 的 sessions.history）里，
+ * 按块累积、每轮对累计窗口重跑一次投影（稀疏投影时最坏 O(N²/L)）。它与自己
+ * 依赖的投影规则分居两地，而 `projectHistory` 是顺序依赖的（tool/call 与
+ * tool/result 靠 toolByCall 配对），所以这里只做一次前向投影，再按消息归属
+ * 反推窗口起点。
+ *
+ * 注意：窗口**不是**最小的那个后缀。现算法按 `limit` 的整数倍从末端取块，
+ * 因此窗口可能含若干投影为空的前导事件；本实现按消息归属取起点，同样保留
+ * 这些前导事件之前的所有内容——两者的差异由 tests/history-window-parity.test.ts
+ * 逐条钉住（75 例确定性语料，含切断 call/result 配对与重复 seq 的形状）。
+ */
+export function historyWindow(
+  source: readonly unknown[],
+  options: HistoryWindowOptions,
+): HistoryWindow {
+  // 页大小走同一条规则：非有限值回落默认，其余收敛到 [1, 500]。
+  const limit = normalizePageLimit(options.limit)
+  const beforeSeq = options.beforeSeq
+  const candidates: HistoryWindowEvent[] = []
+  for (const raw of source) {
+    if (typeof raw !== 'object' || raw === null) continue
+    const event = raw as HistoryWindowEvent
+    if (typeof event.type !== 'string' || typeof event.seq !== 'number') continue
+    if (beforeSeq !== undefined && !(event.seq < beforeSeq)) continue
+    candidates.push(event)
+  }
+  const entries = candidates.map((event) => ({ event }))
+  if (entries.length === 0) return { events: [], hasMore: false }
+
+  const projected = projectHistory(entries)
+  if (projected.length <= limit) return { events: entries, hasMore: false }
+
+  // 每条消息对应的原始下标：投影按 seq 去重（后者胜出），因此取该 seq 最后一次
+  // 出现的下标。窗口必须包含这些下标，否则消息会被裁掉。
+  const lastIndexBySeq = new Map<number, number>()
+  for (let index = 0; index < candidates.length; index += 1) {
+    lastIndexBySeq.set(candidates[index]!.seq, index)
+  }
+  const keep = projected.slice(projected.length - limit)
+  let front = candidates.length
+  for (const message of keep) {
+    const index = lastIndexBySeq.get(message.seq)
+    if (index !== undefined && index < front) front = index
+  }
+  // hasMore 只表示「窗口之前还有能产出消息的事件」：旧实现按 limit 整数倍取块，
+  // 窗口之前只剩投影为空的前导事件时也报 true，客户端会多发一次翻页才拿到空页。
+  // 这里对前缀做一次投影来定性，代价 O(前 `front` 个事件)。
+  const older = front > 0 ? projectHistory(entries.slice(0, front)) : []
+  return { events: entries.slice(front), hasMore: older.length > 0 }
+}

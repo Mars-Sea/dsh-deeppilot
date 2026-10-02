@@ -13,7 +13,7 @@ import {
   type RemoteApprovalRequest,
   type RemoteQuestionRequest,
 } from './dsh-remote-interactions.ts'
-import { projectHistory } from './host-event-projection.ts'
+import { historyWindow, normalizePageLimit } from './host-event-projection.ts'
 import type {
   ApiProxyLike,
   DirectoryListingLike,
@@ -209,30 +209,13 @@ export class DshApiProxy implements ApiProxyLike {
         console.warn(`[deeppilot] session history unavailable for ${JSON.stringify(sessionId)}: ${toError(error).code}: ${toError(error).message}`)
         throw error
       }
-      const before = request.payload?.beforeSeq
-      const limit = Math.max(1, request.payload?.maxMessages ?? 100)
-      const source = inspected.events
-        .filter((event): event is HistoryResult['events'][number]['event'] =>
-          typeof event === 'object' && event !== null
-          && typeof (event as { type?: unknown }).type === 'string'
-          && typeof (event as { seq?: unknown }).seq === 'number')
-        .filter(event => before === undefined || event.seq < before)
-      let end = source.length
-      let events: HistoryResult['events'] = []
-      while (end > 0 && projectHistory(events).length < limit) {
-        const start = Math.max(0, end - limit)
-        events = [
-          ...source.slice(start, end).map(event => ({ event })),
-          ...events,
-        ]
-        end = start
-      }
-      let trimmed = false
-      while (events.length > 0 && projectHistory(events).length > limit) {
-        events = events.slice(1)
-        trimmed = true
-      }
-      return { events, hasMore: end > 0 || trimmed }
+      // 分页窗口的策略住在 host-event-projection（与它依赖的投影规则同处）；
+      // 适配器只负责拉全量事件、把窗口映射成 HistoryResult。
+      const window = historyWindow(inspected.events, {
+        beforeSeq: request.payload?.beforeSeq,
+        limit: normalizePageLimit(request.payload?.maxMessages),
+      })
+      return { events: window.events as HistoryResult['events'], hasMore: window.hasMore }
     }),
     prompt: async (request) => this.call(() => this.session.prompt({
       ...request.payload!,
