@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { DshApiProxy } from '../src/dsh-api-proxy.ts'
 import { HostBridge } from '../src/host-bridge.ts'
 import type { ApiProxyLike } from '../src/host-api.ts'
-import { MutationJournal } from '../src/mutation-journal.ts'
+import { DispatchJournal, scheduleMutationCodec } from '../src/dispatch-journal.ts'
 import { registryRowFor, validatePayload } from '../src/wire-registry.ts'
 
 const requestId = (): string => `${Date.now()}-${randomUUID()}`
@@ -139,7 +139,11 @@ test('Session fork creates one new session and preserves the source', async () =
   bridge.dispose()
 })
 test('MutationJournal does not persist prompt bodies and prevents duplicate execution', async () => {
-  const journal = new MutationJournal()
+  const journal = new DispatchJournal({
+    codec: scheduleMutationCodec(false),
+    joinInFlight: false,
+    maxFileBytes: 4 * 1024 * 1024,
+  })
   const id = requestId()
   let calls = 0
   const operation = async () => {

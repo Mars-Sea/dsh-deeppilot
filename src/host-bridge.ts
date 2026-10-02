@@ -1,4 +1,10 @@
-import { PromptDeliveryJournal, openDeliveryJournal } from './prompt-delivery.ts'
+import {
+  openDispatchJournal,
+  promptDeliveryCodec,
+  scheduleMutationCodec,
+  type DeliveryReceipt,
+  type MutationDispatchResult,
+} from './dispatch-journal.ts'
 import { randomUUID } from 'node:crypto'
 import type { Envelope, MessageProjection, NotifyCategory, PendingSnapshotPayload, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus, SessionUsageStats, WelcomeCapabilities } from './protocol.ts'
 import {
@@ -35,7 +41,7 @@ import {
   projectHistory,
 } from './host-event-projection.ts'
 import { documentPromptBlock, type PromptDocument } from './document-payload.ts'
-import { openMutationJournal, type MutationJournal } from './mutation-journal.ts'
+import type { DispatchJournal } from './dispatch-journal.ts'
 import { pushScopeFor } from './connection-policy.ts'
 import { capabilityBits } from './host-capabilities.ts'
 import { wireCodeFor, wireErrorOf, type WireErrorCode } from './wire-errors.ts'
@@ -104,9 +110,9 @@ export class HostBridge {
   private started = false
   private disposed = false
 
-  readonly promptDeliveries: PromptDeliveryJournal
-  readonly scheduleMutations: MutationJournal
-  readonly forkMutations: MutationJournal
+  readonly promptDeliveries: DispatchJournal<{ sessionId: string; content: unknown }, DeliveryReceipt>
+  readonly scheduleMutations: DispatchJournal<unknown, MutationDispatchResult<unknown>>
+  readonly forkMutations: DispatchJournal<unknown, MutationDispatchResult<unknown>>
 
   constructor(
     private readonly apiProxy: ApiProxyLike,
@@ -115,9 +121,26 @@ export class HostBridge {
     scheduleJournalPath?: string,
     forkJournalPath?: string,
   ) {
-    this.promptDeliveries = openDeliveryJournal(deliveryJournalPath)
-    this.scheduleMutations = openMutationJournal(scheduleJournalPath)
-    this.forkMutations = openMutationJournal(forkJournalPath, true)
+    // 三个实例是同一个 module 的三次配置：条目方言由 codec 决定（prompt 回执 /
+    // schedule 结果 / fork 结果带持久化 value），落盘路径各自独立、互不影响。
+    this.promptDeliveries = openDispatchJournal({
+      path: deliveryJournalPath,
+      codec: promptDeliveryCodec,
+      joinInFlight: true,
+      maxFileBytes: 8 * 1024 * 1024,
+    })
+    this.scheduleMutations = openDispatchJournal({
+      path: scheduleJournalPath,
+      codec: scheduleMutationCodec(false),
+      joinInFlight: false,
+      maxFileBytes: 4 * 1024 * 1024,
+    })
+    this.forkMutations = openDispatchJournal({
+      path: forkJournalPath,
+      codec: scheduleMutationCodec(true),
+      joinInFlight: false,
+      maxFileBytes: 4 * 1024 * 1024,
+    })
   }
 
   private pushOutlet: PushOutlet | undefined;

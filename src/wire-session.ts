@@ -9,7 +9,7 @@
  * tests/wire-rows.test.ts 固定为显式期望）。
  */
 
-import { validSendId } from './prompt-delivery.ts'
+import { validSendId } from './connection-policy.ts'
 import {
   IMAGE_MEDIA_TYPES,
   MAX_BASE64_CHARS_PER_IMAGE,
@@ -468,8 +468,8 @@ export const sessionRows: readonly WireFrameRow[] = [
     handle: (ctx, payload) => {
       ctx.send('s2c.ack', ctx.bridge.promptDeliveries.lookup(
         ctx.deviceId!,
-        payload.sessionId as string,
         payload.clientSendId as string,
+        payload.sessionId as string,
       ))
     },
   },
@@ -584,9 +584,8 @@ export const sessionRows: readonly WireFrameRow[] = [
         // 幂等投递：同一 clientSendId 重复到达时复用回执，不重复入队。
         const receipt = await ctx.bridge.promptDeliveries.dispatch(
           ctx.deviceId!,
-          sessionId,
           clientSendId,
-          { text, images, documents },
+          { sessionId, content: { text, images, documents } },
           () => ctx.bridge.sendPrompt(sessionId, text, images, documents),
         )
         ctx.send('s2c.ack', receipt)

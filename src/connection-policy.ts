@@ -37,6 +37,14 @@ export const MAX_DEVICE_ID_CHARS = 128
 export const MAX_DEVICE_NAME_CHARS = 64
 export const MAX_APP_VERSION_CHARS = 32
 
+/**
+ * clientSendId / clientRequestId 的形态：13 位纪元前缀 + UUID。
+ * wire 层据此校验载荷，journal 侧据此守卫（见 dispatch-journal.ts）。
+ */
+export function validSendId(id: unknown): id is string {
+  return typeof id === 'string' && /^\d{13}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+}
+
 export function sanitizeDeviceField(value: unknown, maxChars: number): string {
   const raw = typeof value === 'string' ? value : String(value ?? '')
   return raw.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, maxChars)

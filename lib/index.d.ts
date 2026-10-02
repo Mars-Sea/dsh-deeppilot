@@ -29,7 +29,129 @@ declare const ERROR_CODES: {
 };
 type WireErrorCode = keyof typeof ERROR_CODES;
 //#endregion
-//#region src/prompt-delivery.d.ts
+//#region src/dispatch-journal.d.ts
+/** 落盘条目：两个通用字段 + codec 私有字段。 */
+interface JournalEntry {
+  fingerprint: string;
+  createdAt: number;
+  [field: string]: unknown;
+}
+/** operation 的结果：成功带值，失败带 wire 错误码。 */
+type OperationResult<T = unknown> = {
+  ok: true;
+  value: T;
+} | {
+  ok: false;
+  code: WireErrorCode;
+  message?: string;
+};
+/**
+ * 一切「不看条目就能定」的结果类别。codec 用一个方法把它们翻译成自己的方言，
+ * 而不是让核心知道任何一方的形状。
+ */
+type DispatchOutcome =
+/** 命中既有条目（重放）。 */
+{
+  kind: 'replay';
+  entry: JournalEntry;
+} |
+/** 同一 id 搭不同内容。 */
+{
+  kind: 'mismatch';
+} |
+/** 文件损坏 / 目录不可造，journal 已降级。 */
+{
+  kind: 'unavailable';
+} |
+/** id 的纪元前缀超出保留窗口。 */
+{
+  kind: 'expired';
+} |
+/** 条目数已达容量上限。 */
+{
+  kind: 'full';
+} |
+/** 刚跑完的那一次：operation 的结果原样带出（不标 replayed）。 */
+{
+  kind: 'ran';
+  entry: JournalEntry;
+  result: OperationResult;
+} |
+/** operation 抛错：条目保持 unknown，且不得自动重试。 */
+{
+  kind: 'crashed';
+} |
+/** 预留条目时写盘失败。 */
+{
+  kind: 'reserve-failed';
+} |
+/** id 形状不合法（仅 mutation 变体开启这道守卫）。 */
+{
+  kind: 'invalid-id';
+};
+interface DispatchCodec<TRequest = unknown, TResult = unknown> {
+  /** 实例身份：opener 单例键的一部分（含 persistValues 等变体差异）。 */
+  readonly identity: string;
+  /** 请求指纹。prompt 覆盖 [sessionId, content]；mutation 只覆盖 content。 */
+  fingerprint(request: TRequest): string;
+  /** 预留条目时写入的 codec 字段（fingerprint/createdAt 由核心补）。 */
+  reserve(request: TRequest, id: string): Record<string, unknown>;
+  /** operation 成功后就地更新条目。 */
+  accepted(entry: JournalEntry, id: string, value: unknown): void;
+  /** operation 失败后就地更新条目。 */
+  rejected(entry: JournalEntry, id: string, code: WireErrorCode): void;
+  /** 把结果类别翻译成调用方言。 */
+  resultOf(outcome: DispatchOutcome, id: string): TResult;
+  /** id 非法时是否先拒掉（mutation 是；prompt 由 wire 层保证，故否）。 */
+  readonly requiresValidId?: boolean;
+  /** lookup 的匹配规则；缺省表示该实例不提供 lookup。 */
+  matches?(entry: JournalEntry, request: unknown): boolean;
+  /** lookup 未命中时回什么（prompt 要区分 notFound / expired）。 */
+  miss?(id: string, expired: boolean): TResult;
+  /** 落盘容器 → 内存条目表；任何不合法都抛错（核心转成 healthy=false）。 */
+  parse(raw: unknown): Record<string, JournalEntry>;
+  /** 内存条目表 → 落盘容器。 */
+  serialize(entries: Record<string, JournalEntry>): unknown;
+}
+interface DispatchJournalOptions<TRequest = unknown, TResult = unknown> {
+  codec: DispatchCodec<TRequest, TResult>;
+  path?: string;
+  /** 落盘体积上限：prompt 8MB、mutation 4MB（由条目实际大小决定，不统一）。 */
+  maxFileBytes?: number;
+  capacity?: number;
+  retentionMs?: number;
+  /**
+   * 并发重复是否搭同在途那次。prompt 是（重复方拿到同一个最终回执）；
+   * mutation 否（重复方立刻拿到 unknown → E_INTERNAL）。两者都由对等快照钉住。
+   */
+  joinInFlight?: boolean;
+}
+/** Durable at-most-once dispatch. Unknown outcomes are never automatically retried. */
+declare class DispatchJournal<TRequest = unknown, TResult = unknown> {
+  private readonly options;
+  private entries;
+  private inFlight;
+  private healthy;
+  private readonly maxFileBytes;
+  private readonly capacity;
+  private readonly retentionMs;
+  private readonly joinInFlight;
+  constructor(options: DispatchJournalOptions<TRequest, TResult>);
+  private key;
+  /** id 的纪元前缀是否还在保留窗口内（未来 5 分钟以上同样算非法）。 */
+  private expired;
+  private save;
+  /** 查询既有回执；`request` 交给 codec 的 matches 判定（缺省即不提供 lookup）。 */
+  lookup(deviceId: string, id: string, request?: unknown): TResult | undefined;
+  /**
+   * 幂等投递。未知结果绝不自动重试：条目保持 unknown，重放时由 codec 决定
+   * 调用方看到什么。
+   */
+  dispatch(deviceId: string, id: string, request: TRequest, operation: () => Promise<OperationResult>): Promise<TResult>;
+  /** 等所有在途投递结束；供进程收尾。 */
+  settled(): Promise<void>;
+}
+/** prompt 投递的回执：手机侧按 clientSendId 对账。 */
 type DeliveryStatus = 'accepted' | 'rejected' | 'unknown' | 'notFound' | 'expired';
 interface DeliveryReceipt {
   clientSendId: string;
@@ -37,31 +159,18 @@ interface DeliveryReceipt {
   userSeq?: number;
   code?: string;
 }
-/** Durable at-most-once dispatch. Unknown outcomes are never automatically retried. */
-declare class PromptDeliveryJournal {
-  private readonly path?;
-  private readonly capacity;
-  private entries;
-  private inFlight;
-  private healthy;
-  constructor(path?: string | undefined, capacity?: number);
-  private key;
-  private expired;
-  private save;
-  lookup(deviceId: string, sessionId: string, id: string): DeliveryReceipt;
-  /**
-   * 幂等投递。operation 的失败结果携带 wire 错误码（error vocabulary 见
-   * wire-errors.ts）——此前这里还有一张 kind→E_* 小表，是同一词表的第四份拷贝。
-   */
-  dispatch(deviceId: string, sessionId: string, id: string, content: unknown, operation: () => Promise<{
-    ok: true;
-    value: number;
-  } | {
-    ok: false;
-    code: WireErrorCode;
-    message: string;
-  }>): Promise<DeliveryReceipt>;
-}
+/** mutation 的结果：replayed 让调用方知道这是重放而非新执行。 */
+type MutationErrorCode = WireErrorCode;
+type MutationDispatchResult<T> = {
+  ok: true;
+  value?: T;
+  replayed?: boolean;
+} | {
+  ok: false;
+  code: MutationErrorCode;
+  message?: string;
+  replayed?: boolean;
+};
 //#endregion
 //#region src/device-auth.d.ts
 declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage'];
@@ -666,53 +775,6 @@ interface PromptDocument {
   truncated?: boolean;
 }
 //#endregion
-//#region src/mutation-journal.d.ts
-/**
- * 非 prompt 变更的幂等 journal。错误码直接复用 wire 错误码（error vocabulary
- * 的唯一属主是 wire-errors.ts）——此前这里另有一份 MutationErrorCode 联合，
- * 与 Bridge 结果码、wire 码构成第三套词表。
- */
-type MutationErrorCode = WireErrorCode;
-type MutationOperationResult<T> = {
-  ok: true;
-  value: T;
-} | {
-  ok: false;
-  code: MutationErrorCode;
-  message?: string;
-};
-type MutationDispatchResult<T> = {
-  ok: true;
-  value?: T;
-  replayed?: boolean;
-} | {
-  ok: false;
-  code: MutationErrorCode;
-  message?: string;
-  replayed?: boolean;
-};
-/**
- * Small durable at-most-once journal for non-prompt mutations.
- *
- * Only a hash of the request content is persisted. The successful value is
- * kept in memory for the current process so a concurrent retry can receive the
- * same response; after a restart a replay is acknowledged and the client
- * refetches the authoritative resource. This avoids duplicating reminder
- * prompts or conversation data in a second journal.
- */
-declare class MutationJournal {
-  private readonly path?;
-  private readonly persistValues;
-  private readonly entries;
-  private readonly inFlight;
-  private healthy;
-  constructor(path?: string | undefined, persistValues?: boolean);
-  private key;
-  private expired;
-  private save;
-  dispatch<T>(deviceId: string, id: string, content: unknown, operation: () => Promise<MutationOperationResult<T>>): Promise<MutationDispatchResult<T>>;
-}
-//#endregion
 //#region src/host-bridge.d.ts
 /**
  * 失败结果直接携带 wire 错误码（error vocabulary 见 wire-errors.ts）。
@@ -752,9 +814,12 @@ declare class HostBridge {
   private abort;
   private started;
   private disposed;
-  readonly promptDeliveries: PromptDeliveryJournal;
-  readonly scheduleMutations: MutationJournal;
-  readonly forkMutations: MutationJournal;
+  readonly promptDeliveries: DispatchJournal<{
+    sessionId: string;
+    content: unknown;
+  }, DeliveryReceipt>;
+  readonly scheduleMutations: DispatchJournal<unknown, MutationDispatchResult<unknown>>;
+  readonly forkMutations: DispatchJournal<unknown, MutationDispatchResult<unknown>>;
   constructor(apiProxy: ApiProxyLike, historyBufferMax?: number, deliveryJournalPath?: string, scheduleJournalPath?: string, forkJournalPath?: string);
   private pushOutlet;
   private widgetFingerprint;

@@ -527,4 +527,4 @@ export interface ErrorPayload { code: string; message: string }
 export { ERROR_CODES, type WireErrorCode } from './wire-errors.ts'
 
 export interface PromptDeliveryPayload { sessionId: string; clientSendId: string }
-export type { DeliveryReceipt } from "./prompt-delivery.ts"
+export type { DeliveryReceipt } from "./dispatch-journal.ts"

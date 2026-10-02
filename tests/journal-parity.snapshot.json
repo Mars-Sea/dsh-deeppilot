@@ -191,7 +191,7 @@
   "openers": {
     "deliverySamePathSameInstance": true,
     "mutationSamePathSameInstance": true,
-    "mutationFlagIgnoredByKey": true,
+    "mutationFlagIgnoredByKey": false,
     "deliveryPathlessIsFresh": true,
     "mutationPathlessIsFresh": true,
     "fileShape": {

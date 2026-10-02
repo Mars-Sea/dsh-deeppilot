@@ -10,7 +10,7 @@
  * （见 host-capabilities.ts 的 G4 修正）。
  */
 
-import { validSendId } from './prompt-delivery.ts'
+import { validSendId } from './connection-policy.ts'
 import {
   accept,
   isInteger,

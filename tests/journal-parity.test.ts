@@ -18,13 +18,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
-  openDeliveryJournal,
+  DispatchJournal,
+  openDispatchJournal,
+  promptDeliveryCodec,
+  scheduleMutationCodec,
   type DeliveryReceipt,
-} from '../src/prompt-delivery.ts'
-import {
-  openMutationJournal,
   type MutationErrorCode,
-} from '../src/mutation-journal.ts'
+} from '../src/dispatch-journal.ts'
 
 const SNAPSHOT = new URL('./journal-parity.snapshot.json', import.meta.url)
 const RECORD = process.env.RECORD === '1'
@@ -90,9 +90,14 @@ async function runPrompt(
   id: string,
   op?: () => Promise<{ ok: true; value: number } | { ok: false; code: MutationErrorCode; message: string }>,
 ): Promise<Outcome> {
-  const journal = openDeliveryJournal(path)
+  const journal = openDispatchJournal({
+    path,
+    codec: promptDeliveryCodec,
+    joinInFlight: true,
+    maxFileBytes: 8 * 1024 * 1024,
+  })
   let calls = 0
-  const receipt: DeliveryReceipt = await journal.dispatch('device-1', sessionId, id, { text: 'hello' }, async () => {
+  const receipt = await journal.dispatch('device-1', id, { sessionId, content: { text: 'hello' } }, async () => {
     calls += 1
     if (op !== undefined) return await op()
     return { ok: true, value: 7 }
@@ -107,7 +112,12 @@ async function runMutation(
   op?: () => Promise<{ ok: true; value: unknown } | { ok: false; code: MutationErrorCode; message: string }>,
   persistValues = false,
 ): Promise<Outcome> {
-  const journal = openMutationJournal(path, persistValues)
+  const journal = openDispatchJournal({
+    path,
+    codec: scheduleMutationCodec(persistValues),
+    joinInFlight: false,
+    maxFileBytes: 4 * 1024 * 1024,
+  })
   let calls = 0
   const result = await journal.dispatch('device-1', id, content, async () => {
     calls += 1
@@ -136,25 +146,25 @@ async function record(): Promise<Baseline> {
     prompt.first = await runPrompt(path, 's-1', id)
     prompt.duplicate = await runPrompt(path, 's-1', id)
     // 变更内容：同一 id 不同载荷必须被拒。
-    const journal = openDeliveryJournal(path)
-    const changed = await journal.dispatch('device-1', 's-1', id, { text: 'different' }, async () => ({ ok: true, value: 9 }))
+    const journal = openDispatchJournal({ path, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 })
+    const changed = await journal.dispatch('device-1', id, { sessionId: 's-1', content: { text: 'different' } }, async () => ({ ok: true, value: 9 }))
     prompt.changedContentReceipt = { status: changed.status, code: changed.code }
-    prompt.wrongDevice = await openDeliveryJournal(path).lookup('device-2', 's-1', id)
-    prompt.wrongSession = await openDeliveryJournal(path).lookup('device-1', 's-2', id)
-    prompt.lookupHit = await openDeliveryJournal(path).lookup('device-1', 's-1', id)
+    prompt.wrongDevice = await openDispatchJournal({ path, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 }).lookup('device-2', id, 's-1')
+    prompt.wrongSession = await openDispatchJournal({ path, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 }).lookup('device-1', id, 's-2')
+    prompt.lookupHit = await openDispatchJournal({ path, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 }).lookup('device-1', id, 's-1')
 
     // 重启：同一路径的新实例必须认旧回执且不重投。
-    const after = openDeliveryJournal(path)
+    const after = openDispatchJournal({ path, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 })
     prompt.afterRestart = await runPrompt(path, 's-1', id)
-    prompt.sameInstanceAfterRestart = after === openDeliveryJournal(path)
+    prompt.sameInstanceAfterRestart = after === openDispatchJournal({ path, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 })
 
     // operation 抛错：回执保持 unknown，重启后依然 unknown。
     const crashId = sendId()
-    const crashed = await openDeliveryJournal(path).dispatch('device-1', 's-1', crashId, { text: 'x' }, async () => {
+    const crashed = await openDispatchJournal({ path, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 }).dispatch('device-1', crashId, { sessionId: 's-1', content: { text: 'x' } }, async () => {
       throw new Error('upstream exploded')
     })
     prompt.operationThrows = { status: crashed.status, code: crashed.code }
-    prompt.operationThrowsAfterRestart = openDeliveryJournal(path).lookup('device-1', 's-1', crashId)
+    prompt.operationThrowsAfterRestart = openDispatchJournal({ path, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 }).lookup('device-1', crashId, 's-1')
 
     // 结论统一收口
     prompt.cases = {
@@ -168,8 +178,8 @@ async function record(): Promise<Baseline> {
   {
     const { dir, cleanup } = await scratch()
     const path = join(dir, 'expired.json')
-    const journal = openDeliveryJournal(path)
-    const stale = await journal.dispatch('device-1', 's-1', sendId(Date.now() - 30 * 24 * 60 * 60 * 1000), { text: 'old' }, async () => ({ ok: true, value: 1 }))
+    const journal = openDispatchJournal({ path, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 })
+    const stale = await journal.dispatch('device-1', sendId(Date.now() - 30 * 24 * 60 * 60 * 1000), { sessionId: 's-1', content: { text: 'old' } }, async () => ({ ok: true, value: 1 }))
     prompt.expired = { status: stale.status }
 
     // capacity 是构造参数（默认 10000），测试里改不了；用「同 id 二次投递」
@@ -180,14 +190,14 @@ async function record(): Promise<Baseline> {
 
     const corruptPath = join(dir, 'corrupt.json')
     writeFileSync(corruptPath, '{not json')
-    const corrupt = openDeliveryJournal(corruptPath)
-    const corruptReceipt = await corrupt.dispatch('device-1', 's-1', sendId(), { text: 'c' }, async () => ({ ok: true, value: 3 }))
+    const corrupt = openDispatchJournal({ path: corruptPath, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 })
+    const corruptReceipt = await corrupt.dispatch('device-1', sendId(), { sessionId: 's-1', content: { text: 'c' } }, async () => ({ ok: true, value: 3 }))
     prompt.corrupt = { status: corruptReceipt.status }
-    prompt.corruptLookup = corrupt.lookup('device-1', 's-1', sendId())
+    prompt.corruptLookup = corrupt.lookup('device-1', sendId(), 's-1')
 
     const unwritable = join('/proc/definitely/not/writable', 'x.json')
-    const blocked = openDeliveryJournal(unwritable)
-    const blockedReceipt = await blocked.dispatch('device-1', 's-1', sendId(), { text: 'd' }, async () => ({ ok: true, value: 4 }))
+    const blocked = openDispatchJournal({ path: unwritable, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 })
+    const blockedReceipt = await blocked.dispatch('device-1', sendId(), { sessionId: 's-1', content: { text: 'd' } }, async () => ({ ok: true, value: 4 }))
     prompt.unwritableDir = { status: blockedReceipt.status }
     await cleanup()
   }
@@ -215,8 +225,7 @@ async function record(): Promise<Baseline> {
     // 损坏与不可写目录。
     const corruptPath = join(dir, 'corrupt.json')
     writeFileSync(corruptPath, '[1,2,3]')
-    const corrupt = openMutationJournal(corruptPath)
-    mutation.corrupt = await runMutation(corruptPath, sendId(), { sessionId: 's-1' })
+        mutation.corrupt = await runMutation(corruptPath, sendId(), { sessionId: 's-1' })
     mutation.unwritableDir = await runMutation(join('/proc/definitely/not/writable', 'y.json'), sendId(), { sessionId: 's-1' })
 
     // validSendId 守卫：mutation 侧独有。
@@ -239,7 +248,7 @@ async function record(): Promise<Baseline> {
     const replayed = await runMutation(path, id, { sessionId: 's-1' }, undefined, true)
     mutation.persistValuesReplay = replayed
     mutation.persistValuesInstanceIsSingleton =
-      openMutationJournal(path, true) === openMutationJournal(path, true)
+      openDispatchJournal({ path, codec: scheduleMutationCodec(true), joinInFlight: false }) === openDispatchJournal({ path, codec: scheduleMutationCodec(true), joinInFlight: false })
     await cleanup()
   }
 
@@ -247,17 +256,21 @@ async function record(): Promise<Baseline> {
   {
     const { dir, cleanup } = await scratch()
     const path = join(dir, 'single.json')
-    openers.deliverySamePathSameInstance = openDeliveryJournal(path) === openDeliveryJournal(path)
-    openers.mutationSamePathSameInstance = openMutationJournal(path, false) === openMutationJournal(path, false)
-    // 既有隐患：缓存键只有 path，不含 persistValues。
-    openers.mutationFlagIgnoredByKey = openMutationJournal(path, false) === openMutationJournal(path, true)
-    openers.deliveryPathlessIsFresh = openDeliveryJournal(undefined) !== openDeliveryJournal(undefined)
-    openers.mutationPathlessIsFresh = openMutationJournal(undefined, false) !== openMutationJournal(undefined, false)
+    openers.deliverySamePathSameInstance = openDispatchJournal({ path, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 }) === openDispatchJournal({ path, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 })
+    openers.mutationSamePathSameInstance = openDispatchJournal({ path, codec: scheduleMutationCodec(false), joinInFlight: false }) === openDispatchJournal({ path, codec: scheduleMutationCodec(false), joinInFlight: false })
+    // 缓存键 = path + codec 身份（含 persistValues）。迁移前键里只有 path，
+    // 这一项因此恒为 true（同一路径以不同 flag 打开会复用错实例）；统一后
+    // 身份进键，false 才是正确值。这是本次唯一有意的行为变化。
+    openers.mutationFlagIgnoredByKey = openDispatchJournal({ path, codec: scheduleMutationCodec(false), joinInFlight: false }) === openDispatchJournal({ path, codec: scheduleMutationCodec(true), joinInFlight: false })
+    openers.deliveryPathlessIsFresh = openDispatchJournal({ codec: promptDeliveryCodec, joinInFlight: true }) !== openDispatchJournal({ codec: promptDeliveryCodec, joinInFlight: true })
+    openers.mutationPathlessIsFresh = openDispatchJournal({ codec: scheduleMutationCodec(false), joinInFlight: false }) !== openDispatchJournal({ codec: scheduleMutationCodec(false), joinInFlight: false })
     // 落盘格式的形态：两者各用独立路径，互不掩盖。
     const mutationPath = join(dir, 'shape-mutation.json')
     const promptPath = join(dir, 'shape-prompt.json')
-    await openMutationJournal(mutationPath, true).dispatch('device-1', sendId(), { sessionId: 's' }, async () => ({ ok: true, value: { sessionId: 'forked' } }))
-    await openDeliveryJournal(promptPath).dispatch('device-1', 's', sendId(), { text: 'p' }, async () => ({ ok: true, value: 1 }))
+    await openDispatchJournal({ path: mutationPath, codec: scheduleMutationCodec(true), joinInFlight: false, maxFileBytes: 4 * 1024 * 1024 })
+      .dispatch('device-1', sendId(), { sessionId: 's' }, async () => ({ ok: true, value: { sessionId: 'forked' } }))
+    await openDispatchJournal({ path: promptPath, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 })
+      .dispatch('device-1', sendId(), { sessionId: 's', content: { text: 'p' } }, async () => ({ ok: true, value: 1 }))
     const mutationDisk = JSON.parse(readFileSync(mutationPath, 'utf8')) as { version: number; entries: unknown[] }
     const promptDisk = JSON.parse(readFileSync(promptPath, 'utf8')) as { version: number; entries: unknown[] }
     openers.fileShape = {
