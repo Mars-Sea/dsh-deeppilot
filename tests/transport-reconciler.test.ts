@@ -91,12 +91,22 @@ test('配置变化：先拆旧的，再起新的', async () => {
 test('skipWhenDisabled=true：未启用直接置 disabled，不构造', async () => {
   const spec = makeSpec({ skipWhenDisabled: true })
   const logs: string[] = []
-  const reconciler = new TransportReconciler(spec, () => config({ enabled: false, port: 7 }), (m) => logs.push(m), initialStatus)
+  const withMessages = makeSpec({
+    skipWhenDisabled: true,
+    disabledMessage: 'local transport disabled',
+  })
+  const reconciler = new TransportReconciler(withMessages, () => config({ enabled: false, port: 7 }), (m) => logs.push(m), initialStatus)
   await reconciler.reconcile()
-  assert.deepEqual(spec.calls, ['disabledStatus'])
+  assert.deepEqual(withMessages.calls, ['disabledStatus'])
   assert.equal(reconciler.status().phase, 'disabled')
   assert.equal(reconciler.status().label, '7')
-  assert.deepEqual(logs, ['transport disabled'])
+  assert.deepEqual(logs, ['local transport disabled'], '未启用时的日志由行自己提供')
+
+  // 未提供文案的行不记日志——公共协议不写死任何一句。
+  const silentLogs: string[] = []
+  const silent = new TransportReconciler(spec, () => config({ enabled: false, port: 7 }), (m) => silentLogs.push(m), initialStatus)
+  await silent.reconcile()
+  assert.deepEqual(silentLogs, [])
 })
 
 test('skipWhenDisabled=false（Funnel 式）：未启用仍然构造', async () => {

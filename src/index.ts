@@ -8,6 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { WebSocketServer } from 'ws'
 import { BridgeConnection } from './connection.ts'
 import { PushGateway } from './push-gateway.ts'
+import { createLocalTransport, createRemoteTransport } from './transport-reconciler.ts'
 import { ConnectionGate } from './connection-gate.ts'
 import { HostBridge } from './host-bridge.ts'
 import { DshApiProxy, type DshInteractionKind } from './dsh-api-proxy.ts'
@@ -21,22 +22,15 @@ import {
   loadOrCreateHostAudience,
   normalizeDeviceScopes,
 } from './device-auth.ts'
-import {
-  DEFAULT_REMOTE_HOSTNAME,
-  normalizeRemoteHostname,
-  RemoteSupervisor,
-  type RemoteStatus,
-} from './remote-supervisor.ts'
-import { normalizeFunnelConnectionLimit } from './funnel-policy.ts'
+import type { RemoteStatus } from './remote-supervisor.ts'
 import { localLANIPv4Addresses } from './local-address.ts'
 import { UpdateChecker, type UpdateInfo } from './update-check.ts'
 import { normalizeOptions } from './config.ts'
 import type { Config } from './config.ts'
 import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
-import type { PushDelivery } from './protocol.ts'
 import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
-import { DEFAULT_LOCAL_PORT, localEndpointURLs, localListenError, normalizeLocalPort } from './local-policy.ts'
+import { localEndpointURLs } from './local-policy.ts'
 import { closeServer, createPhoneServer, listen } from './phone-server.ts'
 import { loadOrCreateLanTlsIdentity, type LanTlsIdentity } from './lan-tls.ts'
 
@@ -237,17 +231,11 @@ export function apply(ctx: Context, options: unknown): void {
   }
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES })
-  let remoteSupervisor: RemoteSupervisor | undefined
-  let localState: DeepPilotReport['local'] = {
-    phase: currentConfig().enabled === true && currentConfig().local?.enabled !== false ? 'starting' : 'disabled',
-    port: normalizeLocalPort(currentConfig().local?.port),
-    endpoints: [],
-    updatedAt: Date.now(),
-  }
   // The LAN TLS identity is loaded once per plugin lifetime: port or enable
   // toggles reuse it so paired devices keep their pin. `tlsIdentityRegenerated`
   // stays raised for the settings page until the next restart because it
-  // means every previously paired LAN device must pair again.
+  // means every previously paired LAN device must pair again. 身份留在
+  // apply()——它被 listener 启动、配对回显与 report 三处消费，协调器不懂 TLS。
   let lanTlsIdentity: Promise<LanTlsIdentity> | undefined
   let tlsIdentityRegenerated = false
   const loadLanTls = (): Promise<LanTlsIdentity> => {
@@ -266,21 +254,7 @@ export function apply(ctx: Context, options: unknown): void {
     lanTlsIdentity.catch(() => { lanTlsIdentity = undefined })
     return lanTlsIdentity
   }
-  const localStatus = (addresses: readonly string[]): DeepPilotReport['local'] => ({
-    ...localState,
-    endpoints: localState.phase === 'online' ? localEndpointURLs(addresses, localState.port) : [],
-    ...(tlsIdentityRegenerated ? { tlsIdentityRegenerated: true } : {}),
-  })
-  const remoteStatus = (): RemoteStatus => remoteSupervisor?.status() ?? {
-    provider: 'tailscale-funnel',
-    phase: currentConfig().remote?.enabled === true ? 'stopped' : 'disabled',
-    updatedAt: Date.now(),
-  }
 
-  // Self-update check: one process-wide instance. The initial schedule fires
-  // a single background GitHub fetch shortly after boot. The result is
-  // surfaced through the report snapshot; the UI shows nothing extra on
-  // a quiet host, and one inline "new version" link when an update exists.
   const updateChecker = new UpdateChecker({ log, currentVersion: SERVER_VERSION })
   updateChecker.scheduleInitial()
   const updateInfo = (): UpdateInfo => updateChecker.get()
@@ -573,115 +547,38 @@ export function apply(ctx: Context, options: unknown): void {
   // Funnel keeps its loopback-only ephemeral origin. They share only the
   // narrow handlers above, so a LAN bind failure cannot take remote access
   // down and neither listener exposes DSH's wider web/API surface.
-  let localServer: ReturnType<typeof createPhoneServer> | undefined
-  let appliedLocalKey: string | undefined
-  let localDisposed = false
-  let localTail = Promise.resolve()
-  const reconcileLocal = async (): Promise<void> => {
-    if (localDisposed) return
-    const config = currentConfig()
-    const localConfig = config.local ?? {}
-    const next = {
-      enabled: config.enabled === true && localConfig.enabled !== false,
-      port: normalizeLocalPort(localConfig.port),
-    }
-    const nextKey = JSON.stringify(next)
-    if (nextKey === appliedLocalKey) return
-    appliedLocalKey = nextKey
-
-    const previous = localServer
-    localServer = undefined
-    await closeServer(previous)
-    if (localDisposed) return
-    if (!next.enabled) {
-      localState = { phase: 'disabled', port: next.port, endpoints: [], updatedAt: Date.now() }
-      log('local transport disabled')
-      return
-    }
-
-    localState = { phase: 'starting', port: next.port, endpoints: [], updatedAt: Date.now() }
-    let server: ReturnType<typeof createPhoneServer> | undefined
-    try {
-      const tls = await loadLanTls()
-      if (localDisposed || appliedLocalKey !== nextKey) return
-      server = createPhoneServer(phoneHandlers, { key: tls.key, cert: tls.cert })
-      localServer = server
-      await listen(server, next.port, '0.0.0.0')
-      if (localDisposed || localServer !== server) {
-        await closeServer(server)
-        return
-      }
-      localState = {
-        phase: 'online',
-        port: next.port,
-        endpoints: [],
-        tlsFingerprint: tls.fingerprint,
-        updatedAt: Date.now(),
-      }
-      log(`local transport listening on https://0.0.0.0:${next.port} (tls fingerprint ${tls.fingerprint})`)
-    } catch (error) {
-      if (server !== undefined) {
-        if (localServer === server) localServer = undefined
-        await closeServer(server)
-      }
-      const message = localListenError(error, next.port)
-      localState = { phase: 'error', port: next.port, endpoints: [], message, updatedAt: Date.now() }
-      log('local transport failed: ' + message)
+  //
+  // 差分、串行、拆除与状态发布的公共协议住在 TransportReconciler；两个传输
+  // 各自的差异（skipWhenDisabled / appliedKey 时机 / 错误分支）在
+  // createLocalTransport 与 createRemoteTransport 里显式声明并原样保留——
+  // 统一它们会改变一条当前稳定路径上的并发语义，属于单独一轮的决策。
+  const localTransport = createLocalTransport({
+    handlers: phoneHandlers,
+    config: currentConfig,
+    tls: loadLanTls,
+    log,
+  })
+  const remoteTransport = createRemoteTransport({
+    handlers: phoneHandlers,
+    config: currentConfig,
+    originURL: () => originURL,
+    dataDir,
+    log,
+  })
+  const localStatus = (addresses: readonly string[]): DeepPilotReport['local'] => {
+    const state = localTransport.status()
+    return {
+      ...state,
+      endpoints: state.phase === 'online' ? localEndpointURLs(addresses, state.port) : [],
+      ...(tlsIdentityRegenerated ? { tlsIdentityRegenerated: true } : {}),
     }
   }
-  scheduleLocalReconcile = () => {
-    localTail = localTail
-      .then(reconcileLocal)
-      .catch((error) => log('local reconcile failed: ' + String(error)))
-  }
+  const remoteStatus = (): RemoteStatus => remoteTransport.status()
 
   const originServer = createPhoneServer(phoneHandlers)
   let originURL: string | undefined
-  let appliedRemoteKey: string | undefined
-  let remoteDisposed = false
-  let remoteTail = Promise.resolve()
-  const reconcileRemote = async (): Promise<void> => {
-    if (remoteDisposed || originURL === undefined) return
-    const config = currentConfig()
-    const remoteConfig = config.remote ?? {}
-    const remotePort: 443 | 8443 | 10000 = remoteConfig.funnelPort === 8443 || remoteConfig.funnelPort === 10000
-      ? remoteConfig.funnelPort
-      : 443
-    const helperPath = remoteConfig.helperPath?.trim() || undefined
-    const next = {
-      enabled: config.enabled === true && remoteConfig.enabled === true && remoteConfig.provider === 'tailscale-funnel',
-      hostname: normalizeRemoteHostname(remoteConfig.hostname),
-      statePath: remoteConfig.statePath?.trim() || join(dataDir, 'tailscale'),
-      helperPath,
-      funnelPort: remotePort,
-      maxConnectionsPerSource: normalizeFunnelConnectionLimit(remoteConfig.maxConnectionsPerSource),
-    }
-    const nextKey = JSON.stringify(next)
-    if (nextKey === appliedRemoteKey) return
-
-    const previous = remoteSupervisor
-    remoteSupervisor = undefined
-    if (previous !== undefined) await previous.dispose()
-    if (remoteDisposed) return
-
-    const supervisor = new RemoteSupervisor({
-      enabled: next.enabled,
-      hostname: next.hostname,
-      statePath: next.statePath,
-      ...(next.helperPath ? { helperPath: next.helperPath } : {}),
-      funnelPort: next.funnelPort,
-      maxConnectionsPerSource: next.maxConnectionsPerSource,
-      log,
-    })
-    remoteSupervisor = supervisor
-    appliedRemoteKey = nextKey
-    await supervisor.start(originURL)
-  }
-  scheduleRemoteReconcile = () => {
-    remoteTail = remoteTail
-      .then(reconcileRemote)
-      .catch((error) => log('remote reconcile failed: ' + String(error)))
-  }
+  scheduleLocalReconcile = () => localTransport.scheduleReconcile()
+  scheduleRemoteReconcile = () => remoteTransport.scheduleReconcile()
 
   ;(ctx as unknown as SubContext).effect(() => {
     scheduleLocalReconcile?.()
@@ -693,21 +590,12 @@ export function apply(ctx: Context, options: unknown): void {
       }
     }, (error: unknown) => log('remote origin failed: ' + String(error)))
     return async () => {
-      localDisposed = true
-      remoteDisposed = true
       scheduleLocalReconcile = undefined
       scheduleRemoteReconcile = undefined
-      const activeLocal = localServer
-      localServer = undefined
-      await Promise.allSettled([closeServer(activeLocal), closeServer(originServer)])
-      localState = { phase: 'stopped', port: localState.port, endpoints: [], updatedAt: Date.now() }
       await Promise.allSettled([
-        localTail,
-        remoteTail.then(async () => {
-          const supervisor = remoteSupervisor
-          remoteSupervisor = undefined
-          if (supervisor !== undefined) await supervisor.dispose()
-        }),
+        closeServer(originServer),
+        localTransport.dispose(),
+        remoteTransport.dispose(),
       ])
     }
   }, 'deeppilot: independent transports')
