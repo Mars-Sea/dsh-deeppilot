@@ -102,6 +102,8 @@ export interface GateHost {
   onAuthenticated(identity: AuthenticatedIdentity): void
   /** 隐私 preserving 审计事件（有效 hello 之后）。 */
   deviceAuthenticated(deviceId: string): void
+  /** 认证落定：纯观测通知（名额释放与限流记账已在门内完成）。 */
+  settled(ok: boolean, reason: SettleReason): void
 }
 
 export interface ConnectionGateOptions {
@@ -111,7 +113,6 @@ export interface ConnectionGateOptions {
   /** 稳定 Host 身份，写入每次挑战。 */
   audience: string
   limiter: AuthRateLimiter
-  host: GateHost
   log: (message: string) => void
   /** 审计标签函数：把敏感标识变成短哈希，供日志使用。 */
   auditLabel?: (value: string) => string
@@ -133,6 +134,7 @@ export class ConnectionGate {
   private helloTimer: NodeJS.Timeout | undefined
   private attachTimer: NodeJS.Timeout | undefined
   private attached = false
+  private host: GateHost | undefined
   private admission: { release: () => void } | undefined
   private dead = false
 
@@ -161,24 +163,49 @@ export class ConnectionGate {
     return !this.dead
   }
 
+  /** 客户端身份：限流与审计日志共用同一个值。 */
+  get source(): string {
+    return this.options.source
+  }
+
   /**
-   * ws 就绪：下发挑战并启动 hello 计时器。只应被调用一次。
+   * ws 就绪：接线宿主、下发挑战并启动 hello 计时器。只应被调用一次——
+   * 由连接在构造时调用（那一刻 ws 才真正存在）。
    */
-  attach(): void {
+  attach(host: GateHost): void {
     if (this.dead || this.attached) return
     this.attached = true
+    this.host = host
     if (this.attachTimer !== undefined) {
       clearTimeout(this.attachTimer)
       this.attachTimer = undefined
     }
-    this.options.host.send('s2c.auth.challenge', this.challenge)
+    host.send('s2c.auth.challenge', this.challenge)
     this.helloTimer = setTimeout(() => {
       this.helloTimer = undefined
       if (this.authenticated) return
       this.settle(false, 'timeout')
-      this.options.host.close(4402, 'auth timeout')
+      this.host?.close(4402, 'auth timeout')
     }, AUTH_TIMEOUT_MS)
     this.helloTimer.unref()
+  }
+
+  /**
+   * 接入窗口结束：若始终没有 socket 接上（upgrade 回调没执行），立刻归还名额，
+   * 不必等 5 秒兜底。已 attach 的门不在此释放——它的名额由落定路径或 hello
+   * 计时器负责。
+   */
+  releaseIfNeverAttached(): void {
+    if (!this.attached && !this.settled) {
+      this.dead = true
+      this.releaseAdmission()
+    }
+  }
+
+  /** 拒绝一个已创建但最终不会接线的门（bridge 变更、构造失败）。 */
+  markDead(): void {
+    this.dead = true
+    this.releaseAdmission()
   }
 
   /** socket 关闭：未落定则按 closed 收尾（并释放名额）。 */
@@ -193,30 +220,31 @@ export class ConnectionGate {
    * pre-auth 白名单、撤销吞帧），再进入认证、授权与分发。
    */
   async handleFrame(raw: string): Promise<void> {
-    if (this.dead) return
+    const host = this.host
+    if (this.dead || host === undefined) return
     // 撤销后的设备正在关闭：吞掉一切，不再回应一个已不存在的设备。
     if (this.revoked) return
     // 长度上限先行：预认证帧很小，超限即拒且不解析——不让匿名端用 64MiB
     // 载荷在认证窗口内消耗 CPU。
     if (!this.authenticated && raw.length > PRE_AUTH_FRAME_BYTES) {
-      this.options.host.close(1009, 'pre-auth frame too large')
+      host.close(1009, 'pre-auth frame too large')
       return
     }
     let env: Envelope
     try {
       const parsed: unknown = JSON.parse(raw)
       if (!isEnvelope(parsed)) {
-        this.options.host.fail(undefined, 'E_PROTOCOL', 'malformed frame')
+        host.fail(undefined, 'E_PROTOCOL', 'malformed frame')
         return
       }
       env = parsed
     } catch {
-      this.options.host.fail(undefined, 'E_PROTOCOL', 'frame is not valid JSON')
+      host.fail(undefined, 'E_PROTOCOL', 'frame is not valid JSON')
       return
     }
     if (env.v !== PROTOCOL_VERSION) {
-      this.options.host.fail(env.id, 'E_UNSUPPORTED', 'unsupported protocol version')
-      this.options.host.close(4500, 'protocol version mismatch')
+      host.fail(env.id, 'E_UNSUPPORTED', 'unsupported protocol version')
+      host.close(4500, 'protocol version mismatch')
       return
     }
 
@@ -224,7 +252,7 @@ export class ConnectionGate {
       // 匿名端对每个非控制帧只得到一个答复：透露哪些名字已注册等于泄露帧清单。
       const control = registryRowFor(env.type)
       if (control === undefined || control.stage !== 'pre-auth') {
-        this.options.host.fail(env.id, 'E_PROTOCOL', 'authenticate first')
+        host.fail(env.id, 'E_PROTOCOL', 'authenticate first')
         return
       }
       await dispatchFrame(control, this.context(env), {})
@@ -235,21 +263,21 @@ export class ConnectionGate {
     // widget 只读门在前，且覆盖未知类型：短连接只准发白名册行，其余一律
     // 「只读」，不泄露帧清单。
     if (this.widgetClient && (row === undefined || widgetPolicyOf(row) === 'deny')) {
-      return this.options.host.fail(env.id, 'E_FORBIDDEN', 'widget connection is read-only')
+      return host.fail(env.id, 'E_FORBIDDEN', 'widget connection is read-only')
     }
     // 未知类型直接 E_PROTOCOL（G6）。先查 scope 会让没有 sessions.read 的
     // 设备听到关于一个不存在帧的「权限不足」。
     if (row === undefined) {
-      this.options.host.fail(env.id, 'E_PROTOCOL', 'unknown type: ' + env.type)
+      host.fail(env.id, 'E_PROTOCOL', 'unknown type: ' + env.type)
       return
     }
     const scope = scopeRejection(row, this.scopes)
-    if (scope !== undefined) return this.options.host.fail(env.id, scope.code, scope.message)
+    if (scope !== undefined) return host.fail(env.id, scope.code, scope.message)
     // 校验先于能力门，与迁移前「载荷形状先于 handler 看能力」的次序一致。
     const validated = validatePayload(row, env.payload)
-    if (!validated.ok) return this.options.host.fail(env.id, validated.code, validated.message)
-    const capability = capabilityRejection(row, this.options.host.bridge.capabilities)
-    if (capability !== undefined) return this.options.host.fail(env.id, capability.code, capability.message)
+    if (!validated.ok) return host.fail(env.id, validated.code, validated.message)
+    const capability = capabilityRejection(row, host.bridge.capabilities)
+    if (capability !== undefined) return host.fail(env.id, capability.code, capability.message)
 
     await dispatchFrame(row, this.context(env), validated.value)
   }
@@ -263,18 +291,19 @@ export class ConnectionGate {
 
   /** c2s.auth.prove 的行 handler 调用这里：验签、载入 scope、记账、落定。 */
   async authenticate(env: Envelope): Promise<void> {
+    const host = this.host
     // 刚自撤销的 socket 正在关闭，不能再认证（注册表墓碑本来也会拒）。
-    if (this.revoked) return
+    if (this.revoked || host === undefined) return
     const p = (env.payload ?? {}) as Partial<AuthProofPayload>
     if (!p.deviceId) {
-      this.options.host.fail(env.id, 'E_PROTOCOL', 'deviceId required')
-      this.options.host.close(4403, 'deviceId required')
+      host.fail(env.id, 'E_PROTOCOL', 'deviceId required')
+      host.close(4403, 'deviceId required')
       return
     }
     const deviceId = sanitizeDeviceField(p.deviceId, MAX_DEVICE_ID_CHARS)
     if (!deviceId) {
-      this.options.host.fail(env.id, 'E_PROTOCOL', 'deviceId required')
-      this.options.host.close(4403, 'deviceId required')
+      host.fail(env.id, 'E_PROTOCOL', 'deviceId required')
+      host.close(4403, 'deviceId required')
       return
     }
     const deviceName = sanitizeDeviceField(p.deviceName, MAX_DEVICE_NAME_CHARS) || 'unknown'
@@ -297,9 +326,9 @@ export class ConnectionGate {
         ...this.challenge,
       }, p.signature)
     if (!proofValid || record === undefined) {
-      this.options.host.fail(env.id, 'E_AUTH', 'device proof missing or invalid')
+      host.fail(env.id, 'E_AUTH', 'device proof missing or invalid')
       this.settle(false, 'invalid-proof')
-      this.options.host.close(4401, 'invalid device proof')
+      host.close(4401, 'invalid device proof')
       return
     }
     this.settle(true, 'success')
@@ -311,9 +340,9 @@ export class ConnectionGate {
     if (!this.widgetClient) {
       this.options.devices.markAuthenticated(deviceId, deviceName, appVersion, Date.now())
     }
-    this.options.host.deviceAuthenticated(deviceId)
+    host.deviceAuthenticated(deviceId)
     // 欢迎帧与重放由连接负责：认证是安全判定，欢迎是数据面展示。
-    this.options.host.onAuthenticated({
+    host.onAuthenticated({
       deviceId,
       scopes: this.scopes,
       widgetClient: this.widgetClient,
@@ -328,6 +357,7 @@ export class ConnectionGate {
     if (this.settled) return
     this.settled = true
     this.releaseAdmission()
+    this.host?.settled(ok, reason)
     if (ok) {
       this.options.limiter.recordSuccess(this.options.source)
       return
@@ -346,7 +376,7 @@ export class ConnectionGate {
 
   /** 把宿主投影成行看到的每帧上下文：id 绑进 send/fail，身份来自门。 */
   private context(env: Envelope): FrameContext {
-    const host = this.options.host
+    const host = this.host!
     return {
       frame: env,
       deviceId: this.deviceId,

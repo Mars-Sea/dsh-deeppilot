@@ -7,6 +7,7 @@ import type { Duplex } from 'node:stream'
 import type { Context } from '@deepseek-ai/cordis'
 import { WebSocketServer } from 'ws'
 import { BridgeConnection } from './connection.ts'
+import { ConnectionGate } from './connection-gate.ts'
 import { HostBridge } from './host-bridge.ts'
 import type { PushOutlet } from './host-bridge.ts'
 import { DshApiProxy, type DshInteractionKind } from './dsh-api-proxy.ts'
@@ -935,28 +936,39 @@ export function apply(ctx: Context, options: unknown): void {
           return
         }
         pendingUpgrades += 1
+        // 声明在 try 之外：finally 需要归还一个可能未创建成功的门的名额。
+        let gate: ConnectionGate | undefined
         try {
-        const { devices, audience } = await ready
-        if (!audience || !devices) {
-          rejectUpgrade(socket, 503, 'bridge degraded')
-          return
-        }
-        const source = requestClientIdentity(req)
-        const admission = authRateLimiter.admit(source)
-        if (!admission.ok) {
-          rejectUpgrade(socket, 429, 'authentication rate limited', admission.retryAfterMs / 1_000)
-          return
-        }
-        const bridge = state.bridge
-        if (!bridge) {
-          admission.release()
-          rejectUpgrade(socket, 503, 'bridge not ready')
-          return
-        }
-        try {
+          const { devices, audience } = await ready
+          if (!audience || !devices) {
+            rejectUpgrade(socket, 503, 'bridge degraded')
+            return
+          }
+          const bridge = state.bridge
+          if (!bridge) {
+            rejectUpgrade(socket, 503, 'bridge not ready')
+            return
+          }
+          // The gate is created before the ws exists, so the admission slot is
+          // held even when the upgrade callback never runs (socket gone
+          // mid-upgrade). Its attach timeout covers that case; once the socket
+          // is live, the gate's hello deadline takes over.
+          gate = new ConnectionGate({
+            source: requestClientIdentity(req),
+            devices,
+            audience,
+            limiter: authRateLimiter,
+            log,
+            auditLabel,
+          })
+          if (!gate.admitted) {
+            rejectUpgrade(socket, 429, 'authentication rate limited')
+            return
+          }
+          const live = gate
           wss.handleUpgrade(req, socket, head, (ws) => {
             if (auth.audience !== audience || state.bridge !== bridge) {
-              admission.release()
+              live.markDead()
               ws.close(1012, 'bridge changed')
               return
             }
@@ -968,18 +980,12 @@ export function apply(ctx: Context, options: unknown): void {
                 audience,
                 log,
                 debug: currentConfig().diagnostics?.debug === true,
+                source: live.source,
+                rateLimiter: authRateLimiter,
+                auditLabel,
                 onClosed: (closed) => connections.delete(closed),
-                onAuthenticationSettled: (ok) => {
-                  admission.release()
-                  if (ok) {
-                    authRateLimiter.recordSuccess(source)
-                  } else {
-                    const failure = authRateLimiter.recordFailure(source)
-                    if (failure.newlyBlocked) log(`authentication source blocked source=${auditLabel(source)}`)
-                  }
-                },
                 onDeviceAuthenticated: (deviceId) => {
-                  log(`device authenticated id=${auditLabel(deviceId)} source=${auditLabel(source)}`)
+                  log(`device authenticated id=${auditLabel(deviceId)} source=${auditLabel(live.source)}`)
                 },
                 onPushEnrollKey: handlePushEnrollKey,
                 // A device that unbinds itself from the app must not leave a
@@ -987,19 +993,20 @@ export function apply(ctx: Context, options: unknown): void {
                 // registry tombstone is already written by the handler, so
                 // this only drops the sibling sockets.
                 onDeviceRevoke: (deviceId, except) => revokeDevice(deviceId, except),
-              })
+              }, live)
               connections.add(connection)
             } catch (error) {
-              admission.release()
+              live.markDead()
               ws.close(1011, 'connection setup failed')
               throw error
             }
           })
-        } catch (error) {
-          admission.release()
-          throw error
-        }
         } finally {
+          // The attach window ends here: if no socket was produced (the upgrade
+          // callback never ran), the slot goes back immediately instead of
+          // waiting for the attach timeout. An attached gate keeps its slot
+          // until a settle path or its hello deadline.
+          gate?.releaseIfNeverAttached()
           pendingUpgrades -= 1
         }
       } catch (error) {
