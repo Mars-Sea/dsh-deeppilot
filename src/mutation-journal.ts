@@ -2,13 +2,14 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { validSendId } from './prompt-delivery.ts'
+import { ERROR_CODES, type WireErrorCode } from './wire-errors.ts'
 
-export type MutationErrorCode =
-  | 'E_PROTOCOL'
-  | 'E_NOT_FOUND'
-  | 'E_BUSY'
-  | 'E_UNSUPPORTED'
-  | 'E_INTERNAL'
+/**
+ * 非 prompt 变更的幂等 journal。错误码直接复用 wire 错误码（error vocabulary
+ * 的唯一属主是 wire-errors.ts）——此前这里另有一份 MutationErrorCode 联合，
+ * 与 Bridge 结果码、wire 码构成第三套词表。
+ */
+export type MutationErrorCode = WireErrorCode
 
 export type MutationOperationResult<T> =
   | { ok: true; value: T }
@@ -172,7 +173,7 @@ export class MutationJournal {
 }
 
 function isMutationErrorCode(value: unknown): value is MutationErrorCode {
-  return typeof value === 'string' && ['E_PROTOCOL', 'E_NOT_FOUND', 'E_BUSY', 'E_UNSUPPORTED', 'E_INTERNAL'].includes(value)
+  return typeof value === 'string' && value in ERROR_CODES
 }
 
 const journals = new Map<string, MutationJournal>()

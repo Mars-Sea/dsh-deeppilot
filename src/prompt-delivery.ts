@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
+import type { WireErrorCode } from './wire-errors.ts'
 
 export type DeliveryStatus = 'accepted' | 'rejected' | 'unknown' | 'notFound' | 'expired'
 export interface DeliveryReceipt { clientSendId: string; status: DeliveryStatus; userSeq?: number; code?: string }
@@ -46,7 +47,17 @@ export class PromptDeliveryJournal {
     if (entry && entry.sessionId === sessionId) return entry.receipt
     return { clientSendId: id, status: this.expired(id) ? 'expired' : 'notFound' }
   }
-  async dispatch(deviceId: string, sessionId: string, id: string, content: unknown, operation: () => Promise<{ ok: true; value: number } | { ok: false; kind: string }>): Promise<DeliveryReceipt> {
+  /**
+   * 幂等投递。operation 的失败结果携带 wire 错误码（error vocabulary 见
+   * wire-errors.ts）——此前这里还有一张 kind→E_* 小表，是同一词表的第四份拷贝。
+   */
+  async dispatch(
+    deviceId: string,
+    sessionId: string,
+    id: string,
+    content: unknown,
+    operation: () => Promise<{ ok: true; value: number } | { ok: false; code: WireErrorCode; message: string }>,
+  ): Promise<DeliveryReceipt> {
     const key = this.key(deviceId, id)
     const fingerprint = createHash('sha256').update(JSON.stringify([sessionId, content])).digest('hex')
     const existing = this.entries[key]
@@ -67,9 +78,8 @@ export class PromptDeliveryJournal {
       try {
         const result = await operation()
         if (result.ok) entry.receipt = { clientSendId: id, status: 'accepted', userSeq: result.value }
-        else if (['busy', 'not-found', 'invalid', 'unsupported'].includes(result.kind)) {
-          const code = { busy: 'E_BUSY', 'not-found': 'E_NOT_FOUND', invalid: 'E_PROTOCOL', unsupported: 'E_UNSUPPORTED' }[result.kind]!
-          entry.receipt = { clientSendId: id, status: 'rejected', code }
+        else if (result.code !== undefined) {
+          entry.receipt = { clientSendId: id, status: 'rejected', code: result.code }
         }
       } catch { /* Upstream may have accepted before transport failed. */ }
       try { this.save() } catch { this.healthy = false }

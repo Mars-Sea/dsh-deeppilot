@@ -1,6 +1,6 @@
 import { PromptDeliveryJournal, openDeliveryJournal } from './prompt-delivery.ts'
 import { randomUUID } from 'node:crypto'
-import type { Envelope, MessageProjection, NotifyCategory, PendingSnapshotPayload, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus, SessionUsageStats } from './protocol.ts'
+import type { Envelope, MessageProjection, NotifyCategory, PendingSnapshotPayload, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus, SessionUsageStats, WelcomeCapabilities } from './protocol.ts'
 import {
   isSubagentRow,
   unwrapStreamItem,
@@ -37,6 +37,8 @@ import {
 import { documentPromptBlock, type PromptDocument } from './document-payload.ts'
 import { openMutationJournal, type MutationJournal } from './mutation-journal.ts'
 import { pushScopeFor } from './connection-policy.ts'
+import { capabilityBits } from './host-capabilities.ts'
+import { wireCodeFor, wireErrorOf, type WireErrorCode } from './wire-errors.ts'
 
 export {
   MAX_MESSAGE_PROJECTION_BYTES,
@@ -62,9 +64,17 @@ interface PendingQuestion {
   questions: unknown
 }
 
+/**
+ * 失败结果直接携带 wire 错误码（error vocabulary 见 wire-errors.ts）。
+ *
+ * 迁移前这里有 kind 中间层（'not-found' | 'busy' | 'conflict' | 'invalid'…），
+ * 由 5 个映射函数在「Host code ↔ kind ↔ E_*」之间来回翻译，其中
+ * E_BUSY→conflict→E_BUSY 的往返已证明有损。现在每个域查一次表，调用方拿到的
+ * 就是手机上会看到的错误码。
+ */
 export type ScheduleBridgeResult<T> =
   | { ok: true; value: T; replayed?: boolean }
-  | { ok: false; kind: 'unsupported' | 'not-found' | 'invalid' | 'conflict' | 'busy' | 'internal'; message: string; replayed?: boolean }
+  | { ok: false; code: WireErrorCode; message: string; replayed?: boolean }
 
 const MAX_RING_DEFAULT = 2000;
 
@@ -121,31 +131,13 @@ export class HostBridge {
     this.pushOutlet = outlet;
   }
 
-  get capabilities() {
-    return {
-      historyPaging: true,
-      replay: true,
-      approvals: true,
-      questions: true,
-      pendingSnapshot: true,
-      promptDelivery: true,
-      notifyAllCategories: true,
-      models: typeof this.apiProxy.sessions.models === 'function' &&
-        typeof this.apiProxy.sessions.selectModel === 'function',
-      sessionManagement: typeof this.apiProxy.sessions.rename === 'function' &&
-        typeof this.apiProxy.workspace?.archiveSession === 'function',
-      sessionFork: typeof this.apiProxy.sessions.fork === 'function',
-      sessionRestore: typeof this.apiProxy.workspace?.unarchiveSession === 'function',
-      projectSelection: typeof this.apiProxy.workspace?.list === 'function' &&
-        typeof this.apiProxy.workspace?.create === 'function',
-      schedules: typeof this.apiProxy.schedule?.list === 'function' &&
-        typeof this.apiProxy.schedule?.create === 'function',
-      push: this.pushOutlet?.isAvailable() === true,
-      widgetPush: true,
-      liveActivityPush: true,
-      // Always available: self-revocation only needs the device registry.
-      deviceRevoke: true,
-    };
+  /**
+   * welcome 能力位。委托 host-capabilities.ts 的探测表：此前同一条事实在这里
+   * 和各方法体内各存一份，已经漂移过两次（models 位过严、schedules 位与
+   * schedule 方法的探测不同源）。
+   */
+  get capabilities(): WelcomeCapabilities {
+    return capabilityBits(this.apiProxy, this.pushOutlet)
   }
 
   diagnostic(message: string): void {
@@ -853,18 +845,18 @@ export class HostBridge {
   async sessionModels(sessionId: string): Promise<ModelBridgeResult<HostSessionModels>> {
     const models = this.apiProxy.sessions.models
     if (typeof models !== 'function') {
-      return { ok: false, kind: 'unsupported', message: 'model catalog unavailable on this host version' }
+      return { ok: false, code: 'E_UNSUPPORTED', message: 'model catalog unavailable on this host version' }
     }
     try {
       const response = await models.call(this.apiProxy.sessions, {
         rpcId: randomUUID(),
         payload: { sessionId },
       })
-      if (!response.result) return { ok: false, kind: 'internal', message: 'model catalog returned no result' }
-      if (!response.result.ok) return hostModelError(response.result.error)
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'model catalog returned no result' }
+      if (!response.result.ok) return wireErrorOf('model', response.result.error)
       return { ok: true, value: projectSessionModels(response.result.value) }
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) }
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
   }
 
@@ -874,7 +866,7 @@ export class HostBridge {
   ): Promise<ModelBridgeResult<HostModelSelection>> {
     const selectModel = this.apiProxy.sessions.selectModel
     if (typeof selectModel !== 'function') {
-      return { ok: false, kind: 'unsupported', message: 'model selection unavailable on this host version' }
+      return { ok: false, code: 'E_UNSUPPORTED', message: 'model selection unavailable on this host version' }
     }
     try {
       const response = await selectModel.call(this.apiProxy.sessions, {
@@ -886,26 +878,26 @@ export class HostBridge {
           ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
         },
       })
-      if (!response.result) return { ok: false, kind: 'internal', message: 'model selection returned no result' }
-      if (!response.result.ok) return hostModelError(response.result.error)
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'model selection returned no result' }
+      if (!response.result.ok) return wireErrorOf('model', response.result.error)
       return { ok: true, value: { ...response.result.value.selected } }
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) }
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
   }
 
   async renameSession(sessionId: string, title: string): Promise<SessionManagementResult<string>> {
     const rename = this.apiProxy.sessions.rename
     if (typeof rename !== 'function') {
-      return { ok: false, kind: 'unsupported', message: 'session rename unavailable on this host version' }
+      return { ok: false, code: 'E_UNSUPPORTED', message: 'session rename unavailable on this host version' }
     }
     try {
       const response = await rename.call(this.apiProxy.sessions, {
         rpcId: randomUUID(),
         payload: { sessionId, title },
       })
-      if (!response.result) return { ok: false, kind: 'internal', message: 'session rename returned no result' }
-      if (!response.result.ok) return hostSessionManagementError(response.result.error)
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'session rename returned no result' }
+      if (!response.result.ok) return wireErrorOf('session', response.result.error)
       const acceptedTitle = String(response.result.value.title)
       const row = this.summaries.get(sessionId)
       if (row) {
@@ -914,22 +906,22 @@ export class HostBridge {
       }
       return { ok: true, value: acceptedTitle }
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) }
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
   }
 
   async archiveSession(sessionId: string): Promise<SessionManagementResult<true>> {
     const archive = this.apiProxy.workspace?.archiveSession
     if (typeof archive !== 'function') {
-      return { ok: false, kind: 'unsupported', message: 'session archive unavailable on this host version' }
+      return { ok: false, code: 'E_UNSUPPORTED', message: 'session archive unavailable on this host version' }
     }
     try {
       const response = await archive.call(this.apiProxy.workspace, {
         rpcId: randomUUID(),
         payload: { sessionId },
       })
-      if (!response.result) return { ok: false, kind: 'internal', message: 'session archive returned no result' }
-      if (!response.result.ok) return hostSessionManagementError(response.result.error)
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'session archive returned no result' }
+      if (!response.result.ok) return wireErrorOf('session', response.result.error)
       this.archivedSessionIds = new Set(
         (response.result.value.archivedSessionIds ?? []).map(String),
       )
@@ -938,22 +930,22 @@ export class HostBridge {
       this.record('s2c.sessions.delta', { upserted: [], removedIds: [sessionId] })
       return { ok: true, value: true }
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) }
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
   }
 
   async unarchiveSession(sessionId: string): Promise<SessionManagementResult<true>> {
     const unarchive = this.apiProxy.workspace?.unarchiveSession
     if (typeof unarchive !== 'function') {
-      return { ok: false, kind: 'unsupported', message: 'session restore unavailable on this host version' }
+      return { ok: false, code: 'E_UNSUPPORTED', message: 'session restore unavailable on this host version' }
     }
     try {
       const response = await unarchive.call(this.apiProxy.workspace, {
         rpcId: randomUUID(),
         payload: { sessionId },
       })
-      if (!response.result) return { ok: false, kind: 'internal', message: 'session restore returned no result' }
-      if (!response.result.ok) return hostSessionManagementError(response.result.error)
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'session restore returned no result' }
+      if (!response.result.ok) return wireErrorOf('session', response.result.error)
       this.archivedSessionIds = new Set(
         (response.result.value.archivedSessionIds ?? []).map(String),
       )
@@ -963,25 +955,25 @@ export class HostBridge {
       await this.refreshSummaries()
       return { ok: true, value: true }
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) }
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
   }
 
   async cancelSession(sessionId: string): Promise<SessionManagementResult<true>> {
     const cancel = this.apiProxy.sessions.cancel
     if (typeof cancel !== 'function') {
-      return { ok: false, kind: 'unsupported', message: 'session cancel unavailable on this host version' }
+      return { ok: false, code: 'E_UNSUPPORTED', message: 'session cancel unavailable on this host version' }
     }
     try {
       const response = await cancel.call(this.apiProxy.sessions, {
         rpcId: randomUUID(),
         payload: { sessionId },
       })
-      if (!response.result) return { ok: false, kind: 'internal', message: 'session cancel returned no result' }
-      if (!response.result.ok) return hostSessionManagementError(response.result.error)
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'session cancel returned no result' }
+      if (!response.result.ok) return wireErrorOf('session', response.result.error)
       return { ok: true, value: true }
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) }
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
   }
 
@@ -990,15 +982,15 @@ export class HostBridge {
   }>>> {
     const list = this.apiProxy.workspace?.list
     if (typeof list !== 'function') {
-      return { ok: false, kind: 'unsupported', message: 'workspace list unavailable on this host version' }
+      return { ok: false, code: 'E_UNSUPPORTED', message: 'workspace list unavailable on this host version' }
     }
     try {
       const response = await list.call(this.apiProxy.workspace, { rpcId: randomUUID(), payload: {} })
-      if (!response.result) return { ok: false, kind: 'internal', message: 'workspace list returned no result' }
-      if (!response.result.ok) return hostSessionManagementError(response.result.error)
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'workspace list returned no result' }
+      if (!response.result.ok) return wireErrorOf('session', response.result.error)
       return { ok: true, value: (response.result.value.items ?? []).map(projectWorkspace) }
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) }
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
   }
 
@@ -1007,58 +999,58 @@ export class HostBridge {
   }>> {
     const create = this.apiProxy.workspace?.create
     if (typeof create !== 'function') {
-      return { ok: false, kind: 'unsupported', message: 'workspace create unavailable on this host version' }
+      return { ok: false, code: 'E_UNSUPPORTED', message: 'workspace create unavailable on this host version' }
     }
     try {
       const response = await create.call(this.apiProxy.workspace, {
         rpcId: randomUUID(),
         payload: { path },
       })
-      if (!response.result) return { ok: false, kind: 'internal', message: 'workspace create returned no result' }
-      if (!response.result.ok) return hostSessionManagementError(response.result.error)
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'workspace create returned no result' }
+      if (!response.result.ok) return wireErrorOf('session', response.result.error)
       await this.refreshSummaries()
       return {
         ok: true,
         value: { workspace: projectWorkspace(response.result.value.workspace), created: response.result.value.created === true },
       }
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) }
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
   }
 
   async listDirectory(path?: string): Promise<SessionManagementResult<DirectoryListingLike>> {
     const list = this.apiProxy.host?.listDirectory
     if (typeof list !== 'function') {
-      return { ok: false, kind: 'unsupported', message: 'directory browsing unavailable on this host version' }
+      return { ok: false, code: 'E_UNSUPPORTED', message: 'directory browsing unavailable on this host version' }
     }
     try {
       const response = await list.call(this.apiProxy.host, {
         rpcId: randomUUID(),
         payload: path && path.trim().length > 0 ? { path } : {},
       }, this.abort.signal)
-      if (!response.result) return { ok: false, kind: 'internal', message: 'directory list returned no result' }
-      if (!response.result.ok) return hostSessionManagementError(response.result.error)
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'directory list returned no result' }
+      if (!response.result.ok) return wireErrorOf('session', response.result.error)
       return { ok: true, value: response.result.value }
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) }
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
   }
 
   async pickDirectory(): Promise<SessionManagementResult<string | null>> {
     const pick = this.apiProxy.host?.pickDirectory
     if (typeof pick !== 'function') {
-      return { ok: false, kind: 'unsupported', message: 'native directory picker unavailable on this host version' }
+      return { ok: false, code: 'E_UNSUPPORTED', message: 'native directory picker unavailable on this host version' }
     }
     try {
       const response = await pick.call(this.apiProxy.host, {
         rpcId: randomUUID(),
         payload: {},
       }, this.abort.signal)
-      if (!response.result) return { ok: false, kind: 'internal', message: 'directory picker returned no result' }
-      if (!response.result.ok) return hostSessionManagementError(response.result.error)
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'directory picker returned no result' }
+      if (!response.result.ok) return wireErrorOf('session', response.result.error)
       return { ok: true, value: response.result.value.path }
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) }
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
   }
 
@@ -1086,10 +1078,10 @@ export class HostBridge {
     payload: { clientRequestId: string; sessionId: string; atSeq?: number },
   ): Promise<ScheduleBridgeResult<{ sessionId: string }>> {
     const fork = this.apiProxy.sessions.fork
-    if (typeof fork !== 'function') return { ok: false, kind: 'unsupported', message: 'session fork unavailable on this host version' }
-    if (!this.summaries.has(payload.sessionId)) return { ok: false, kind: 'not-found', message: 'session not found' }
+    if (typeof fork !== 'function') return { ok: false, code: 'E_UNSUPPORTED', message: 'session fork unavailable on this host version' }
+    if (!this.summaries.has(payload.sessionId)) return { ok: false, code: 'E_NOT_FOUND', message: 'session not found' }
     if (this.archivedSessionIds.has(payload.sessionId) || this.subagentSessionIds.has(payload.sessionId)) {
-      return { ok: false, kind: 'invalid', message: 'archived or subagent sessions cannot be forked' }
+      return { ok: false, code: 'E_PROTOCOL', message: 'archived or subagent sessions cannot be forked' }
     }
     const result = await this.forkMutations.dispatch(
       deviceId,
@@ -1101,7 +1093,7 @@ export class HostBridge {
           payload: { sessionId: payload.sessionId, ...(payload.atSeq !== undefined ? { atSeq: payload.atSeq } : {}) },
         })
         if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'session fork returned no result' }
-        if (!response.result.ok) return scheduleMutationError(response.result.error)
+        if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
         return { ok: true, value: { sessionId: response.result.value.sessionId } }
       },
     )
@@ -1109,19 +1101,19 @@ export class HostBridge {
       await this.refreshSummaries()
       return { ok: true, value: result.value as { sessionId: string }, replayed: result.replayed }
     }
-    return { ok: false, kind: scheduleErrorKind(result.code), message: result.message ?? result.code, replayed: result.replayed }
+    return { ok: false, code: result.code, message: result.message ?? result.code, replayed: result.replayed }
   }
 
   async listSchedules(sessionId: string): Promise<ScheduleBridgeResult<ScheduleTaskViewLike[]>> {
     const schedule = this.apiProxy.schedule
-    if (schedule === undefined) return { ok: false, kind: 'unsupported', message: 'schedules unavailable on this host version' }
+    if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'schedules unavailable on this host version' }
     try {
       const response = await schedule.list({ rpcId: randomUUID(), payload: { sessionId } })
-      if (!response.result) return { ok: false, kind: 'internal', message: 'schedule list returned no result' }
-      if (!response.result.ok) return scheduleHostError(response.result.error)
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule list returned no result' }
+      if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
       return { ok: true, value: response.result.value.tasks }
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) }
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
   }
 
@@ -1132,17 +1124,17 @@ export class HostBridge {
     before?: string,
   ): Promise<ScheduleBridgeResult<ScheduleHistoryViewLike>> {
     const schedule = this.apiProxy.schedule
-    if (schedule === undefined) return { ok: false, kind: 'unsupported', message: 'schedules unavailable on this host version' }
+    if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'schedules unavailable on this host version' }
     try {
       const response = await schedule.history({
         rpcId: randomUUID(),
         payload: { sessionId, id, limit, ...(before !== undefined ? { before } : {}) },
       })
-      if (!response.result) return { ok: false, kind: 'internal', message: 'schedule history returned no result' }
-      if (!response.result.ok) return scheduleHostError(response.result.error)
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule history returned no result' }
+      if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
       return { ok: true, value: response.result.value.history }
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) }
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
   }
 
@@ -1151,7 +1143,7 @@ export class HostBridge {
     payload: Record<string, unknown> & { sessionId: string; clientRequestId: string; title: string; prompt: string },
   ): Promise<ScheduleBridgeResult<ScheduleTaskViewLike>> {
     const schedule = this.apiProxy.schedule
-    if (schedule === undefined) return { ok: false, kind: 'unsupported', message: 'schedules unavailable on this host version' }
+    if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'schedules unavailable on this host version' }
     const { clientRequestId, sessionId, ...request } = payload
     const result = await this.scheduleMutations.dispatch(
       deviceId,
@@ -1160,7 +1152,7 @@ export class HostBridge {
       async () => {
         const response = await schedule.create({ rpcId: randomUUID(), payload: { sessionId, ...request } })
         if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule create returned no result' }
-        if (!response.result.ok) return scheduleMutationError(response.result.error)
+        if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
         return { ok: true, value: response.result.value }
       },
     )
@@ -1168,7 +1160,7 @@ export class HostBridge {
       this.record('s2c.schedule.changed', {})
       return { ok: true, value: result.value as ScheduleTaskViewLike, replayed: result.replayed }
     }
-    return { ok: false, kind: scheduleErrorKind(result.code), message: result.message ?? result.code, replayed: result.replayed }
+    return { ok: false, code: result.code, message: result.message ?? result.code, replayed: result.replayed }
   }
 
   async updateSchedule(
@@ -1176,7 +1168,7 @@ export class HostBridge {
     payload: Record<string, unknown> & { sessionId: string; id: string; clientRequestId: string; expected: unknown },
   ): Promise<ScheduleBridgeResult<ScheduleTaskViewLike>> {
     const schedule = this.apiProxy.schedule
-    if (schedule === undefined) return { ok: false, kind: 'unsupported', message: 'schedules unavailable on this host version' }
+    if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'schedules unavailable on this host version' }
     const { clientRequestId, ...request } = payload
     const result = await this.scheduleMutations.dispatch(
       deviceId,
@@ -1185,10 +1177,10 @@ export class HostBridge {
       async () => {
         const response = await schedule.update({ rpcId: randomUUID(), payload: request })
         if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule update returned no result' }
-        if (!response.result.ok) return scheduleMutationError(response.result.error)
+        if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
         const value = response.result.value
         if (value.updated !== true || value.record === undefined) {
-          return { ok: false, code: scheduleCodeToError(value.code), message: value.code ?? 'schedule update rejected' }
+          return { ok: false, code: wireCodeFor('schedule', value.code), message: value.code ?? 'schedule update rejected' }
         }
         return { ok: true, value: value.record }
       },
@@ -1197,7 +1189,7 @@ export class HostBridge {
       this.record('s2c.schedule.changed', {})
       return { ok: true, value: result.value as ScheduleTaskViewLike, replayed: result.replayed }
     }
-    return { ok: false, kind: scheduleErrorKind(result.code), message: result.message ?? result.code, replayed: result.replayed }
+    return { ok: false, code: result.code, message: result.message ?? result.code, replayed: result.replayed }
   }
 
   async deleteSchedule(
@@ -1205,7 +1197,7 @@ export class HostBridge {
     payload: { sessionId: string; id: string; clientRequestId: string },
   ): Promise<ScheduleBridgeResult<{ id: string; deleted: true }>> {
     const schedule = this.apiProxy.schedule
-    if (schedule === undefined) return { ok: false, kind: 'unsupported', message: 'schedules unavailable on this host version' }
+    if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'schedules unavailable on this host version' }
     const result = await this.scheduleMutations.dispatch(
       deviceId,
       payload.clientRequestId,
@@ -1216,7 +1208,7 @@ export class HostBridge {
           payload: { sessionId: payload.sessionId, id: payload.id },
         })
         if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule delete returned no result' }
-        if (!response.result.ok) return scheduleMutationError(response.result.error)
+        if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
         if (response.result.value.deleted !== true) {
           return { ok: false, code: 'E_NOT_FOUND', message: response.result.value.code ?? 'schedule not found' }
         }
@@ -1227,7 +1219,7 @@ export class HostBridge {
       this.record('s2c.schedule.changed', {})
       return { ok: true, value: result.value as { id: string; deleted: true }, replayed: result.replayed }
     }
-    return { ok: false, kind: scheduleErrorKind(result.code), message: result.message ?? result.code, replayed: result.replayed }
+    return { ok: false, code: result.code, message: result.message ?? result.code, replayed: result.replayed }
   }
 
   async sendPrompt(
@@ -1250,11 +1242,11 @@ export class HostBridge {
           clientTimeZone: localTimeZone(),
         },
       });
-      if (!response.result) return { ok: false, kind: 'internal', message: 'prompt returned no result' };
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'prompt returned no result' };
       // Preserve the host's error kind so the phone can tell "retry later"
       // (E_BUSY) from "session is gone" (E_NOT_FOUND) instead of mapping
       // every failure onto E_BUSY.
-      if (!response.result.ok) return hostSessionManagementError(response.result.error);
+      if (!response.result.ok) return wireErrorOf('session', response.result.error);
       const row = this.summaries.get(sessionId);
       if (row) {
         row.lastActivityTs = Date.now();
@@ -1263,7 +1255,7 @@ export class HostBridge {
       this.userReceiptSeq += 1;
       return { ok: true, value: this.userReceiptSeq };
     } catch (error) {
-      return { ok: false, kind: 'internal', message: String(error) };
+      return { ok: false, code: 'E_INTERNAL', message: String(error) };
     }
   }
 
@@ -1564,103 +1556,7 @@ function projectWorkspace(workspace: WorkspaceViewLike): {
   }
 }
 
-/** Project one raw session event into a protocol push, when it maps to one. */
-
-function hostModelError(error: { code: string; message?: string }): ModelBridgeResult<never> {
-  const message = error.message ?? error.code
-  switch (error.code) {
-    case 'session-not-found':
-      return { ok: false, kind: 'not-found', message }
-    case 'agent-busy':
-    case 'session-conflict':
-      return { ok: false, kind: 'busy', message }
-    case 'model-unavailable':
-      return { ok: false, kind: 'unavailable', message }
-    default:
-      return { ok: false, kind: 'internal', message }
-  }
-}
-
-function scheduleHostError(error: { code: string; message?: string }): ScheduleBridgeResult<never> {
-  const message = error.message ?? error.code
-  switch (error.code) {
-    case 'schedule_not_found':
-    case 'delivery_cursor_not_found':
-      return { ok: false, kind: 'not-found', message }
-    case 'schedule_conflict':
-      return { ok: false, kind: 'conflict', message }
-    case 'invalid_prompt':
-    case 'invalid_selector':
-    case 'invalid_rule':
-    case 'invalid_time_zone':
-    case 'not_future':
-    case 'time_out_of_range':
-    case 'frequency_too_high':
-      return { ok: false, kind: 'invalid', message }
-    case 'schedule_ended':
-      return { ok: false, kind: 'invalid', message }
-    default:
-      return { ok: false, kind: 'internal', message }
-  }
-}
-
-function scheduleMutationError(error: { code: string; message?: string }): { ok: false; code: 'E_PROTOCOL' | 'E_NOT_FOUND' | 'E_BUSY' | 'E_UNSUPPORTED' | 'E_INTERNAL'; message: string } {
-  const result = scheduleHostError(error)
-  if (result.ok) return { ok: false, code: 'E_INTERNAL', message: 'unexpected schedule result' }
-  return {
-    ok: false,
-    code: result.kind === 'not-found' ? 'E_NOT_FOUND'
-      : result.kind === 'conflict' ? 'E_BUSY'
-        : result.kind === 'invalid' ? 'E_PROTOCOL'
-          : result.kind === 'unsupported' ? 'E_UNSUPPORTED' : 'E_INTERNAL',
-    message: result.message,
-  }
-}
-
-function scheduleCodeToError(code: string | undefined): 'E_PROTOCOL' | 'E_NOT_FOUND' | 'E_BUSY' | 'E_UNSUPPORTED' | 'E_INTERNAL' {
-  if (code === 'schedule_not_found') return 'E_NOT_FOUND'
-  if (code === 'schedule_conflict') return 'E_BUSY'
-  if (code === 'schedule_ended') return 'E_PROTOCOL'
-  if (code === 'invalid_prompt' || code === 'invalid_selector' || code === 'invalid_rule' || code === 'invalid_time_zone' || code === 'not_future' || code === 'time_out_of_range' || code === 'frequency_too_high') return 'E_PROTOCOL'
-  return 'E_INTERNAL'
-}
-
-function scheduleErrorKind(code: string): 'unsupported' | 'not-found' | 'invalid' | 'conflict' | 'busy' | 'internal' {
-  switch (code) {
-    case 'E_NOT_FOUND': return 'not-found'
-    case 'E_BUSY': return 'conflict'
-    case 'E_PROTOCOL': return 'invalid'
-    case 'E_UNSUPPORTED': return 'unsupported'
-    default: return 'internal'
-  }
-}
-
-function hostSessionManagementError(
-  error: { code: string; message?: string },
-): SessionManagementResult<never> {
-  const message = error.message ?? error.code
-  switch (error.code) {
-    case 'session-not-found':
-      return { ok: false, kind: 'not-found', message }
-    case 'agent-busy':
-    case 'session-conflict':
-      return { ok: false, kind: 'busy', message }
-    case 'title-invalid':
-    case 'workspace-invalid-path':
-    case 'workspace-name-conflict':
-    case 'directory-unreadable':
-    case 'directory-exists':
-    case 'directory-create-failed':
-      return { ok: false, kind: 'invalid', message }
-    case 'directory-picker-unavailable':
-      return { ok: false, kind: 'unsupported', message }
-    case 'workspace-not-found':
-      return { ok: false, kind: 'not-found', message }
-    default:
-      return { ok: false, kind: 'internal', message }
-  }
-}
-
+/** 把 Host 的模型目录投影成 wire 形状：字段全部收敛为字符串，缺省不补位。 */
 function projectSessionModels(value: HostSessionModels): HostSessionModels {
   return {
     current: {

@@ -1,6 +1,7 @@
 import type { SessionSummary } from './protocol.ts'
 import type { DeviceScope } from './device-auth.ts'
 import type { PushNotification } from './protocol.ts'
+import type { WireErrorCode } from './wire-errors.ts'
 
 /* Stable bridge-facing structural types mapped to rc.2 controllers by
  * DshApiProxy. */
@@ -149,13 +150,18 @@ export interface HostSessionModels {
   failures: Array<{ id: string; name: string; message: string }>
 }
 
+/**
+ * Bridge 方法的结果。失败直接携带 wire 错误码（error vocabulary 见
+ * wire-errors.ts）：调用方（wire-registry 的行）原样透给手机，不再经过
+ * kind 中间层翻译。
+ */
 export type ModelBridgeResult<T> =
   | { ok: true; value: T }
-  | { ok: false; kind: 'unsupported' | 'not-found' | 'busy' | 'unavailable' | 'internal'; message: string }
+  | { ok: false; code: WireErrorCode; message: string }
 
 export type SessionManagementResult<T> =
   | { ok: true; value: T }
-  | { ok: false; kind: 'unsupported' | 'not-found' | 'busy' | 'invalid' | 'internal'; message: string }
+  | { ok: false; code: WireErrorCode; message: string }
 
 export interface PromptArgs {
   sessionId: string

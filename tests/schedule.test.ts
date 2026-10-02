@@ -5,9 +5,15 @@ import { DshApiProxy } from '../src/dsh-api-proxy.ts'
 import { HostBridge } from '../src/host-bridge.ts'
 import type { ApiProxyLike } from '../src/host-api.ts'
 import { MutationJournal } from '../src/mutation-journal.ts'
-import { validateRequest } from '../src/request-validation.ts'
+import { registryRowFor, validatePayload } from '../src/wire-registry.ts'
 
 const requestId = (): string => `${Date.now()}-${randomUUID()}`
+
+/** 行内校验的可读拒绝理由；通过时 undefined。 */
+function reason(row: { validate?: (payload: unknown) => unknown }, payload: unknown): string | undefined {
+  const checked = validatePayload(row as never, payload)
+  return checked.ok ? undefined : checked.message
+}
 
 function scheduleController(calls: Array<{ operation: string; payload: unknown }>) {
   return {
@@ -85,27 +91,28 @@ test('HostBridge schedule capability and mutations are capability-gated and idem
 
   const changed = await bridge.createSchedule('device-1', { ...payload, title: '另一个标题' })
   assert.equal(changed.ok, false)
-  if (!changed.ok) assert.equal(changed.kind, 'invalid')
+  if (!changed.ok) assert.equal(changed.code, 'E_PROTOCOL')
   bridge.dispose()
 })
 
-test('Schedule request validation bounds ids, selectors, history, and updates', () => {
+test('Schedule rows bound ids, selectors, history, and updates', () => {
   const id = requestId()
-  assert.equal(validateRequest('c2s.schedule.create', {
+  const row = (type: string) => registryRowFor(type)!
+  assert.equal(reason(row('c2s.schedule.create'), {
     clientRequestId: id, sessionId: 's', title: 'Build', prompt: 'Check', after_seconds: 600,
   }), undefined)
-  assert.ok(validateRequest('c2s.schedule.create', {
+  assert.equal(reason(row('c2s.schedule.create'), {
     clientRequestId: id, sessionId: 's', title: 'Build', prompt: 'Check', after_seconds: 0,
-  }))
-  assert.ok(validateRequest('c2s.schedule.create', {
+  }), 'invalid after_seconds')
+  assert.equal(reason(row('c2s.schedule.create'), {
     clientRequestId: id, sessionId: 's', title: 'Build', prompt: 'Check', after_seconds: 600, every_seconds: 600,
-  }))
-  assert.ok(validateRequest('c2s.schedule.history', { sessionId: 's', id: 'schedule-1', limit: 0 }))
-  assert.equal(validateRequest('c2s.schedule.history', { sessionId: 's', id: 'schedule-1', limit: 100 }), undefined)
-  assert.equal(validateRequest('c2s.schedule.update', {
+  }), 'schedule requires exactly one selector')
+  assert.equal(reason(row('c2s.schedule.history'), { sessionId: 's', id: 'schedule-1', limit: 0 }), 'invalid schedule history')
+  assert.equal(reason(row('c2s.schedule.history'), { sessionId: 's', id: 'schedule-1', limit: 100 }), undefined)
+  assert.equal(reason(row('c2s.schedule.update'), {
     clientRequestId: id, sessionId: 's', id: 'schedule-1', expected: {},
   }), undefined)
-  assert.ok(validateRequest('c2s.schedule.delete', { clientRequestId: 'bad', sessionId: 's', id: 'schedule-1' }))
+  assert.equal(reason(row('c2s.schedule.delete'), { clientRequestId: 'bad', sessionId: 's', id: 'schedule-1' }), 'invalid schedule delete fields')
 })
 
 test('Session fork creates one new session and preserves the source', async () => {
@@ -128,7 +135,7 @@ test('Session fork creates one new session and preserves the source', async () =
   if (first.ok) assert.equal(first.value.sessionId, 'forked-session')
   if (second.ok) assert.equal(second.replayed, true)
   assert.equal(forkCalls, 1)
-  assert.equal(validateRequest('c2s.session.fork', { clientRequestId, sessionId: 'source-session', atSeq: 7 }), undefined)
+  assert.equal(reason(registryRowFor('c2s.session.fork')!, { clientRequestId, sessionId: 'source-session', atSeq: 7 }), undefined)
   bridge.dispose()
 })
 test('MutationJournal does not persist prompt bodies and prevents duplicate execution', async () => {

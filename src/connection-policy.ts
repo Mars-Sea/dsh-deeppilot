@@ -1,3 +1,12 @@
+/**
+ * 连接层常量与载荷清洗。
+ *
+ * 本 module 的职责已经收窄：scope 表随 wire 注册表（每帧一行）迁到
+ * wire-registry，错误码映射随错误词表迁到 wire-errors，请求形状校验随行内
+ * validate 迁到各特性模块。剩下的都是与帧类型无关的东西——资源上限、
+ * 清洗函数、envelope 形状守卫、下行广播权限。
+ */
+
 import type { DeviceScope } from './device-auth.ts'
 import type { Envelope } from './protocol.ts'
 
@@ -36,11 +45,12 @@ export function sanitizeDeviceField(value: unknown, maxChars: number): string {
 /**
  * Runtime shape guard for a frame after JSON.parse. The old `as Envelope`
  * cast alone let JSON `null` reach `env.v` and let a missing or mistyped
- * `type` reach `requiredScope()`'s string operations — one anonymous frame
+ * `type` reach the registry lookup's string operations — one anonymous frame
  * could crash the host process. Reject anything that is not a plain object
  * with a numeric version and a non-empty string type, so field access below
- * is always safe. The payload is intentionally opaque here; each handler
- * validates its own payload shape.
+ * is always safe. The payload is intentionally opaque here; each row
+ * validates its own payload shape (see the per-row `validate` in
+ * wire-registry.ts).
  */
 export function isEnvelope(value: unknown): value is Envelope {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
@@ -53,36 +63,13 @@ export function isEnvelope(value: unknown): value is Envelope {
   return true
 }
 
-export function requiredScope(type: string): DeviceScope | undefined {
-  // Defense in depth: callers must pass the validated envelope's `type`, but
-  // a non-string value must never reach the startsWith checks below.
-  if (typeof type !== 'string') return undefined
-  if (type === 'c2s.ping' || type === 'c2s.resume') return undefined
-  // Self-revocation is a device-lifecycle operation, not a business read: a
-  // device whose scopes were narrowed must still be able to unbind itself,
-  // otherwise it is stuck as a permanent offline-push target.
-  if (type === 'c2s.device.revoke') return undefined
-  if (type === 'c2s.session.sendPrompt' || type === 'c2s.session.delivery') return 'prompt.send'
-  if (type === 'c2s.pending.list') return 'interactions.respond'
-  if (type === 'c2s.approval.respond' || type === 'c2s.question.respond') return 'interactions.respond'
-  if (type === 'c2s.liveActivity.register' || type === 'c2s.liveActivity.unregister') return 'notifications.register'
-  if (type === 'c2s.push.register' || type === 'c2s.widget.push.register') return 'notifications.register'
-  if (type.startsWith('c2s.schedule.')) return 'schedule.manage'
-  if (
-    type === 'c2s.workspace.create' ||
-    type === 'c2s.session.create' ||
-    type === 'c2s.session.fork' ||
-    type === 'c2s.session.rename' ||
-    type === 'c2s.session.archive' ||
-    type === 'c2s.session.unarchive' ||
-    type === 'c2s.session.cancel' ||
-    type === 'c2s.session.selectModel'
-  ) return 'sessions.manage'
-  if (type.startsWith('c2s.')) return 'sessions.read'
-  return undefined
-}
-
-/** Broadcast and replay authorization. Unknown frame types fail closed. */
+/**
+ * 下行广播与重放授权。未知帧类型 fail-closed：不下发。
+ *
+ * `s2c.session.tail` 与 `s2c.history.page` 是 PROTOCOL.md 下行权限表里的类型，
+ * 但由连接点对点直推（不经 record()/重放环）。条目保留：将来任何把它们送进
+ * ring 的路径都会自动受到这里的 gate 约束，而不是静默全量广播。
+ */
 const PUSH_SCOPE_BY_TYPE: Partial<Record<string, DeviceScope>> = {
   's2c.session.event': 'sessions.read',
   's2c.sessions.delta': 'sessions.read',
@@ -111,63 +98,4 @@ export function sanitizeImageName(value: string): string {
 
 export function sanitizeDocumentField(value: string, maxChars: number): string {
   return value.replace(/[\u0000-\u001F\u007F]/g, ' ').trim().slice(0, maxChars)
-}
-
-export const ERROR_CODES = {
-  E_AUTH: 'device proof missing or invalid',
-  E_FORBIDDEN: 'device scope does not allow this operation',
-  E_PROTOCOL: 'unknown type or malformed payload',
-  E_NOT_FOUND: 'session or request not found',
-  E_BUSY: 'session is busy',
-  E_UNSUPPORTED: 'protocol version or capability unsupported',
-  E_INTERNAL: 'internal error',
-} as const
-
-/** Error code for a failed approval/question response outcome. */
-export function pendingResponseErrorCode(reason: 'not-pending' | 'bad-response' | 'transport'): keyof typeof ERROR_CODES {
-  switch (reason) {
-    case 'not-pending': return 'E_NOT_FOUND'
-    // The host refused the answer batch (shape/labels mismatch) — a client
-    // payload problem, not a missing pending request.
-    case 'bad-response': return 'E_PROTOCOL'
-    case 'transport': return 'E_INTERNAL'
-  }
-}
-
-/** Human-readable failure detail; `question not pending` must only ever mean
- * "nothing pending", never "the host rejected the answer". */
-export function pendingResponseMessage(
-  kind: 'approval' | 'question',
-  reason: 'not-pending' | 'bad-response' | 'transport',
-): string {
-  switch (reason) {
-    case 'not-pending': return kind + ' not pending'
-    case 'bad-response': return kind + ' answer rejected by host: answer does not match the asked questions'
-    case 'transport': return 'host connection failed while answering ' + kind
-  }
-}
-
-export function scheduleManagementErrorCode(
-  kind: 'unsupported' | 'not-found' | 'invalid' | 'conflict' | 'busy' | 'internal',
-): keyof typeof ERROR_CODES {
-  switch (kind) {
-    case 'unsupported': return 'E_UNSUPPORTED'
-    case 'not-found': return 'E_NOT_FOUND'
-    case 'invalid': return 'E_PROTOCOL'
-    case 'conflict':
-    case 'busy': return 'E_BUSY'
-    default: return 'E_INTERNAL'
-  }
-}
-
-export function managementErrorCode(
-  kind: 'unsupported' | 'not-found' | 'busy' | 'invalid' | 'internal',
-): keyof typeof ERROR_CODES {
-  switch (kind) {
-    case 'unsupported': return 'E_UNSUPPORTED'
-    case 'not-found': return 'E_NOT_FOUND'
-    case 'busy': return 'E_BUSY'
-    case 'invalid': return 'E_PROTOCOL'
-    case 'internal': return 'E_INTERNAL'
-  }
 }

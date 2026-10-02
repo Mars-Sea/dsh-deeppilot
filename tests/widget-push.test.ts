@@ -8,7 +8,7 @@ import { apnsPayload, pushHeaders } from '../src/apns.ts'
 import { WidgetPushScheduler } from '../src/widget-push.ts'
 import { DeviceStore } from '../src/token.ts'
 import { createTestIdentity, registerTestIdentity } from './auth-fixture.ts'
-import { validateRequest } from '../src/request-validation.ts'
+import { registryRowFor, validatePayload } from '../src/wire-registry.ts'
 
 test('WidgetKit uses the main app topic suffix and a content-free payload', () => {
   assert.deepEqual(apnsPayload({ kind: 'widget' }), { aps: { 'content-changed': true } })
@@ -16,7 +16,7 @@ test('WidgetKit uses the main app topic suffix and a content-free payload', () =
     'apns-topic': 'dev.test.app.push-type.widgets', 'apns-push-type': 'widgets',
     'apns-priority': '5', 'apns-collapse-id': 'widget-overview',
   })
-  assert.equal(validateRequest('c2s.widget.push.register', { environment: 'wrong' }), 'invalid APNs environment')
+  assert.equal(validatePayload(registryRowFor('c2s.widget.push.register')!, { environment: 'wrong' }).ok, false)
 })
 
 test('widget token rotation, persistence and revocation do not affect alert registrations', async () => {

@@ -1,12 +1,8 @@
-import { validateRequest } from './request-validation.ts'
 import type { WebSocket } from 'ws'
-import {
-  PROTOCOL_VERSION,
-} from './protocol.ts'
+import { PROTOCOL_VERSION } from './protocol.ts'
 import type { AuthProofPayload, Envelope } from './protocol.ts'
 import type { BridgeSink, HostBridge } from './host-bridge.ts'
-import type { DeviceStore, ApnsEnvironment } from './token.ts'
-import { isValidApnsToken } from './token.ts'
+import type { DeviceStore } from './token.ts'
 import {
   createAuthChallenge,
   verifyAuthProof,
@@ -15,37 +11,32 @@ import {
 } from './device-auth.ts'
 import {
   AUTH_TIMEOUT_MS,
-  ERROR_CODES,
-  IMAGE_MEDIA_TYPES,
   MAX_APP_VERSION_CHARS,
-  MAX_BASE64_CHARS_PER_IMAGE,
-  MAX_DOCUMENT_MEDIA_TYPE_CHARS,
-  MAX_DOCUMENT_NAME_CHARS,
-  MAX_DOCUMENT_TEXT_CHARS,
   MAX_DEVICE_ID_CHARS,
   MAX_DEVICE_NAME_CHARS,
   MAX_OUTBOUND_BUFFER_BYTES,
-  MAX_PROMPT_IMAGES,
-  MAX_PROMPT_DOCUMENTS,
-  MAX_PROMPT_TEXT_CHARS,
   PRE_AUTH_FRAME_BYTES,
-  managementErrorCode,
-  scheduleManagementErrorCode,
-  pendingResponseErrorCode,
-  pendingResponseMessage,
   sanitizeDeviceField,
-  sanitizeImageName,
-  sanitizeDocumentField,
-  requiredScope,
   isEnvelope,
 } from './connection-policy.ts'
+import type { WireErrorCode } from './wire-errors.ts'
+import {
+  capabilityRejection,
+  dispatchFrame,
+  registryRowFor,
+  scopeRejection,
+  validatePayload,
+  widgetPolicyOf,
+  type FrameContext,
+  type OpenEventBuffer,
+  type S2CType,
+} from './wire-registry.ts'
 
 export {
   AUTH_TIMEOUT_MS,
   MAX_OUTBOUND_BUFFER_BYTES,
   PRE_AUTH_FRAME_BYTES,
 } from './connection-policy.ts'
-
 
 export interface ConnectionStateDeps {
   bridge: HostBridge
@@ -78,11 +69,14 @@ export interface ConnectionStateDeps {
   onDeviceRevoke?: (deviceId: string, except: BridgeConnection) => Promise<unknown> | unknown
 }
 
-
 /**
  * One connected phone. Implements BridgeSink so the HostBridge can push
  * projected frames and replays. Every socket starts anonymous, receives one
  * server challenge, and must prove possession of a registered P-256 key.
+ *
+ * 本模块拥有传输与连接状态：帧的解析、鉴权门、sink 注册、开关Socket。帧的
+ * 事实（scope / 能力 / 校验 / 处理）住在 wire-registry 及其特性模块里；
+ * onMessage 只按固定次序调用那些检查，然后 dispatch。
  */
 export class BridgeConnection implements BridgeSink {
   private authenticated = false
@@ -262,33 +256,104 @@ export class BridgeConnection implements BridgeSink {
     this.ws.send(JSON.stringify(envelope))
   }
 
-  private fail(id: string | undefined, code: keyof typeof ERROR_CODES, message: string): void {
+  private fail(id: string | undefined, code: WireErrorCode, message: string): void {
     this.send('s2c.error', { code, message }, id)
   }
 
   // ---------- dispatch ----------
 
-    private lastActivity = Date.now()
+  private lastActivity = Date.now()
 
-    /** True when no inbound frame arrived within maxIdleMs. */
-    isStale(now: number, maxIdleMs: number): boolean {
-      return now - this.lastActivity > maxIdleMs
+  /** True when no inbound frame arrived within maxIdleMs. */
+  isStale(now: number, maxIdleMs: number): boolean {
+    return now - this.lastActivity > maxIdleMs
+  }
+
+  /**
+   * 每帧一次的 facade：把当前帧的 id 绑进 send/fail，handler 不必传 id；
+   * 连接自身状态以少量操作暴露，所有权仍在这里。
+   */
+  private frameContext(env: Envelope): FrameContext {
+    // 对象字面量的 getter 里 this 指向字面量本身，因此用闭包捕获连接。
+    const self = this
+    return {
+      frame: env,
+      deviceId: this.deviceId,
+      widgetClient: this.widgetClient,
+      bridge: this.deps.bridge,
+      devices: this.deps.devices,
+      debug: this.deps.debug === true,
+      log: (message) => this.deps.log(message),
+      // BridgeSink：帧处理器可以把上下文直接当作 sink 传给 HostBridge。
+      canReceive: (scope) => this.canReceive(scope),
+      push: (type, payload, seq) => this.push(type, payload, seq),
+      lastCursor: () => this.lastCursor(),
+      replay: (entries) => this.replay(entries),
+      replayDone: () => this.replayDone(),
+      resync: () => this.resync(),
+      send: (type: S2CType, payload) => this.send(type, payload, env.id),
+      fail: (code, message) => this.fail(env.id, code, message),
+      close: (code, reason) => this.close(code, reason),
+      bufferOpenEvents: (sessionId) => {
+        const frames: OpenEventBuffer['frames'] = []
+        const buffer: OpenEventBuffer = { frames }
+        this.openingSessionEvents.set(sessionId, frames)
+        return buffer
+      },
+      discardOpenBuffer: (sessionId, buffer) => {
+        if (this.openingSessionEvents.get(sessionId) === buffer.frames) {
+          this.openingSessionEvents.delete(sessionId)
+        }
+      },
+      flushOpenBuffer: (sessionId, buffer) => {
+        if (this.openingSessionEvents.get(sessionId) !== buffer.frames) return false
+        this.openSessions.add(sessionId)
+        this.deps.bridge.markSinkOpen(this, sessionId)
+        this.openingSessionEvents.delete(sessionId)
+        for (const frame of buffer.frames) this.push(frame.type, frame.payload, frame.seq)
+        return true
+      },
+      closeOpenSession: (sessionId) => {
+        this.openingSessionEvents.delete(sessionId)
+        this.openSessions.delete(sessionId)
+        this.deps.bridge.markSinkClosed(this, sessionId)
+      },
+      nextLiveActivityGeneration: () => {
+        this.liveActivityRegistrationGeneration += 1
+        return this.liveActivityRegistrationGeneration
+      },
+      get liveActivityGeneration() {
+        return self.liveActivityRegistrationGeneration
+      },
+      get pendingLiveActivityId() {
+        return self.pendingLiveActivityId
+      },
+      setPendingLiveActivityId: (activityId) => {
+        this.pendingLiveActivityId = activityId
+      },
+      markRevoked: () => {
+        this.revoked = true
+      },
+      prove: () => this.prove(env),
+      enrollPushKey: (enrollKey) => this.deps.onPushEnrollKey?.(enrollKey),
+      revokeSiblings: (deviceId) => this.deps.onDeviceRevoke?.(deviceId, this),
     }
+  }
 
-    private async onMessage(raw: string): Promise<void> {
-      this.lastActivity = Date.now()
-      // A revoked device is mid-close: swallow everything until the socket
-      // goes away instead of answering a device that no longer exists.
-      if (this.revoked) return
-      // Cheap length guard before the JSON parse: pre-auth frames are tiny
-      // (hello/ping), so anything over 64 KiB is either junk or an attempt
-      // to make us spend CPU before the auth deadline. Reject without
-      // trying to parse, so the cost is just the length check.
-      if (!this.authenticated && raw.length > PRE_AUTH_FRAME_BYTES) {
-        this.close(1009, 'pre-auth frame too large')
-        return
-      }
-      let env: Envelope
+  private async onMessage(raw: string): Promise<void> {
+    this.lastActivity = Date.now()
+    // A revoked device is mid-close: swallow everything until the socket
+    // goes away instead of answering a device that no longer exists.
+    if (this.revoked) return
+    // Cheap length guard before the JSON parse: pre-auth frames are tiny
+    // (hello/ping), so anything over 64 KiB is either junk or an attempt
+    // to make us spend CPU before the auth deadline. Reject without
+    // trying to parse, so the cost is just the length check.
+    if (!this.authenticated && raw.length > PRE_AUTH_FRAME_BYTES) {
+      this.close(1009, 'pre-auth frame too large')
+      return
+    }
+    let env: Envelope
     try {
       const parsed: unknown = JSON.parse(raw)
       if (!isEnvelope(parsed)) {
@@ -305,582 +370,43 @@ export class BridgeConnection implements BridgeSink {
       this.close(4500, 'protocol version mismatch')
       return
     }
+
+    // Anonymous peers get one answer for every non-control frame: telling them
+    // which names happen to be registered would leak the frame inventory.
     if (!this.authenticated) {
-      if (env.type === 'c2s.ping') {
-        this.send('s2c.pong', { serverTime: Date.now() }, env.id)
+      const control = registryRowFor(env.type)
+      if (control === undefined || control.stage !== 'pre-auth') {
+        this.fail(env.id, 'E_PROTOCOL', 'authenticate first')
         return
       }
-      if (env.type === 'c2s.auth.prove') {
-        await this.prove(env)
-        return
-      }
-      this.fail(env.id, 'E_PROTOCOL', 'authenticate first')
+      await dispatchFrame(control, this.frameContext(env), {})
       return
     }
-    if (this.widgetClient && ![
-      'c2s.ping', 'c2s.sessions.list', 'c2s.pending.list', 'c2s.widget.push.register',
-    ].includes(env.type)) {
-      // Device self-revocation is refused by its own handler with a specific
-      // reason; the generic widget gate would only say "read-only".
-      if (env.type !== 'c2s.device.revoke') {
-        return this.fail(env.id, 'E_FORBIDDEN', 'widget connection is read-only')
-      }
+
+    const row = registryRowFor(env.type)
+    // Widget read-only gate comes first and covers unknown types too: a
+    // short-lived panel connection may only send allowed rows, and anything
+    // else reads as "read-only" rather than revealing the frame inventory.
+    if (this.widgetClient && (row === undefined || widgetPolicyOf(row) === 'deny')) {
+      return this.fail(env.id, 'E_FORBIDDEN', 'widget connection is read-only')
     }
-    const required = requiredScope(env.type)
-    if (required !== undefined && !this.scopes.has(required)) {
-      this.fail(env.id, 'E_FORBIDDEN', `scope ${required} required`)
+    // Unknown type answers E_PROTOCOL directly (G6). Falling back to a scope
+    // lookup first made a device without sessions.read hear "permission
+    // denied" about a frame that does not exist.
+    if (row === undefined) {
+      this.fail(env.id, 'E_PROTOCOL', 'unknown type: ' + env.type)
       return
     }
-    if (env.type.startsWith('c2s.schedule.') && !this.scopes.has('sessions.read')) {
-      return this.fail(env.id, 'E_FORBIDDEN', 'scope sessions.read required')
-    }
-    const invalid = validateRequest(env.type, env.payload)
-    if (invalid) return this.fail(env.id, 'E_PROTOCOL', invalid)
-    switch (env.type) {
-      case 'c2s.ping': {
-        this.send('s2c.pong', { serverTime: Date.now() }, env.id)
-        return
-      }
-      case 'c2s.sessions.list': {
-        this.send('s2c.sessions.snapshot', { full: true, sessions: this.deps.bridge.listSessions() }, env.id)
-        return
-      }
-      case 'c2s.pending.list': {
-        this.send('s2c.pending.snapshot', this.deps.bridge.pendingSnapshot(), env.id)
-        return
-      }
-      case 'c2s.workspaces.list': {
-        if (!this.deps.bridge.capabilities.projectSelection) {
-          return this.fail(env.id, 'E_UNSUPPORTED', 'project selection unavailable on this host version')
-        }
-        const result = await this.deps.bridge.listWorkspaces()
-        if (!result.ok) return this.fail(env.id, managementErrorCode(result.kind), result.message)
-        this.send('s2c.workspaces.snapshot', { workspaces: result.value }, env.id)
-        return
-      }
-      case 'c2s.directory.list': {
-        const p = env.payload as { path?: unknown } | undefined
-        if (p?.path !== undefined && typeof p.path !== 'string') {
-          return this.fail(env.id, 'E_PROTOCOL', 'path must be a string')
-        }
-        const result = await this.deps.bridge.listDirectory(p?.path as string | undefined)
-        if (!result.ok) return this.fail(env.id, managementErrorCode(result.kind), result.message)
-        this.send('s2c.directory.listing', result.value, env.id)
-        return
-      }
-      case 'c2s.directory.pick': {
-        const result = await this.deps.bridge.pickDirectory()
-        if (!result.ok) return this.fail(env.id, managementErrorCode(result.kind), result.message)
-        this.send('s2c.directory.picked', { path: result.value }, env.id)
-        return
-      }
-      case 'c2s.workspace.create': {
-        const p = env.payload as { path?: unknown } | undefined
-        const path = typeof p?.path === 'string' ? p.path.trim() : ''
-        if (!path) return this.fail(env.id, 'E_PROTOCOL', 'non-empty path required')
-        if (!this.deps.bridge.capabilities.projectSelection) {
-          return this.fail(env.id, 'E_UNSUPPORTED', 'project selection unavailable on this host version')
-        }
-        const result = await this.deps.bridge.createWorkspace(path)
-        if (!result.ok) return this.fail(env.id, managementErrorCode(result.kind), result.message)
-        this.send('s2c.workspace.created', result.value, env.id)
-        return
-      }
-      case 'c2s.session.open': {
-        const p = env.payload as { sessionId?: string; tailCount?: number }
-        if (!p?.sessionId || typeof p.sessionId !== 'string') return this.fail(env.id, 'E_PROTOCOL', 'sessionId required')
-        const sessionId = p.sessionId
-        const bufferedEvents: Array<{ type: string; payload: unknown; seq?: number }> = []
-        this.openingSessionEvents.set(sessionId, bufferedEvents)
-        const ok = await this.deps.bridge.openSession(this, sessionId, p.tailCount ?? 100)
-        if (!ok) {
-          if (this.openingSessionEvents.get(sessionId) === bufferedEvents) {
-            this.openingSessionEvents.delete(sessionId)
-          }
-          return this.fail(env.id, 'E_NOT_FOUND', 'session history unavailable')
-        }
-        // A concurrent close or replacement open invalidates this attempt.
-        // Its tail has already been sent, but it must not reactivate realtime
-        // delivery after the user left the screen.
-        if (this.openingSessionEvents.get(sessionId) !== bufferedEvents) return
-        this.openSessions.add(sessionId)
-        this.deps.bridge.markSinkOpen(this, sessionId)
-        this.openingSessionEvents.delete(sessionId)
-        for (const frame of bufferedEvents) {
-          this.push(frame.type, frame.payload, frame.seq)
-        }
-        return
-      }
-      case 'c2s.session.close': {
-        const p = env.payload as { sessionId?: string }
-        if (!p?.sessionId) return this.fail(env.id, 'E_PROTOCOL', 'sessionId required')
-        this.openingSessionEvents.delete(p.sessionId)
-        this.openSessions.delete(p.sessionId)
-        this.deps.bridge.markSinkClosed(this, p.sessionId)
-        this.send('s2c.ack', {}, env.id)
-        return
-      }
-      case 'c2s.session.create': {
-        const p = env.payload as { workspaceId?: unknown; cwd?: unknown } | undefined
-        const workspaceId = typeof p?.workspaceId === 'string' ? p.workspaceId.trim() : ''
-        const cwd = typeof p?.cwd === 'string' ? p.cwd.trim() : ''
-        if (workspaceId && cwd) return this.fail(env.id, 'E_PROTOCOL', 'workspaceId and cwd are mutually exclusive')
-        const newId = await this.deps.bridge.createSession({
-          ...(workspaceId ? { workspaceId } : {}),
-          ...(cwd ? { cwd } : {}),
-        })
-        if (!newId) return this.fail(env.id, 'E_INTERNAL', 'session create failed')
-        this.send('s2c.ack', { sessionId: newId }, env.id)
-        return
-      }
-      case 'c2s.session.fork': {
-        const p = env.payload as { sessionId?: string; atSeq?: number; clientRequestId?: string }
-        if (!this.deps.bridge.capabilities.sessionFork) {
-          return this.fail(env.id, 'E_UNSUPPORTED', 'session fork unavailable on this host version')
-        }
-        const result = await this.deps.bridge.forkSession(this.deviceId!, {
-          sessionId: p.sessionId!,
-          clientRequestId: p.clientRequestId!,
-          ...(p.atSeq !== undefined ? { atSeq: p.atSeq } : {}),
-        })
-        if (!result.ok) return this.fail(env.id, scheduleManagementErrorCode(result.kind), result.message)
-        this.send('s2c.session.forked', {
-          clientRequestId: p.clientRequestId!,
-          sourceSessionId: p.sessionId!,
-          sessionId: result.value.sessionId,
-          ...(p.atSeq !== undefined ? { atSeq: p.atSeq } : {}),
-          ...(result.replayed ? { replayed: true } : {}),
-        }, env.id)
-        return
-      }
-      case 'c2s.session.rename': {
-        const p = env.payload as { sessionId?: string; title?: string }
-        const title = typeof p?.title === 'string' ? p.title.trim() : ''
-        if (!p?.sessionId || title.length === 0) {
-          return this.fail(env.id, 'E_PROTOCOL', 'sessionId and non-empty title required')
-        }
-        if (!this.deps.bridge.capabilities.sessionManagement) {
-          return this.fail(env.id, 'E_UNSUPPORTED', 'session management unavailable on this host version')
-        }
-        const result = await this.deps.bridge.renameSession(p.sessionId, title)
-        if (!result.ok) {
-          const code = result.kind === 'not-found' ? 'E_NOT_FOUND'
-            : result.kind === 'busy' ? 'E_BUSY'
-              : result.kind === 'unsupported' ? 'E_UNSUPPORTED'
-                : result.kind === 'invalid' ? 'E_PROTOCOL'
-                  : 'E_INTERNAL'
-          return this.fail(env.id, code, result.message)
-        }
-        this.send('s2c.session.renamed', { sessionId: p.sessionId, title: result.value }, env.id)
-        return
-      }
-      case 'c2s.session.archive': {
-        const p = env.payload as { sessionId?: string }
-        if (!p?.sessionId) return this.fail(env.id, 'E_PROTOCOL', 'sessionId required')
-        if (!this.deps.bridge.capabilities.sessionManagement) {
-          return this.fail(env.id, 'E_UNSUPPORTED', 'session management unavailable on this host version')
-        }
-        const result = await this.deps.bridge.archiveSession(p.sessionId)
-        if (!result.ok) {
-          const code = result.kind === 'not-found' ? 'E_NOT_FOUND'
-            : result.kind === 'busy' ? 'E_BUSY'
-              : result.kind === 'unsupported' ? 'E_UNSUPPORTED'
-                : result.kind === 'invalid' ? 'E_PROTOCOL'
-                  : 'E_INTERNAL'
-          return this.fail(env.id, code, result.message)
-        }
-        this.send('s2c.session.archived', { sessionId: p.sessionId }, env.id)
-        return
-      }
-      case 'c2s.sessions.archived': {
-        // Separate from c2s.sessions.list so the live list keeps its shape for
-        // clients that do not know about archived rows.
-        this.send('s2c.sessions.archived.snapshot', {
-          sessions: this.deps.bridge.listArchivedSessions(),
-        }, env.id)
-        return
-      }
-      case 'c2s.session.unarchive': {
-        const p = env.payload as { sessionId?: string }
-        if (!p?.sessionId) return this.fail(env.id, 'E_PROTOCOL', 'sessionId required')
-        if (!this.deps.bridge.capabilities.sessionRestore) {
-          return this.fail(env.id, 'E_UNSUPPORTED', 'session restore unavailable on this host version')
-        }
-        const result = await this.deps.bridge.unarchiveSession(p.sessionId)
-        if (!result.ok) {
-          return this.fail(env.id, managementErrorCode(result.kind), result.message)
-        }
-        this.send('s2c.session.unarchived', { sessionId: p.sessionId }, env.id)
-        return
-      }
-      case 'c2s.session.cancel': {
-        const p = env.payload as { sessionId?: string }
-        if (!p?.sessionId) return this.fail(env.id, 'E_PROTOCOL', 'sessionId required')
-        const result = await this.deps.bridge.cancelSession(p.sessionId)
-        if (!result.ok) {
-          const code = result.kind === 'not-found' ? 'E_NOT_FOUND'
-            : result.kind === 'busy' ? 'E_BUSY'
-              : result.kind === 'unsupported' ? 'E_UNSUPPORTED'
-                : result.kind === 'invalid' ? 'E_PROTOCOL'
-                  : 'E_INTERNAL'
-          return this.fail(env.id, code, result.message)
-        }
-        this.send('s2c.ack', { sessionId: p.sessionId }, env.id)
-        return
-      }
-      case 'c2s.session.history': {
-        const p = env.payload as { sessionId?: string; beforeSeq?: number; limit?: number }
-        if (!p?.sessionId || typeof p.beforeSeq !== 'number') {
-          return this.fail(env.id, 'E_PROTOCOL', 'sessionId and beforeSeq required')
-        }
-        const page = await this.deps.bridge.historyPage(p.sessionId, p.beforeSeq, Math.min(p.limit ?? 100, 500))
-        if (!page) return this.fail(env.id, 'E_NOT_FOUND', 'history unavailable')
-        this.send('s2c.history.page', page, env.id)
-        return
-      }
-      case 'c2s.session.attachment': {
-        const p = env.payload as { sessionId?: string; attachmentId?: string }
-        if (!p?.sessionId || typeof p.attachmentId !== 'string' || p.attachmentId.length === 0) {
-          return this.fail(env.id, 'E_PROTOCOL', 'sessionId and attachmentId required')
-        }
-        const image = await this.deps.bridge.attachmentData(p.sessionId, p.attachmentId)
-        if (!image) return this.fail(env.id, 'E_NOT_FOUND', 'attachment unavailable')
-        this.send('s2c.ack', image, env.id)
-        return
-      }
-      case 'c2s.session.models': {
-        const p = env.payload as { sessionId?: string }
-        if (!p?.sessionId) return this.fail(env.id, 'E_PROTOCOL', 'sessionId required')
-        if (!this.deps.bridge.capabilities.models) {
-          return this.fail(env.id, 'E_UNSUPPORTED', 'model selection unavailable on this host version')
-        }
-        const result = await this.deps.bridge.sessionModels(p.sessionId)
-        if (!result.ok) {
-          const code = result.kind === 'not-found' ? 'E_NOT_FOUND'
-            : result.kind === 'busy' ? 'E_BUSY'
-              : result.kind === 'unsupported' ? 'E_UNSUPPORTED'
-                : result.kind === 'unavailable' ? 'E_NOT_FOUND'
-                  : 'E_INTERNAL'
-          return this.fail(env.id, code, result.message)
-        }
-        this.send('s2c.session.models', { sessionId: p.sessionId, ...result.value }, env.id)
-        return
-      }
-      case 'c2s.session.selectModel': {
-        const p = env.payload as {
-          sessionId?: string
-          provider?: string
-          model?: string
-          reasoningEffort?: string
-        }
-        if (!p?.sessionId || !p.provider?.trim() || !p.model?.trim()) {
-          return this.fail(env.id, 'E_PROTOCOL', 'sessionId, provider and model required')
-        }
-        if (!this.deps.bridge.capabilities.models) {
-          return this.fail(env.id, 'E_UNSUPPORTED', 'model selection unavailable on this host version')
-        }
-        const result = await this.deps.bridge.selectSessionModel(p.sessionId, {
-          provider: p.provider.trim(),
-          model: p.model.trim(),
-          ...(p.reasoningEffort?.trim() ? { reasoningEffort: p.reasoningEffort.trim() } : {}),
-        })
-        if (!result.ok) {
-          const code = result.kind === 'not-found' ? 'E_NOT_FOUND'
-            : result.kind === 'busy' ? 'E_BUSY'
-              : result.kind === 'unsupported' ? 'E_UNSUPPORTED'
-                : result.kind === 'unavailable' ? 'E_NOT_FOUND'
-                  : 'E_INTERNAL'
-          return this.fail(env.id, code, result.message)
-        }
-        this.send('s2c.session.modelSelected', { sessionId: p.sessionId, selected: result.value }, env.id)
-        return
-      }
-      case 'c2s.session.delivery': {
-        const p = env.payload as { sessionId: string; clientSendId: string }
-        this.send('s2c.ack', this.deps.bridge.promptDeliveries.lookup(this.deviceId!, p.sessionId, p.clientSendId), env.id)
-        return
-      }
-      case 'c2s.schedule.list': {
-        const p = env.payload as { sessionId: string }
-        if (!this.deps.bridge.capabilities.schedules) return this.fail(env.id, 'E_UNSUPPORTED', 'schedules unavailable on this host version')
-        const result = await this.deps.bridge.listSchedules(p.sessionId)
-        if (!result.ok) return this.fail(env.id, scheduleManagementErrorCode(result.kind), result.message)
-        this.send('s2c.schedule.snapshot', { sessionId: p.sessionId, tasks: result.value }, env.id)
-        return
-      }
-      case 'c2s.schedule.history': {
-        const p = env.payload as { sessionId: string; id: string; limit: number; before?: string }
-        if (!this.deps.bridge.capabilities.schedules) return this.fail(env.id, 'E_UNSUPPORTED', 'schedules unavailable on this host version')
-        const result = await this.deps.bridge.scheduleHistory(p.sessionId, p.id, p.limit, p.before)
-        if (!result.ok) return this.fail(env.id, scheduleManagementErrorCode(result.kind), result.message)
-        this.send('s2c.schedule.history', { sessionId: p.sessionId, history: result.value }, env.id)
-        return
-      }
-      case 'c2s.schedule.create': {
-        if (!this.deps.bridge.capabilities.schedules) return this.fail(env.id, 'E_UNSUPPORTED', 'schedules unavailable on this host version')
-        const p = env.payload as Record<string, unknown> & { sessionId: string; clientRequestId: string; title: string; prompt: string }
-        const result = await this.deps.bridge.createSchedule(this.deviceId!, p)
-        if (!result.ok) return this.fail(env.id, scheduleManagementErrorCode(result.kind), result.message)
-        this.send('s2c.schedule.updated', {
-          clientRequestId: p.clientRequestId,
-          sessionId: p.sessionId,
-          task: result.value,
-          ...(result.replayed ? { replayed: true } : {}),
-        }, env.id)
-        return
-      }
-      case 'c2s.schedule.update': {
-        if (!this.deps.bridge.capabilities.schedules) return this.fail(env.id, 'E_UNSUPPORTED', 'schedules unavailable on this host version')
-        const p = env.payload as Record<string, unknown> & { sessionId: string; id: string; clientRequestId: string; expected: unknown }
-        const result = await this.deps.bridge.updateSchedule(this.deviceId!, p)
-        if (!result.ok) return this.fail(env.id, scheduleManagementErrorCode(result.kind), result.message)
-        this.send('s2c.schedule.updated', {
-          clientRequestId: p.clientRequestId,
-          sessionId: p.sessionId,
-          task: result.value,
-          ...(result.replayed ? { replayed: true } : {}),
-        }, env.id)
-        return
-      }
-      case 'c2s.schedule.delete': {
-        if (!this.deps.bridge.capabilities.schedules) return this.fail(env.id, 'E_UNSUPPORTED', 'schedules unavailable on this host version')
-        const p = env.payload as { sessionId: string; id: string; clientRequestId: string }
-        const result = await this.deps.bridge.deleteSchedule(this.deviceId!, p)
-        if (!result.ok) return this.fail(env.id, scheduleManagementErrorCode(result.kind), result.message)
-        this.send('s2c.schedule.updated', {
-          clientRequestId: p.clientRequestId,
-          sessionId: p.sessionId,
-          deleted: true,
-          ...(result.replayed ? { replayed: true } : {}),
-        }, env.id)
-        return
-      }
-      case 'c2s.session.sendPrompt': {
-        const p = env.payload as {
-          sessionId?: string
-          text?: string
-          clientSendId?: string
-          images?: Array<{ mediaType?: string; data?: string; name?: string }>
-          documents?: Array<{ mediaType?: string; name?: string; text?: string; truncated?: boolean }>
-        }
-        const text = typeof p?.text === 'string' ? p.text : ''
-        const rawImages = Array.isArray(p?.images) ? p.images : []
-        const rawDocuments = Array.isArray(p?.documents) ? p.documents : []
-        if (!p?.sessionId || (text.trim().length === 0 && rawImages.length === 0 && rawDocuments.length === 0)) {
-          return this.fail(env.id, 'E_PROTOCOL', 'sessionId and prompt content required')
-        }
-        if (text.length > MAX_PROMPT_TEXT_CHARS) {
-          return this.fail(env.id, 'E_PROTOCOL', 'prompt text too long')
-        }
-        if (rawImages.length > MAX_PROMPT_IMAGES) {
-          return this.fail(env.id, 'E_PROTOCOL', 'too many images')
-        }
-        if (rawDocuments.length > MAX_PROMPT_DOCUMENTS || rawImages.length + rawDocuments.length > MAX_PROMPT_IMAGES) {
-          return this.fail(env.id, 'E_PROTOCOL', 'too many prompt attachments')
-        }
-        const images: Array<{
-          mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
-          data: string
-          name?: string
-        }> = []
-        for (const image of rawImages) {
-          if (!IMAGE_MEDIA_TYPES.has(String(image?.mediaType)) ||
-              typeof image?.data !== 'string' || image.data.length === 0 ||
-              image.data.length > MAX_BASE64_CHARS_PER_IMAGE) {
-            return this.fail(env.id, 'E_PROTOCOL', 'invalid image attachment')
-          }
-          images.push({
-            mediaType: image.mediaType as 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif',
-            data: image.data,
-            ...(typeof image.name === 'string' && sanitizeImageName(image.name).length > 0
-              ? { name: sanitizeImageName(image.name) }
-              : {}),
-          })
-        }
-        const documents: Array<{ mediaType: string; name: string; text: string; truncated?: boolean }> = []
-        for (const document of rawDocuments) {
-          if (typeof document?.name !== 'string' || typeof document?.mediaType !== 'string' ||
-              typeof document?.text !== 'string' || document.text.length === 0 ||
-              document.text.length > MAX_DOCUMENT_TEXT_CHARS) {
-            return this.fail(env.id, 'E_PROTOCOL', 'invalid document attachment')
-          }
-          const name = sanitizeDocumentField(document.name, MAX_DOCUMENT_NAME_CHARS)
-          const mediaType = sanitizeDocumentField(document.mediaType, MAX_DOCUMENT_MEDIA_TYPE_CHARS).toLowerCase()
-          if (!name || !mediaType || mediaType.startsWith('image/')) {
-            return this.fail(env.id, 'E_PROTOCOL', 'invalid document attachment')
-          }
-          documents.push({ name, mediaType, text: document.text, ...(document.truncated === true ? { truncated: true } : {}) })
-        }
-        if (p.clientSendId) {
-          const receipt = await this.deps.bridge.promptDeliveries.dispatch(this.deviceId!, p.sessionId, p.clientSendId,
-            { text, images, documents }, () => this.deps.bridge.sendPrompt(p.sessionId!, text, images, documents))
-          this.send('s2c.ack', receipt, env.id)
-          return
-        }
-        const userSeq = await this.deps.bridge.sendPrompt(p.sessionId, text, images, documents)
-        if (!userSeq.ok) return this.fail(env.id, managementErrorCode(userSeq.kind), userSeq.message)
-        this.send('s2c.ack', { userSeq: userSeq.value }, env.id)
-        return
-      }
-      case 'c2s.approval.respond': {
-        const p = env.payload as { requestId?: string; decision?: string; reason?: string }
-        if (!p?.requestId || (p.decision !== 'allow' && p.decision !== 'deny')) {
-          return this.fail(env.id, 'E_PROTOCOL', 'requestId and decision required')
-        }
-        // The optional deny reason must reach the host so the
-        // model learns why its tool call was refused.
-        const outcome = await this.deps.bridge.respondApproval(
-          p.requestId,
-          p.decision,
-          typeof p.reason === 'string' ? p.reason : undefined,
-        )
-        if (!outcome.ok) return this.fail(env.id, pendingResponseErrorCode(outcome.reason), pendingResponseMessage('approval', outcome.reason))
-        this.send('s2c.ack', {}, env.id)
-        return
-      }
-      case 'c2s.question.respond': {
-        const p = env.payload as { requestId?: string; answers?: unknown }
-        if (!p?.requestId || !Array.isArray(p.answers)) {
-          return this.fail(env.id, 'E_PROTOCOL', 'requestId and answers required')
-        }
-        const outcome = await this.deps.bridge.respondQuestion(p.requestId, p.answers)
-        if (!outcome.ok) return this.fail(env.id, pendingResponseErrorCode(outcome.reason), pendingResponseMessage('question', outcome.reason))
-        this.send('s2c.ack', {}, env.id)
-        return
-      }
-      case 'c2s.device.revoke': {
-        // Device unbind: the app is deleting its local instance and asks the
-        // host to drop the pairing (APNs/WidgetKit/LiveActivity tokens plus a
-        // revokedAt tombstone) so it can never be an offline push target
-        // again. Unauthenticated frames never reach here; a widget socket is
-        // refused because a short-lived read-only connection must not unbind
-        // its device.
-        const p = env.payload as { deviceId?: unknown } | undefined
-        if (p?.deviceId !== undefined && typeof p.deviceId !== 'string') {
-          return this.fail(env.id, 'E_PROTOCOL', 'deviceId must be a string')
-        }
-        if (typeof p?.deviceId === 'string' && p.deviceId !== this.deviceId) {
-          return this.fail(env.id, 'E_FORBIDDEN', 'deviceId does not match the authenticated device')
-        }
-        if (this.widgetClient) {
-          return this.fail(env.id, 'E_FORBIDDEN', 'widget connection cannot revoke its device')
-        }
-        const deviceId = this.deviceId!
-        // Idempotent: an already-revoked record still acks {revoked:true} —
-        // the device cannot tell a fresh revocation from a repeated one, and
-        // neither case may surface as an error.
-        this.deps.devices.revoke(deviceId, Date.now())
-        this.revoked = true
-        // Dropping sibling sockets is best effort: the registry tombstone is
-        // already written, so a failing hook must not swallow the ack.
-        try {
-          await this.deps.onDeviceRevoke?.(deviceId, this)
-        } catch (error) {
-          if (this.deps.debug === true) this.deps.log('device revoke hook failed: ' + String(error))
-        }
-        // Ack strictly precedes the close so a slow client observes the
-        // successful unbind before the 4401.
-        this.send('s2c.ack', { revoked: true }, env.id)
-        this.close(4401, 'device revoked')
-        return
-      }
-      case 'c2s.liveActivity.unregister': {
-        const p = env.payload as { activityId: string }
-        if (this.pendingLiveActivityId === p.activityId) {
-          this.liveActivityRegistrationGeneration += 1
-          this.pendingLiveActivityId = undefined
-        }
-        this.deps.devices.clearLiveActivity(this.deviceId!, p.activityId)
-        this.send('s2c.ack', {}, env.id)
-        return
-      }
-      case 'c2s.liveActivity.register': {
-        const p = env.payload as { activityId: string; sessionId: string; deviceToken: string; environment: ApnsEnvironment; enrollKey?: string }
-        const initial = this.deviceId && this.deps.devices.authorized(this.deviceId)
-        if (!initial || !['notifications.register', 'sessions.read', 'interactions.respond'].every(scope => initial.scopes?.includes(scope as DeviceScope))) {
-          return this.fail(env.id, 'E_FORBIDDEN', 'live activity permissions required')
-        }
-        const generation = ++this.liveActivityRegistrationGeneration
-        this.pendingLiveActivityId = p.activityId
-        if (p.enrollKey) await this.deps.onPushEnrollKey?.(p.enrollKey)
-        if (generation !== this.liveActivityRegistrationGeneration) {
-          return this.fail(env.id, 'E_BUSY', 'live activity registration superseded')
-        }
-        const record = this.deviceId && this.deps.devices.authorized(this.deviceId)
-        if (this.closed || !record || !['notifications.register', 'sessions.read', 'interactions.respond'].every(scope => record.scopes?.includes(scope as DeviceScope))) {
-          return this.fail(env.id, 'E_FORBIDDEN', 'live activity permissions required')
-        }
-        if (!this.deps.bridge.listSessions().some(row => row.id === p.sessionId)) {
-          return this.fail(env.id, 'E_NOT_FOUND', 'session not found')
-        }
-        const previous = record.liveActivity
-        if (previous?.activityId === p.activityId && previous.sessionId !== p.sessionId) {
-          return this.fail(env.id, 'E_PROTOCOL', 'activity is bound to another session')
-        }
-        this.deps.devices.setLiveActivity(record.deviceId, {
-          activityId: p.activityId, sessionId: p.sessionId, token: p.deviceToken.toLowerCase(),
-          environment: p.environment, updatedAt: Date.now(), expiresAt: Date.now() + 8 * 60 * 60 * 1000,
-        })
-        this.deps.bridge.refreshLiveActivities()
-        this.send('s2c.ack', { enabled: this.deps.bridge.capabilities.push }, env.id)
-        return
-      }
-      case 'c2s.widget.push.register':
-      case 'c2s.push.register': {
-        const widget = env.type === 'c2s.widget.push.register'
-        const p = env.payload as { deviceToken?: unknown; environment?: unknown; categories?: unknown; enrollKey?: unknown }
-        const token = typeof p?.deviceToken === 'string' ? p.deviceToken.trim() : ''
-        if (!isValidApnsToken(token)) {
-          return this.fail(env.id, 'E_PROTOCOL', 'hex deviceToken (32-512 chars) required')
-        }
-        const environment: ApnsEnvironment = p?.environment === 'production' ? 'production' : 'development'
-        const categories = typeof p?.categories === 'object' && p.categories !== null
-          ? p.categories as Record<string, boolean>
-          : undefined
-        if (!this.deviceId || !this.authenticated) {
-          return this.fail(env.id, 'E_PROTOCOL', 'authenticate first')
-        }
-        // Zero-touch enrollment MUST run before the capability gate: a fresh,
-        // unconfigured bridge receives its first register precisely when push
-        // is not yet enabled, and the key itself flips relay mode on. The
-        // relay round-trip is awaited so readiness reflects reality.
-        if (typeof p?.enrollKey === 'string') {
-          const enrollKey = p.enrollKey.trim().replace(/[^\x20-\x7e]/g, '').slice(0, 128)
-          if (enrollKey.length >= 8 && enrollKey.length <= 128) {
-            await this.deps.onPushEnrollKey?.(enrollKey)
-          }
-        }
-        // Store the registration BEFORE the readiness gate: if push is still
-        // mid-bootstrap (or the relay is temporarily down), the token is
-        // already on file for when it recovers — no extra register needed.
-        // Enrollment is asynchronous. Re-check authority after awaiting it.
-        const record = this.deps.devices.authorized(this.deviceId)
-        if (this.closed || !record?.scopes?.includes('notifications.register')) {
-          return this.fail(env.id, 'E_FORBIDDEN', 'device authorization changed')
-        }
-        if (widget) {
-          if (!record.scopes.includes('sessions.read') || !record.scopes.includes('interactions.respond')) {
-            return this.fail(env.id, 'E_FORBIDDEN', 'widget overview permissions required')
-          }
-          this.deps.devices.setWidgetPushToken(this.deviceId, token, environment, Date.now())
-        } else {
-          this.deps.devices.setPushToken(this.deviceId, token, environment, categories, Date.now())
-        }
-        if (!this.deps.bridge.capabilities.push) {
-          if (this.deps.debug === true) this.deps.log('push register held: bridge not ready')
-          return this.fail(env.id, 'E_UNSUPPORTED', 'push is not configured on this bridge')
-        }
-        if (this.deps.debug === true) {
-          this.deps.log('push token registered env=' + environment)
-        }
-        // `enabled` lets the app flip its local capability immediately instead
-        // of waiting for the next handshake.
-        this.send('s2c.ack', { enabled: true }, env.id)
-        return
-      }
-      default:
-        this.fail(env.id, 'E_PROTOCOL', 'unknown type: ' + env.type)
-    }
+    const scope = scopeRejection(row, this.scopes)
+    if (scope !== undefined) return this.fail(env.id, scope.code, scope.message)
+    // Validation precedes the capability gate, matching the pre-refactor order
+    // where payload shape was checked before the handler looked at capabilities.
+    const validated = validatePayload(row, env.payload)
+    if (!validated.ok) return this.fail(env.id, validated.code, validated.message)
+    const capability = capabilityRejection(row, this.deps.bridge.capabilities)
+    if (capability !== undefined) return this.fail(env.id, capability.code, capability.message)
+
+    await dispatchFrame(row, this.frameContext(env), validated.value)
   }
 
   private async prove(env: Envelope): Promise<void> {

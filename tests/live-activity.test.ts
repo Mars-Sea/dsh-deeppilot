@@ -7,8 +7,7 @@ import { DeviceStore } from '../src/token.ts'
 import { createTestIdentity, registerTestIdentity } from './auth-fixture.ts'
 import { liveActivityState, LiveActivityPushManager } from '../src/live-activity.ts'
 import { apnsPayload, pushHeaders } from '../src/apns.ts'
-import { validateRequest } from '../src/request-validation.ts'
-import { requiredScope } from '../src/connection-policy.ts'
+import { registryRowFor, validatePayload } from '../src/wire-registry.ts'
 import type { LiveActivityPushNotification, SessionSummary } from '../src/protocol.ts'
 
 const session: SessionSummary = { workspaceLabel: null, id: 's', title: 'Work', status: 'running', lastActivityTs: 1,
@@ -33,11 +32,15 @@ test('activity wire format uses dedicated APNs topic and strict registration sha
   assert.equal(pushHeaders('dev.test', notification)['apns-push-type'], 'liveactivity')
   assert.equal((apnsPayload({ ...notification, event: 'end' }).aps as any)['dismissal-date'], 400)
   const p = { activityId: 'a', sessionId: 's', deviceToken: 'a'.repeat(64), environment: 'development' }
-  assert.equal(validateRequest('c2s.liveActivity.register', p), undefined)
-  assert.ok(validateRequest('c2s.liveActivity.register', { ...p, environment: 'wrong' }))
-  assert.ok(validateRequest('c2s.liveActivity.register', { ...p, deviceToken: 'bad' }))
-  assert.ok(validateRequest('c2s.liveActivity.unregister', {}))
-  assert.equal(requiredScope('c2s.liveActivity.register'), 'notifications.register')
+  const register = registryRowFor('c2s.liveActivity.register')!
+  assert.equal(validatePayload(register, p).ok, true)
+  assert.equal(validatePayload(register, { ...p, environment: 'wrong' }).ok, false)
+  assert.equal(validatePayload(register, { ...p, deviceToken: 'bad' }).ok, false)
+  // 注销帧要求 activityId，缺省即拒。
+  assert.equal(validatePayload(registryRowFor('c2s.liveActivity.unregister')!, {}).ok, false)
+  assert.equal(validatePayload(registryRowFor('c2s.liveActivity.unregister')!, { activityId: 'a' }).ok, true)
+  // 三个 scope 由行声明（PROTOCOL.md：通知注册 + 会话读取 + 交互应答）。
+  assert.deepEqual([...register.scopes].sort(), ['interactions.respond', 'notifications.register', 'sessions.read'])
 })
 
 test('terminal state survives next round, reconnect and rotation; revoked scopes suppress pushes', async () => {

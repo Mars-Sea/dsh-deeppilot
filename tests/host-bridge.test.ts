@@ -618,7 +618,7 @@ test('session restore degrades when the optional workspace service is absent', a
   assert.equal(bridge.capabilities.sessionRestore, false, 'absent workspace service must not claim restore')
   const result = await bridge.unarchiveSession('session-old')
   assert.equal(result.ok, false)
-  assert.equal(result.ok === false && result.kind, 'unsupported')
+  assert.equal(result.ok === false && result.code, 'E_UNSUPPORTED')
   bridge.dispose()
 })
 

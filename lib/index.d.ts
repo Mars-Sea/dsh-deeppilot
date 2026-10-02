@@ -1,5 +1,34 @@
 import { Context } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
+//#region src/wire-errors.d.ts
+/**
+ * 错误词表（error vocabulary）的唯一属主。
+ *
+ * 一条失败信息在系统里要过三种词汇：Host 控制器返回的错误码（`session-not-found`、
+ * `schedule_conflict`……）、Bridge 结果里的状态、以及 wire 上的 `E_*` 码。
+ * 此前这三层各有映射函数（host-bridge 里 5 个、connection-policy 里 2 个、
+ * connection.ts 的 switch 里 5 处内联三元链），一处漂移就会让客户端对
+ * 「该不该重试」的判断失真。
+ *
+ * 本 module 只做一次翻译：每个域一张「Host code -> wire code」表，
+ * Bridge 的结果直接携带 wire 码。`E_BUSY` 与 `E_PROTOCOL` 决定客户端是否
+ * 重试，因此这张表是 wire 行为的一部分，逐码都有测试把守。
+ *
+ * 规范见 PROTOCOL.md 错误码表（`E_PROTOCOL` = 未知类型或非法 payload，
+ * `E_FORBIDDEN` = 权限不足，`E_UNSUPPORTED` = 能力缺失）。
+ */
+/** wire 错误码及其规范描述；PROTOCOL.md 错误码表的 TS 镜像。 */
+declare const ERROR_CODES: {
+  readonly E_AUTH: 'device proof missing or invalid';
+  readonly E_FORBIDDEN: 'device scope does not allow this operation';
+  readonly E_PROTOCOL: 'unknown type or malformed payload';
+  readonly E_NOT_FOUND: 'session or request not found';
+  readonly E_BUSY: 'session is busy';
+  readonly E_UNSUPPORTED: 'protocol version or capability unsupported';
+  readonly E_INTERNAL: 'internal error';
+};
+type WireErrorCode = keyof typeof ERROR_CODES;
+//#endregion
 //#region src/prompt-delivery.d.ts
 type DeliveryStatus = 'accepted' | 'rejected' | 'unknown' | 'notFound' | 'expired';
 interface DeliveryReceipt {
@@ -20,12 +49,17 @@ declare class PromptDeliveryJournal {
   private expired;
   private save;
   lookup(deviceId: string, sessionId: string, id: string): DeliveryReceipt;
+  /**
+   * 幂等投递。operation 的失败结果携带 wire 错误码（error vocabulary 见
+   * wire-errors.ts）——此前这里还有一张 kind→E_* 小表，是同一词表的第四份拷贝。
+   */
   dispatch(deviceId: string, sessionId: string, id: string, content: unknown, operation: () => Promise<{
     ok: true;
     value: number;
   } | {
     ok: false;
-    kind: string;
+    code: WireErrorCode;
+    message: string;
   }>): Promise<DeliveryReceipt>;
 }
 //#endregion
@@ -34,6 +68,36 @@ declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions
 type DeviceScope = (typeof DEVICE_SCOPES)[number];
 //#endregion
 //#region src/protocol.d.ts
+interface WelcomeCapabilities {
+  historyPaging: boolean;
+  replay: boolean;
+  approvals: boolean;
+  questions: boolean;
+  /** Client can request the complete currently-pending approval/question set. */
+  pendingSnapshot?: boolean;
+  promptDelivery?: boolean;
+  /** Bridge emits s2c.notify for all four notification categories. */
+  notifyAllCategories?: boolean;
+  models: boolean;
+  sessionManagement: boolean;
+  /** Bridge can fork a session at an exact event boundary. */
+  sessionFork?: boolean;
+  /** Bridge can list archived sessions and restore them
+   * (c2s.sessions.archived / c2s.session.unarchive). Absent on hosts whose
+   * workspace controller predates unarchiveSession. */
+  sessionRestore?: boolean;
+  projectSelection: boolean;
+  /** Host exposes the optional DSH Schedule service. */
+  schedules?: boolean;
+  /** Bridge has APNs configured; clients may send c2s.push.register. */
+  push?: boolean;
+  widgetPush?: boolean;
+  liveActivityPush?: boolean;
+  /** Bridge accepts c2s.device.revoke, letting a client unbind itself before
+   * deleting its local credentials. Absent on older bridges; older clients
+   * ignore the extra field. */
+  deviceRevoke?: boolean;
+}
 type SessionStatus = "running" | "idle" | "error" | "unknown";
 /**
  * Cumulative model/token statistics for one session, mirrored from the
@@ -435,12 +499,17 @@ interface HostSessionModels {
     message: string;
   }>;
 }
+/**
+ * Bridge 方法的结果。失败直接携带 wire 错误码（error vocabulary 见
+ * wire-errors.ts）：调用方（wire-registry 的行）原样透给手机，不再经过
+ * kind 中间层翻译。
+ */
 type ModelBridgeResult<T> = {
   ok: true;
   value: T;
 } | {
   ok: false;
-  kind: 'unsupported' | 'not-found' | 'busy' | 'unavailable' | 'internal';
+  code: WireErrorCode;
   message: string;
 };
 type SessionManagementResult<T> = {
@@ -448,7 +517,7 @@ type SessionManagementResult<T> = {
   value: T;
 } | {
   ok: false;
-  kind: 'unsupported' | 'not-found' | 'busy' | 'invalid' | 'internal';
+  code: WireErrorCode;
   message: string;
 };
 interface PromptArgs {
@@ -598,7 +667,12 @@ interface PromptDocument {
 }
 //#endregion
 //#region src/mutation-journal.d.ts
-type MutationErrorCode = 'E_PROTOCOL' | 'E_NOT_FOUND' | 'E_BUSY' | 'E_UNSUPPORTED' | 'E_INTERNAL';
+/**
+ * 非 prompt 变更的幂等 journal。错误码直接复用 wire 错误码（error vocabulary
+ * 的唯一属主是 wire-errors.ts）——此前这里另有一份 MutationErrorCode 联合，
+ * 与 Bridge 结果码、wire 码构成第三套词表。
+ */
+type MutationErrorCode = WireErrorCode;
 type MutationOperationResult<T> = {
   ok: true;
   value: T;
@@ -640,13 +714,21 @@ declare class MutationJournal {
 }
 //#endregion
 //#region src/host-bridge.d.ts
+/**
+ * 失败结果直接携带 wire 错误码（error vocabulary 见 wire-errors.ts）。
+ *
+ * 迁移前这里有 kind 中间层（'not-found' | 'busy' | 'conflict' | 'invalid'…），
+ * 由 5 个映射函数在「Host code ↔ kind ↔ E_*」之间来回翻译，其中
+ * E_BUSY→conflict→E_BUSY 的往返已证明有损。现在每个域查一次表，调用方拿到的
+ * 就是手机上会看到的错误码。
+ */
 type ScheduleBridgeResult<T> = {
   ok: true;
   value: T;
   replayed?: boolean;
 } | {
   ok: false;
-  kind: 'unsupported' | 'not-found' | 'invalid' | 'conflict' | 'busy' | 'internal';
+  code: WireErrorCode;
   message: string;
   replayed?: boolean;
 };
@@ -681,25 +763,12 @@ declare class HostBridge {
    * capability and notify-worthy events are mirrored to APNs.
    */
   setPushOutlet(outlet: PushOutlet | undefined): void;
-  get capabilities(): {
-    historyPaging: boolean;
-    replay: boolean;
-    approvals: boolean;
-    questions: boolean;
-    pendingSnapshot: boolean;
-    promptDelivery: boolean;
-    notifyAllCategories: boolean;
-    models: boolean;
-    sessionManagement: boolean;
-    sessionFork: boolean;
-    sessionRestore: boolean;
-    projectSelection: boolean;
-    schedules: boolean;
-    push: boolean;
-    widgetPush: boolean;
-    liveActivityPush: boolean;
-    deviceRevoke: boolean;
-  };
+  /**
+   * welcome 能力位。委托 host-capabilities.ts 的探测表：此前同一条事实在这里
+   * 和各方法体内各存一份，已经漂移过两次（models 位过严、schedules 位与
+   * schedule 方法的探测不同源）。
+   */
+  get capabilities(): WelcomeCapabilities;
   diagnostic(message: string): void;
   currentCursor(): number;
   addSink(sink: BridgeSink): void;

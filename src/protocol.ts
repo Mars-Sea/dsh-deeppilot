@@ -523,15 +523,8 @@ export interface PendingClearedPayload { requestId: string }
 export interface ResyncPayload { reason: "gap" }
 export interface ErrorPayload { code: string; message: string }
 
-export const ERROR_CODES = {
-  E_AUTH: 'device proof missing or invalid',
-  E_FORBIDDEN: 'device scope does not allow this operation',
-  E_PROTOCOL: 'unknown type or malformed payload',
-  E_NOT_FOUND: 'session or request not found',
-  E_BUSY: 'session is busy',
-  E_UNSUPPORTED: 'protocol version or capability unsupported',
-  E_INTERNAL: 'internal error',
-} as const
+/** wire 错误码表由 wire-errors.ts 属主；此处为本 mirror 的读者再出口。 */
+export { ERROR_CODES, type WireErrorCode } from './wire-errors.ts'
 
 export interface PromptDeliveryPayload { sessionId: string; clientSendId: string }
 export type { DeliveryReceipt } from "./prompt-delivery.ts"
