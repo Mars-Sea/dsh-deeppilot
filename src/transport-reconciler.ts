@@ -209,6 +209,8 @@ interface LocalInstance {
   server: Server | undefined
   tlsFingerprint: string | undefined
   port: number
+  /** 上线时刻：状态查询复用同一时间戳，不随查询漂移（与迁移前一致）。 */
+  onlineAt: number
 }
 
 /** LAN 需要的外部能力：窄 handler 面、TLS 身份加载器、当前配置。 */
@@ -237,7 +239,7 @@ export function createLocalTransport(deps: LocalTransportDeps): TransportReconci
     skipWhenDisabled: true,
     applyKey: 'before-teardown',
     // 只占位：listener 要等 TLS 身份就绪后才存在。
-    construct: (target) => ({ server: undefined, tlsFingerprint: undefined, port: normalizeLocalPort(target.port) }),
+    construct: (target) => ({ server: undefined, tlsFingerprint: undefined, port: normalizeLocalPort(target.port), onlineAt: Date.now() }),
     begin: async (instance, guard) => {
       const tls = await deps.tls()
       // 被更新的触发取代：不建 listener，状态停在 starting（与迁移前一致）。
@@ -253,6 +255,7 @@ export function createLocalTransport(deps: LocalTransportDeps): TransportReconci
         await closeServer(server)
         return
       }
+      instance.onlineAt = Date.now()
       deps.log(`local transport listening on https://0.0.0.0:${port} (tls fingerprint ${tls.fingerprint})`)
     },
     stop: async (instance) => {
@@ -283,7 +286,7 @@ export function createLocalTransport(deps: LocalTransportDeps): TransportReconci
         port: instance.port,
         endpoints: [],
         tlsFingerprint: instance.tlsFingerprint,
-        updatedAt: Date.now(),
+        updatedAt: instance.onlineAt,
       }
     },
   }

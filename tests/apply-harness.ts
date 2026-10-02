@@ -466,13 +466,15 @@ export interface BootOptions {
   /** 追加 / 覆盖假服务表里的条目。 */
   services?: Record<string, unknown>
   /**
-   * 中继探测的传输实现。今天 `apply()` 不会把它传给 runRelayProbe（src/index.ts
-   * 里没接线），所以底座只持有并暴露在 harness.fetchImpl 上；等 PushGateway 提取
-   * 落地后由它消费，届时底座把这里持有的实现交出去即可，调用方不用改。
+   * 中继探测的传输实现。`apply()` 至今没有把它接到任何地方：src/relay-test.ts
+   * 的 runRelayProbe 与已提取的 src/push-gateway.ts 都已支持 fetchImpl 入参，
+   * 但 src/index.ts 仍然不传递，所以 PushGateway 内部用的是全局 fetch。底座
+   * 今天只持有并暴露在 harness.fetchImpl 上；接线那一步（apply() → PushGateway）
+   * 落地后，把这里持有的实现交出去即可，调用方不用改。
    *
    * 刻意不走 services 表：那是 ctx 的服务注册通道，把一个测试专用参数塞进去
-   * 会让它变成一个插件可见的服务名。src/relay-test.ts 本身已支持 fetchImpl，
-   * 需要自定义传输的用例直接调 runRelayProbe 即可。
+   * 会让它变成一个插件可见的服务名。需要自定义传输的用例直接调 runRelayProbe
+   * 即可（tests/relay-probe.test.ts 已覆盖，含一个必抛的 fetchImpl）。
    */
   fetchImpl?: typeof fetch
 }

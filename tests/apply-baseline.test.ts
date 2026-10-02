@@ -61,7 +61,10 @@ function normalize(value: unknown, opts: NormalizeOptions): unknown {
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
       if (key === 'port' && opts.maskPort === true) out[key] = '<port>'
       else if (key === 'tlsFingerprint') out[key] = '<fingerprint>'
-      else if (key === 'statePath') out[key] = '<dataDir>/tailscale'
+      // 网卡数量随机器而变（CI 上可能是 0 张私网网卡）；只保留「有没有」这个信息，
+      // 这样快照在开发机与 CI 之间也逐字节一致。
+      else if (key === 'lanAddresses' && Array.isArray(item)) out[key] = item.length === 0 ? [] : ['<lanIp>']
+      else if (key === 'endpoints' && Array.isArray(item)) out[key] = item.length === 0 ? [] : ['<endpoint>']
       else out[key] = normalize(item, opts)
     }
     return out
@@ -89,11 +92,15 @@ function transportLogs(logs: readonly string[]): string[] {
 
 /** report.local 段小结：phase / 端口 / 端点形态 / TLS 指纹是否存在。 */
 function summarizeLocal(local: any, maskPort: boolean): Record<string, unknown> {
+  const endpoints = local.endpoints as string[]
   return {
     phase: local.phase,
     port: maskPort ? '<port>' : local.port,
-    endpoints: local.endpoints.length === 0 ? [] : ['<endpoint>'],
-    endpointsEveryEntryIsHttpsUrl: local.endpoints.every((entry: string) => /^https:\/\/<lanIp>:<port>$/.test(entry)),
+    endpoints: endpoints.length === 0 ? [] : ['<endpoint>'],
+    endpointsEveryEntryIsHttpsUrl: endpoints.every(
+      // 先归一化再比：原串里的 LAN IP 与临时端口对每台机器、每次运行都不同。
+      (entry: string) => /^https:\/\/<lanIp>:<port>$/.test(normalize(entry, { dataDir: '' }) as string),
+    ),
     // 可选字段只在存在时入镜：JSON 序列化会丢掉 undefined，两边口径必须一致。
     ...(local.tlsFingerprint === undefined ? {} : { tlsFingerprint: '<fingerprint>' }),
     tlsIdentityRegenerated: local.tlsIdentityRegenerated === true,
@@ -191,13 +198,17 @@ async function recordBaseline(): Promise<ApplyBaseline> {
     const snapshotAfterLocalEnabled = await harness.report() as any
     assert.equal(snapshotAfterLocalEnabled.local.phase, 'online', 'LAN 传输必须走到 online')
     const localSummaryAfterEnabled = summarizeLocal(snapshotAfterLocalEnabled.local, true)
-    // 无配置变化的 volatile-update 不得重开监听：phase 与 updatedAt 都不动。
-    const updatedAtBefore = snapshotAfterLocalEnabled.local.updatedAt
+    // 无配置变化的 volatile-update 不得重开监听。注意**不能**比 updatedAt：
+    // TransportReconciler 的 statusOf() 在每次查询时现算 Date.now()，LAN 的
+    // updatedAt 语义已经从「最后一次迁移的时刻」变成「被查询的时刻」，两次读
+    // 必然不同。真正要钉住的是「稳定字段不变 + 没有新的监听日志」。
+    const transportLogsBeforeIdle = transportLogs(harness.logs)
     harness.volatileUpdate()
     await harness.settle(60)
     const snapshotAfterIdleUpdate = await harness.report() as any
-    const idleVolatileUpdateKeepsLocalOnline = snapshotAfterIdleUpdate.local.phase === 'online'
-      && snapshotAfterIdleUpdate.local.updatedAt === updatedAtBefore
+    const idleVolatileUpdateKeepsLocalOnline = JSON.stringify(summarizeLocal(snapshotAfterIdleUpdate.local, true))
+      === JSON.stringify(localSummaryAfterEnabled)
+      && transportLogs(harness.logs).length === transportLogsBeforeIdle.length
 
     // ---- 6. 配置序列之三：Funnel 启用 + 不存在的 helperPath ----
     // helperPath 指向 dataDir 下一个必然不存在的文件：RemoteSupervisor.start()
@@ -209,7 +220,8 @@ async function recordBaseline(): Promise<ApplyBaseline> {
     await harness.waitForRemote((phase) => phase === 'unavailable' || phase === 'error' || phase === 'stopped')
     const snapshotAfterRemoteEnabled = await harness.report() as any
     assert.equal(snapshotAfterRemoteEnabled.remote.phase, 'unavailable', 'Funnel 无 helper 时必须停在 unavailable')
-    const remoteSummaryAfterEnabled = summarizeRemote(snapshotAfterRemoteEnabled.remote, true)
+    // remote 段没有端口字段，message 一律哨兵化（内容见 transportLogs 里的原文）。
+    const remoteSummaryAfterEnabled = summarizeRemote(snapshotAfterRemoteEnabled.remote)
 
     // ---- 7. setConfig 合并语义探针 ----
     // 曾经的浅 Object.assign 会整段替换 remote，导致 provider 丢失、Funnel 场景

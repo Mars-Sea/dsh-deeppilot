@@ -96,7 +96,7 @@
       "phase": "online",
       "port": "<port>",
       "endpoints": [
-        "https://<lanIp>:<port>"
+        "<endpoint>"
       ],
       "tlsFingerprint": "<fingerprint>",
       "updatedAt": "<ts>",
@@ -115,12 +115,12 @@
     "endpoints": [
       "<endpoint>"
     ],
-    "endpointsEveryEntryIsHttpsUrl": false,
+    "endpointsEveryEntryIsHttpsUrl": true,
     "tlsFingerprint": "<fingerprint>",
     "tlsIdentityRegenerated": true,
     "updatedAt": "<ts>"
   },
-  "idleVolatileUpdateKeepsLocalOnline": false,
+  "idleVolatileUpdateKeepsLocalOnline": true,
   "snapshotAfterRemoteEnabled": {
     "protocolVersion": 2,
     "serverVersion": "0.9.1",
@@ -137,7 +137,7 @@
       "phase": "online",
       "port": "<port>",
       "endpoints": [
-        "https://<lanIp>:<port>"
+        "<endpoint>"
       ],
       "tlsFingerprint": "<fingerprint>",
       "updatedAt": "<ts>",

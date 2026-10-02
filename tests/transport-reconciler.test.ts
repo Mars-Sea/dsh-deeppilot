@@ -9,7 +9,12 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { TransportReconciler, type TransportSpec, type TransportStatus } from '../src/transport-reconciler.ts'
+import {
+  TransportReconciler,
+  createLocalTransport,
+  type TransportSpec,
+  type TransportStatus,
+} from '../src/transport-reconciler.ts'
 import type { Config } from '../src/config.ts'
 
 interface FakeStatus extends TransportStatus {
@@ -234,4 +239,36 @@ test('scheduleReconcile 串行：并发触发不重叠，冗余触发被差分�
   // 三次触发串行执行；第一次完成后键已写入，后两次被差分短路。
   assert.deepEqual(spec.calls, ['construct:true'], '只构造一次')
   assert.deepEqual(order, ['begin'], 'begin 只跑了一次，没有重叠')
+})
+
+test('LAN 的 updatedAt 冻结在上线那一刻，不随查询漂移', async () => {
+  const { reserveEphemeralPort } = await import('./apply-harness.ts')
+  const port = await reserveEphemeralPort()
+  const handlers = {
+    health: () => {},
+    pair: () => {},
+    upgrade: () => {},
+  }
+  // 真证书：https server 拿假 PEM 会 listen 失败，走到 error 分支。
+  const { generate } = await import('selfsigned')
+  const cert = await generate([{ name: 'commonName', value: 'dsh-deeppilot-test' }], {
+    keyType: 'ec', curve: 'P-256', algorithm: 'sha256',
+    notAfterDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
+  })
+  const transport = createLocalTransport({
+    handlers,
+    config: () => ({ enabled: true, local: { enabled: true, port } }) as unknown as Config,
+    tls: async () => ({ key: cert.private, cert: cert.cert, fingerprint: 'sha256:test' }),
+    log: () => {},
+  })
+  try {
+    await transport.reconcile()
+    assert.equal(transport.status().phase, 'online')
+    const first = transport.status().updatedAt
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.equal(transport.status().updatedAt, first,
+      'updatedAt 必须是迁移时刻；每次查询现算会让消费方误以为状态在跳')
+  } finally {
+    await transport.dispose()
+  }
 })
