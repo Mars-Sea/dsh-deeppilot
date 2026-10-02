@@ -121,8 +121,10 @@ export type NumericDraftAction =
   | { type: 'edit'; draft: string }
   /** 外部值变化：把草稿同步回最新值。 */
   | { type: 'sync'; value: number }
-  /** 应用结果。 */
+  /** 应用完成：清空消息（也用于四秒后的自动清除）。 */
   | { type: 'applied' }
+  /** 应用成功并给出提示文案。 */
+  | { type: 'succeeded'; message: string }
   | { type: 'failed'; message: string }
 
 export function initialNumericDraft(range: NumericRange): NumericDraftState {
@@ -137,6 +139,8 @@ export function numericDraftReduce(state: NumericDraftState, action: NumericDraf
       return { ...state, draft: String(action.value), message: '', failed: false }
     case 'applied':
       return { ...state, message: '', failed: false }
+    case 'succeeded':
+      return { ...state, message: action.message, failed: false }
     case 'failed':
       return { ...state, message: action.message, failed: true }
   }
@@ -158,11 +162,15 @@ export function numericDraftView(state: NumericDraftState, current: number, rang
 
 // ---------- 设备列表 ----------
 
+/** 页面渲染设备行所需的字段（report.devices 的子集）。 */
 export interface SettingsDevice {
   deviceId: string
   deviceName: string
   customName?: string
   revokedAt?: number
+  appVersion?: string
+  fingerprint?: string
+  lastSeenTs?: number
 }
 
 /** 已撤销的设备不展示。 */
@@ -188,7 +196,7 @@ export function renderConnectionTile(
   statusLabel: string,
   onToggle: () => void,
   extra: any = null,
-): unknown {
+): any {
   return h('div', { className: 'pbb-connectionTile', key },
     h('div', { className: 'pbb-connectionTileHeader' },
       h('span', { className: 'pbb-switchTitle pbb-dotRow' },

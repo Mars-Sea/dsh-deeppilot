@@ -27,7 +27,6 @@
   "advanced.identityPath",
   "advanced.protocolVersion",
   "advanced.serverVersion",
-  "advanced.summary",
   "clipboard.rejected",
   "connection.description",
   "connection.optionsSummary",
@@ -198,7 +197,7 @@
   "troubleshooting.title",
   "update.badge"
  ],
- "guardCount": 33,
+ "guardCount": 0,
  "diagKeys": [
   "missingDebugHook",
   "missingEnabledHook",

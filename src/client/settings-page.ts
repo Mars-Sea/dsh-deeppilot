@@ -4,11 +4,58 @@ import type { DeepPilotReport, PairingGrantSnapshot, PushTestResult, RelayTestRe
 import { encodePairingLink, selectPairingTargets, type PairingTarget } from '../pairing-qr.ts'
 import { initialPairingPanelState, pairingPanelReduce, pairingPanelView } from './pairing-panel.ts'
 import { translateWith as t } from './i18n.ts'
-import type { DebugState, EnabledState, LocalEnabledState, LocalPortState, PageState, RemoteConnectionLimitState, RemoteEnabledState } from './index.ts'
-import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, MAX_FUNNEL_CONNECTIONS_PER_SOURCE } from '../funnel-policy.ts'
-import { DEFAULT_LOCAL_PORT, MAX_LOCAL_PORT, MIN_LOCAL_PORT } from '../local-policy.ts'
+import {
+  normalizeSettingsPageProps,
+  type SettingsCapability,
+  type SettingsPageProps,
+} from './settings-props.ts'
+import type { PageState } from './index.ts'
+import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE } from '../funnel-policy.ts'
+import { DEFAULT_LOCAL_PORT } from '../local-policy.ts'
+import {
+  LOCAL_PHASE_META,
+  LOCAL_PORT_RANGE,
+  REMOTE_LIMIT_RANGE,
+  REMOTE_PHASE_META,
+  deviceLabel as deviceLabelOf,
+  initialNumericDraft,
+  numericDraftReduce,
+  numericDraftView,
+  renderConnectionTile,
+  serviceStatus,
+  visibleDevices as visibleDevicesOf,
+  type LocalPhaseLabel,
+  type NumericDraftAction,
+  type NumericDraftState,
+  type RemotePhaseLabel,
+} from './settings-view-models.ts'
 
 type T = (key: string, vars?: Readonly<Record<string, unknown>>) => string
+
+/** phase 语义标签 → i18n key。措辞归页面，view model 只认语义。 */
+const REMOTE_LABEL_KEY: Record<RemotePhaseLabel, string> = {
+  disabled: 'phase.disabled',
+  starting: 'phase.starting',
+  login_required: 'phase.login_required',
+  online: 'phase.online',
+  error: 'phase.error',
+  unavailable: 'phase.unavailable',
+  stopped: 'phase.stopped',
+}
+const LOCAL_LABEL_KEY: Record<LocalPhaseLabel, string> = {
+  disabled: 'local.phaseDisabled',
+  starting: 'local.phaseStarting',
+  online: 'local.phaseOnline',
+  error: 'local.phaseError',
+  stopped: 'local.phaseStopped',
+}
+/** 服务状态 → i18n key。 */
+const SERVICE_STATUS_KEY = {
+  loading: 'status.loading',
+  off: 'status.off',
+  attention: 'status.attention',
+  ready: 'status.ready',
+} as const
 
 /** Inline trash icon for the compact destructive row action. Kept as a tiny
  *  element (no icon dependency) so the client bundle stays dependency-free
@@ -66,34 +113,26 @@ async function writeClipboard(t: T, value: string): Promise<void> {
   if (!copied) throw new Error(t('clipboard.rejected'))
 }
 
-/** Visual state of the embedded Funnel: a colored dot plus its spoken label.
- *  The label is a function because the surrounding constant lives at module
- *  scope where the locale-bound t() is not in scope; the page resolves the
- *  label at render time via t(props.t, ...). */
-const REMOTE_PHASE_META: Record<DeepPilotReport['remote']['phase'], { dot: string; labelKey: string }> = {
-  disabled: { dot: '', labelKey: 'phase.disabled' },
-  starting: { dot: ' pbb-dotWarn', labelKey: 'phase.starting' },
-  login_required: { dot: ' pbb-dotWarn', labelKey: 'phase.login_required' },
-  online: { dot: ' pbb-dotOk', labelKey: 'phase.online' },
-  error: { dot: ' pbb-dotBad', labelKey: 'phase.error' },
-  unavailable: { dot: ' pbb-dotBad', labelKey: 'phase.unavailable' },
-  stopped: { dot: '', labelKey: 'phase.stopped' },
-}
+/**
+ * Slot component: hooks come from the slot renderer, named use<Key>.
+ *
+ * 组件的接口是 `SettingsPageProps`（见 settings-props.ts）：宿主注入面与页面
+ * 共享同一份类型。这里只做一次归一化，之后全程消费类型化对象——页面里不再
+ * 出现任何 typeof 守卫，也不再自己拼诊断行。
+ */
+export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
+  const surface = normalizeSettingsPageProps(rawProps)
+  const props: SettingsPageProps = surface.props
+  const can = (capability: SettingsCapability): boolean => surface.can.has(capability)
 
-const LOCAL_PHASE_META: Record<DeepPilotReport['local']['phase'], { dot: string; labelKey: string }> = {
-  disabled: { dot: '', labelKey: 'local.phaseDisabled' },
-  starting: { dot: ' pbb-dotWarn', labelKey: 'local.phaseStarting' },
-  online: { dot: ' pbb-dotOk', labelKey: 'local.phaseOnline' },
-  error: { dot: ' pbb-dotBad', labelKey: 'local.phaseError' },
-  stopped: { dot: '', labelKey: 'local.phaseStopped' },
-}
-
-/** Slot component: hooks come from the slot renderer, named use<Key>. */
-export function DeepPilotSettingsPage(props: Record<string, any>): any {
-  const [remoteLimitDraft, setRemoteLimitDraft] = useState(String(DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE))
-  const [remoteLimitMessage, setRemoteLimitMessage] = useState('')
-  const [localPortDraft, setLocalPortDraft] = useState(String(DEFAULT_LOCAL_PORT))
-  const [localPortMessage, setLocalPortMessage] = useState('')
+  const [remoteLimitDraft, dispatchRemoteLimitDraft] = useReducer(
+    (state: NumericDraftState, action: NumericDraftAction) => numericDraftReduce(state, action, REMOTE_LIMIT_RANGE),
+    initialNumericDraft(REMOTE_LIMIT_RANGE),
+  )
+  const [localPortDraft, dispatchLocalPortDraft] = useReducer(
+    (state: NumericDraftState, action: NumericDraftAction) => numericDraftReduce(state, action, LOCAL_PORT_RANGE),
+    initialNumericDraft(LOCAL_PORT_RANGE),
+  )
   const [selectedPairingHost, setSelectedPairingHost] = useState<string | null>(null)
   const [pairingPanel, dispatchPairingPanel] = useReducer(pairingPanelReduce, initialPairingPanelState)
   const qrRequestId = useRef(0)
@@ -111,22 +150,23 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   const [deviceNameDraft, setDeviceNameDraft] = useState('')
 
   useEffect(() => {
-    if (typeof props.refresh !== 'function') return
-    props.refresh()
-    const timer = globalThis.setInterval(() => props.refresh(), 3_000)
+    if (!can('refresh')) return
+    const refresh = props.refresh!
+    refresh()
+    const timer = globalThis.setInterval(() => refresh(), 3_000)
     return () => globalThis.clearInterval(timer)
   }, [props.refresh])
 
   const sendPushTest = (): void => {
     if (pushTestBusy) return
-    if (typeof props.testPush !== 'function') {
+    if (!can('testPush')) {
       setPushTestError(t(props.t, 'push.staleHost'))
       return
     }
     setTroubleshootingOpen(true)
     setPushTestBusy(true)
     setPushTestError('')
-    void props.testPush().then((result: PushTestResult) => {
+    void props.testPush!().then((result: PushTestResult) => {
       setPushTestResult(result)
       setPushTestBusy(false)
     }, (error: unknown) => {
@@ -137,14 +177,14 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
 
   const runRelayTest = (): void => {
     if (relayTestBusy) return
-    if (typeof props.testRelay !== 'function') {
+    if (!can('testRelay')) {
       setRelayTestError(t(props.t, 'push.staleHostRelay'))
       return
     }
     setTroubleshootingOpen(true)
     setRelayTestBusy(true)
     setRelayTestError('')
-    void props.testRelay().then((result: RelayTestResult) => {
+    void props.testRelay!().then((result: RelayTestResult) => {
       setRelayTestResult(result)
       setRelayTestBusy(false)
     }, (error: unknown) => {
@@ -153,17 +193,19 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
     })
   }
 
+  // 两个草稿的「应用结果」消息四秒后自动消失。reducer 的 applied 动作把消息
+  // 清空，因此这里只需要一个触发器。
   useEffect(() => {
-    if (!remoteLimitMessage) return
-    const timer = globalThis.setTimeout(() => setRemoteLimitMessage(''), 4_000)
+    if (remoteLimitDraft.message === '') return
+    const timer = globalThis.setTimeout(() => dispatchRemoteLimitDraft({ type: 'applied' }), 4_000)
     return () => globalThis.clearTimeout(timer)
-  }, [remoteLimitMessage])
+  }, [remoteLimitDraft.message])
 
   useEffect(() => {
-    if (!localPortMessage) return
-    const timer = globalThis.setTimeout(() => setLocalPortMessage(''), 4_000)
+    if (localPortDraft.message === '') return
+    const timer = globalThis.setTimeout(() => dispatchLocalPortDraft({ type: 'applied' }), 4_000)
     return () => globalThis.clearTimeout(timer)
-  }, [localPortMessage])
+  }, [localPortDraft.message])
 
   useEffect(() => {
     if (pairingPanel.grant === null) return
@@ -181,129 +223,120 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
     return () => globalThis.clearTimeout(timer)
   }, [pairingPanel.notice])
 
-  const diag: string[] = []
-  let report: DeepPilotReport | null = null
-  let enabled: boolean = true
-  let switchReady = false
-  let localEnabled = true
-  let localSwitchReady = false
-  let localPort = DEFAULT_LOCAL_PORT
-  let localPortReady = false
-  let remoteEnabled = false
-  let remoteSwitchReady = false
-  let remoteConnectionLimit = DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE
-  let remoteConnectionLimitReady = false
-  let debugEnabled = false
-  let debugSwitchReady = false
-  let failed = false
-
-  try {
-    if (typeof props.useDeepPilotReport !== 'function') {
-      diag.push(t(props.t, 'diag.missingReportHook'))
+  // hook 必须在组件体内无条件调用（React 规则）：归一化 seam 已保证它们永远是
+  // 函数——宿主没给时换成引用恒定的 fallback，缺省态与迁移前逐项对齐。
+  // 它们仍是整个渲染里唯一可能抛的点（宿主 store 自己炸），因此保留渲染异常
+  // 诊断：与迁移前一样折算成一行 diag.renderError 并把详情块展开。
+  const diag = surface.diagnostics
+  let failed = surface.reportHookMissing
+  const readHooks = (): void => {
+    const reportState = props.useDeepPilotReport((s: PageState) => s)
+    hooks.report = reportState.report
+    if (reportState.status === 'error' && reportState.message) {
+      diag.push(reportState.message)
       failed = true
-    } else {
-      const state = props.useDeepPilotReport((s: PageState) => s)
-      report = state.report
-      if (state.status === 'error' && state.message) {
-        diag.push(state.message)
-        failed = true
-      }
     }
-    if (typeof props.useDeepPilotEnabled === 'function') {
-      const state = props.useDeepPilotEnabled((s: EnabledState) => s)
-      enabled = state.enabled
-      switchReady = state.status === 'ready'
-      if (state.status === 'unavailable') diag.push(t(props.t, 'diag.settingsUnavailable'))
-    } else {
-      diag.push(t(props.t, 'diag.missingEnabledHook'))
-    }
-    if (typeof props.refresh !== 'function') diag.push(t(props.t, 'diag.missingRefresh'))
-    if (typeof props.beginPairing !== 'function') diag.push(t(props.t, 'diag.missingReveal'))
-    if (typeof props.revokeDevice !== 'function') diag.push(t(props.t, 'diag.missingRotate'))
-    if (typeof props.setDeviceName !== 'function') diag.push(t(props.t, 'diag.missingRename'))
-    if (typeof props.testRelay !== 'function') diag.push(t(props.t, 'diag.missingTestRelay'))
-    if (typeof props.testPush !== 'function') diag.push(t(props.t, 'diag.missingTestPush'))
-    if (typeof props.setDeepPilotEnabled !== 'function') diag.push(t(props.t, 'diag.missingSetEnabled'))
-    if (typeof props.useDeepPilotLocalEnabled === 'function') {
-      const state = props.useDeepPilotLocalEnabled((s: LocalEnabledState) => s)
-      localEnabled = state.enabled
-      localSwitchReady = state.status === 'ready'
-    } else {
-      diag.push(t(props.t, 'diag.missingLocalEnabledHook'))
-    }
-    if (typeof props.useDeepPilotLocalPort === 'function') {
-      const state = props.useDeepPilotLocalPort((s: LocalPortState) => s)
-      localPort = state.value
-      localPortReady = state.status === 'ready'
-    } else {
-      diag.push(t(props.t, 'diag.missingLocalPortHook'))
-    }
-    if (typeof props.setDeepPilotLocalEnabled !== 'function') diag.push(t(props.t, 'diag.missingSetLocal'))
-    if (typeof props.setDeepPilotLocalPort !== 'function') diag.push(t(props.t, 'diag.missingSetLocalPort'))
-    if (typeof props.useDeepPilotRemoteEnabled === 'function') {
-      const state = props.useDeepPilotRemoteEnabled((s: RemoteEnabledState) => s)
-      remoteEnabled = state.enabled
-      remoteSwitchReady = state.status === 'ready'
-    } else {
-      diag.push(t(props.t, 'diag.missingRemoteEnabledHook'))
-    }
-    if (typeof props.setDeepPilotRemoteEnabled !== 'function') diag.push(t(props.t, 'diag.missingSetRemote'))
-    if (typeof props.useDeepPilotRemoteConnectionLimit === 'function') {
-      const state = props.useDeepPilotRemoteConnectionLimit((s: RemoteConnectionLimitState) => s)
-      remoteConnectionLimit = state.value
-      remoteConnectionLimitReady = state.status === 'ready'
-    } else {
-      diag.push(t(props.t, 'diag.missingRemoteLimitHook'))
-    }
-    if (typeof props.setDeepPilotRemoteConnectionLimit !== 'function') diag.push(t(props.t, 'diag.missingSetRemoteLimit'))
-    if (typeof props.useDeepPilotDebug === 'function') {
-      const state = props.useDeepPilotDebug((s: DebugState) => s)
-      debugEnabled = state.enabled
-      debugSwitchReady = state.status === 'ready'
-    } else {
-      diag.push(t(props.t, 'diag.missingDebugHook'))
-    }
-    if (typeof props.setDeepPilotDebug !== 'function') diag.push(t(props.t, 'diag.missingSetDebug'))
+    const enabledState = props.useDeepPilotEnabled((s) => s)
+    hooks.enabled = enabledState.enabled
+    hooks.switchReady = enabledState.status === 'ready'
+    if (enabledState.status === 'unavailable') diag.push(t(props.t, 'diag.settingsUnavailable'))
+    const localEnabledState = props.useDeepPilotLocalEnabled((s) => s)
+    hooks.localEnabled = localEnabledState.enabled
+    hooks.localSwitchReady = localEnabledState.status === 'ready'
+    const localPortState = props.useDeepPilotLocalPort((s) => s)
+    hooks.localPort = localPortState.value
+    hooks.localPortReady = localPortState.status === 'ready'
+    const remoteEnabledState = props.useDeepPilotRemoteEnabled((s) => s)
+    hooks.remoteEnabled = remoteEnabledState.enabled
+    hooks.remoteSwitchReady = remoteEnabledState.status === 'ready'
+    const remoteLimitState = props.useDeepPilotRemoteConnectionLimit((s) => s)
+    hooks.remoteConnectionLimit = remoteLimitState.value
+    hooks.remoteConnectionLimitReady = remoteLimitState.status === 'ready'
+    const debugState = props.useDeepPilotDebug((s) => s)
+    hooks.debugEnabled = debugState.enabled
+    hooks.debugSwitchReady = debugState.status === 'ready'
+  }
+  const hooks: {
+    report: DeepPilotReport | null
+    enabled: boolean
+    switchReady: boolean
+    localEnabled: boolean
+    localSwitchReady: boolean
+    localPort: number
+    localPortReady: boolean
+    remoteEnabled: boolean
+    remoteSwitchReady: boolean
+    remoteConnectionLimit: number
+    remoteConnectionLimitReady: boolean
+    debugEnabled: boolean
+    debugSwitchReady: boolean
+  } = {
+    report: null, enabled: true, switchReady: false,
+    localEnabled: true, localSwitchReady: false,
+    localPort: DEFAULT_LOCAL_PORT, localPortReady: false,
+    remoteEnabled: false, remoteSwitchReady: false,
+    remoteConnectionLimit: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, remoteConnectionLimitReady: false,
+    debugEnabled: false, debugSwitchReady: false,
+  }
+  try {
+    readHooks()
   } catch (error) {
     diag.push(t(props.t, 'diag.renderError') + (error instanceof Error ? error.message : String(error)))
     failed = true
   }
+  const report = hooks.report
+  const enabled = hooks.enabled
+  const switchReady = hooks.switchReady
+  const localEnabled = hooks.localEnabled
+  const localSwitchReady = hooks.localSwitchReady
+  const localPort = hooks.localPort
+  const localPortReady = hooks.localPortReady
+  const remoteEnabled = hooks.remoteEnabled
+  const remoteSwitchReady = hooks.remoteSwitchReady
+  const remoteConnectionLimit = hooks.remoteConnectionLimit
+  const remoteConnectionLimitReady = hooks.remoteConnectionLimitReady
+  const debugEnabled = hooks.debugEnabled
+  const debugSwitchReady = hooks.debugSwitchReady
 
   useEffect(() => {
-    setRemoteLimitDraft(String(remoteConnectionLimit))
+    dispatchRemoteLimitDraft({ type: 'sync', value: remoteConnectionLimit })
   }, [remoteConnectionLimit])
 
   useEffect(() => {
-    setLocalPortDraft(String(localPort))
+    dispatchLocalPortDraft({ type: 'sync', value: localPort })
   }, [localPort])
 
-  const parsedLocalPort = Number(localPortDraft)
-  const localPortValid = Number.isInteger(parsedLocalPort) && parsedLocalPort >= MIN_LOCAL_PORT && parsedLocalPort <= MAX_LOCAL_PORT
+  const localPortView = numericDraftView(localPortDraft, localPort, LOCAL_PORT_RANGE)
+  const remoteLimitView = numericDraftView(remoteLimitDraft, remoteConnectionLimit, REMOTE_LIMIT_RANGE)
   const applyLocalPort = (): void => {
-    if (!localPortValid || typeof props.setDeepPilotLocalPort !== 'function') {
-      setLocalPortMessage(t(props.t, 'local.portInvalid'))
+    if (!localPortView.valid || !can('setLocalPort')) {
+      dispatchLocalPortDraft({ type: 'failed', message: t(props.t, 'local.portInvalid') })
       return
     }
-    setLocalPortMessage('')
-    void props.setDeepPilotLocalPort(parsedLocalPort).then(() => {
-      setLocalPortMessage(t(props.t, 'local.portApplied'))
+    dispatchLocalPortDraft({ type: 'applied' })
+    void Promise.resolve(props.setDeepPilotLocalPort!(localPortView.value)).then(() => {
+      dispatchLocalPortDraft({ type: 'succeeded', message: t(props.t, 'local.portApplied') })
     }, (error: unknown) => {
-      setLocalPortMessage(t(props.t, 'local.portFailed') + (error instanceof Error ? error.message : String(error)))
+      dispatchLocalPortDraft({
+        type: 'failed',
+        message: t(props.t, 'local.portFailed') + (error instanceof Error ? error.message : String(error)),
+      })
     })
   }
 
-  const parsedRemoteLimit = Number(remoteLimitDraft)
-  const remoteLimitValid = Number.isInteger(parsedRemoteLimit) && parsedRemoteLimit >= 1 && parsedRemoteLimit <= MAX_FUNNEL_CONNECTIONS_PER_SOURCE
   const applyRemoteLimit = (): void => {
-    if (!remoteLimitValid || typeof props.setDeepPilotRemoteConnectionLimit !== 'function') {
-      setRemoteLimitMessage(t(props.t, 'remote.limitInvalid'))
+    if (!remoteLimitView.valid || !can('setRemoteLimit')) {
+      dispatchRemoteLimitDraft({ type: 'failed', message: t(props.t, 'remote.limitInvalid') })
       return
     }
-    setRemoteLimitMessage('')
-    void props.setDeepPilotRemoteConnectionLimit(parsedRemoteLimit).then(() => {
-      setRemoteLimitMessage(t(props.t, 'remote.limitApplied'))
+    dispatchRemoteLimitDraft({ type: 'applied' })
+    void Promise.resolve(props.setDeepPilotRemoteConnectionLimit!(remoteLimitView.value)).then(() => {
+      dispatchRemoteLimitDraft({ type: 'succeeded', message: t(props.t, 'remote.limitApplied') })
     }, (error: unknown) => {
-      setRemoteLimitMessage(t(props.t, 'remote.limitFailed') + (error instanceof Error ? error.message : String(error)))
+      dispatchRemoteLimitDraft({
+        type: 'failed',
+        message: t(props.t, 'remote.limitFailed') + (error instanceof Error ? error.message : String(error)),
+      })
     })
   }
 
@@ -320,13 +353,13 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
    * switching between LAN and public always mints a fresh one.
    */
   const showPairingQR = (target: PairingTarget): void => {
-    if (typeof props.beginPairing !== 'function') return
+    if (!can('beginPairing')) return
     // Each request carries a token: a fast LAN/public switch can leave two
     // issues in flight, and only the newest may render its grant.
     const requestId = qrRequestId.current + 1
     qrRequestId.current = requestId
     dispatchPairingPanel({ type: 'show', target, requestId })
-    void (props.beginPairing() as Promise<PairingGrantSnapshot>)
+    void (props.beginPairing!() as Promise<PairingGrantSnapshot>)
       .then(async (grant: PairingGrantSnapshot) => {
         // The QR code and the copy field carry the same short link, so the app
         // accepts it from the camera and from the paste field alike.
@@ -417,12 +450,12 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   }
 
   const revokeDevice = (deviceId: string, name: string): void => {
-    if (typeof props.revokeDevice !== 'function') return
+    if (!can('revokeDevice')) return
     if (typeof window !== 'undefined' && !window.confirm(t(props.t, 'devices.revokeConfirm', { name }))) return
     setDeviceBusy(deviceId)
     setDeviceBusyAction('revoke')
     setDeviceMessage('')
-    void props.revokeDevice(deviceId).then(() => {
+    void props.revokeDevice!(deviceId).then(() => {
       setDeviceMessage(t(props.t, 'devices.revoked'))
     }, (error: unknown) => {
       setDeviceMessage(t(props.t, 'devices.revokeFailed') + (error instanceof Error ? error.message : String(error)))
@@ -433,7 +466,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   }
 
   const deviceLabel = (device: { deviceName: string; customName?: string }): string =>
-    (device.customName ?? device.deviceName).trim() || t(props.t, 'devices.unnamed')
+    deviceLabelOf(device) || t(props.t, 'devices.unnamed')
 
   const beginDeviceRename = (device: { deviceId: string; deviceName: string; customName?: string }): void => {
     setEditingDeviceId(device.deviceId)
@@ -448,7 +481,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
   }
 
   const saveDeviceName = (deviceId: string): void => {
-    if (typeof props.setDeviceName !== 'function') return
+    if (!can('setDeviceName')) return
     const normalized = deviceNameDraft.trim()
     if (normalized.length > 64) {
       setDeviceMessage(t(props.t, 'devices.nameInvalid'))
@@ -457,7 +490,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
     setDeviceBusy(deviceId)
     setDeviceBusyAction('rename')
     setDeviceMessage('')
-    void props.setDeviceName(deviceId, normalized === '' ? null : normalized).then(() => {
+    void props.setDeviceName!(deviceId, normalized === '' ? null : normalized).then(() => {
       setDeviceMessage(normalized === '' ? t(props.t, 'devices.nameCleared') : t(props.t, 'devices.renamed'))
       setEditingDeviceId(null)
       setDeviceNameDraft('')
@@ -469,7 +502,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
     })
   }
 
-  const visibleDevices = report?.devices.filter((device) => device.revokedAt === undefined) ?? []
+  const visibleDevices = visibleDevicesOf(report)
   const deviceTable = visibleDevices.length > 0
     ? h('div', { className: 'pbb-tableWrap' },
         h('table', { className: 'pbb-table' },
@@ -538,14 +571,14 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
                     h('span', { className: 'pbb-deviceMeta' },
                       d.appVersion,
                       ' · ',
-                      h('code', null, d.fingerprint.slice(0, 12))))),
-              h('td', { className: 'pbb-lastSeen' }, new Date(d.lastSeenTs).toLocaleString()),
+                      h('code', null, (d.fingerprint ?? '').slice(0, 12))))),
+              h('td', { className: 'pbb-lastSeen' }, new Date(d.lastSeenTs ?? 0).toLocaleString()),
               h('td', { className: 'pbb-tableActionCell' },
                 !editing
                   ? h('button', {
                     type: 'button',
                     className: 'pbb-action',
-                    disabled: busy || editingDeviceId !== null || typeof props.setDeviceName !== 'function',
+                    disabled: busy || editingDeviceId !== null || !can('setDeviceName'),
                     'aria-label': t(props.t, 'devices.renameAria', { name: label }),
                     onClick: () => beginDeviceRename(d),
                   }, t(props.t, 'devices.rename'))
@@ -574,60 +607,15 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
     : t(props.t, 'master.loading')
   const localMeta = report === null ? null : LOCAL_PHASE_META[report.local.phase]
   const remoteMeta = report === null ? null : REMOTE_PHASE_META[report.remote.phase]
-  const connectionNeedsAttention = localMeta?.dot.includes('pbb-dotBad') === true
-    || remoteMeta?.dot.includes('pbb-dotBad') === true
-  const connectionOnline = localMeta?.dot.includes('pbb-dotOk') === true
-    || remoteMeta?.dot.includes('pbb-dotOk') === true
-  const serviceStatus = !switchReady
-    ? t(props.t, 'status.loading')
-    : !enabled
-      ? t(props.t, 'status.off')
-      : connectionNeedsAttention
-        ? t(props.t, 'status.attention')
-        : connectionOnline
-          ? t(props.t, 'status.ready')
-          : t(props.t, 'status.loading')
-  const serviceDot = !enabled
-    ? ''
-    : connectionNeedsAttention
-      ? ' pbb-dotBad'
-      : connectionOnline
-        ? ' pbb-dotOk'
-        : ' pbb-dotWarn'
-
-  const renderConnectionTile = (
-    key: string,
-    title: string,
-    description: string,
-    checked: boolean,
-    ready: boolean,
-    dot: string,
-    statusLabel: string,
-    onToggle: () => void,
-    extra: any = null,
-  ): any => h('div', { className: 'pbb-connectionTile', key },
-    h('div', { className: 'pbb-connectionTileHeader' },
-      h('span', { className: 'pbb-switchTitle pbb-dotRow' },
-        h('span', {
-          className: 'pbb-dot' + dot,
-          role: 'img',
-          'aria-label': statusLabel,
-          title: statusLabel,
-        }),
-        title),
-      h('button', {
-        type: 'button',
-        role: 'switch',
-        'aria-checked': checked,
-        'aria-label': title,
-        disabled: !ready,
-        className: 'pbb-switch' + (checked ? ' pbb-switchOn' : ''),
-        onClick: onToggle,
-      })),
-    h('span', { className: 'pbb-connectionState' }, statusLabel),
-    h('p', { className: 'pbb-connectionDescription' }, description),
-    extra,
-  )
+  // 服务状态与点位由 view model 推导：不再用类名 includes 反推布尔。
+  const service = serviceStatus({
+    enabled,
+    switchReady,
+    localDot: localMeta?.dot,
+    remoteDot: remoteMeta?.dot,
+  })
+  const serviceStatusText = t(props.t, SERVICE_STATUS_KEY[service.kind])
+  const serviceDot = service.dot
 
   return h('div', { className: 'pbb-section' },
     h('header', { className: 'pbb-pageHeader' },
@@ -637,7 +625,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
       h('button', {
         type: 'button',
         className: 'pbb-refresh',
-        onClick: () => { if (typeof props.refresh === 'function') props.refresh() },
+        onClick: () => { if (can('refresh')) props.refresh!() },
       }, t(props.t, 'meta.refresh'))),
     h('div', { className: 'pbb-card pbb-primaryCard' },
       h('div', { className: 'pbb-cardHeader' },
@@ -646,7 +634,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
           h('p', { className: 'pbb-cardDescription' }, t(props.t, 'connection.description'))),
         h('span', { className: 'pbb-statusBadge' },
           h('span', { className: 'pbb-dot' + serviceDot }),
-          serviceStatus)),
+          serviceStatusText)),
       h('div', { className: 'pbb-masterRow' },
         h('div', { className: 'pbb-switchText' },
           h('span', { className: 'pbb-switchTitle' }, switchTitle),
@@ -659,9 +647,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
           disabled: !switchReady,
           className: 'pbb-switch' + (enabled ? ' pbb-switchOn' : ''),
           onClick: () => {
-            if (typeof props.setDeepPilotEnabled === 'function') {
-              props.setDeepPilotEnabled(!enabled)
-            }
+            if (can('setEnabled')) props.setDeepPilotEnabled!(!enabled)
           },
         }),
       ),
@@ -675,9 +661,9 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
           localEnabled,
           localSwitchReady,
           localMeta?.dot ?? '',
-          localMeta === null ? t(props.t, 'phase.unknown') : t(props.t, localMeta.labelKey),
+          localMeta === null ? t(props.t, 'phase.unknown') : t(props.t, LOCAL_LABEL_KEY[localMeta.label]),
           () => {
-            if (typeof props.setDeepPilotLocalEnabled === 'function') props.setDeepPilotLocalEnabled(!localEnabled)
+            if (can('setLocalEnabled')) props.setDeepPilotLocalEnabled!(!localEnabled)
           },
           h(Fragment, null,
             report !== null && report.local.message && report.local.phase === 'error'
@@ -685,7 +671,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
               : null,
             report !== null && report.local.tlsIdentityRegenerated === true
               ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'local.tlsRegenerated'))
-              : null),
+              : null) as any,
         ),
         renderConnectionTile(
           'remote',
@@ -696,11 +682,9 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
           remoteEnabled,
           remoteSwitchReady,
           remoteMeta?.dot ?? '',
-          remoteMeta === null ? t(props.t, 'phase.unknown') : t(props.t, remoteMeta.labelKey),
+          remoteMeta === null ? t(props.t, 'phase.unknown') : t(props.t, REMOTE_LABEL_KEY[remoteMeta.label]),
           () => {
-            if (typeof props.setDeepPilotRemoteEnabled === 'function') {
-              props.setDeepPilotRemoteEnabled(!remoteEnabled)
-            }
+            if (can('setRemoteEnabled')) props.setDeepPilotRemoteEnabled!(!remoteEnabled)
           },
           h(Fragment, null,
             report !== null && report.remote.phase === 'login_required'
@@ -720,10 +704,12 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
             h('div', { className: 'pbb-switchText' },
               h('label', { className: 'pbb-switchTitle', htmlFor: 'deeppilot-local-port' }, t(props.t, 'local.portTitle')),
               h('span', { className: 'pbb-switchDesc' }, t(props.t, 'local.portDescription')),
-              !localPortValid
+              !localPortView.valid
                 ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'local.portInvalid'))
-                : localPortMessage
-                  ? h('p', { className: 'pbb-diag' + (localPortMessage.startsWith(t(props.t, 'local.portFailed')) ? ' pbb-diagBad' : '') }, localPortMessage)
+                : localPortDraft.message
+                  ? h('p', {
+                      className: 'pbb-diag' + (localPortDraft.failed ? ' pbb-diagBad' : ''),
+                    }, localPortDraft.message)
                   : null,
             ),
             h('div', { className: 'pbb-limitControl' },
@@ -731,14 +717,14 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
                 id: 'deeppilot-local-port',
                 className: 'pbb-numberInput',
                 type: 'number',
-                min: MIN_LOCAL_PORT,
-                max: MAX_LOCAL_PORT,
+                min: LOCAL_PORT_RANGE.min,
+                max: LOCAL_PORT_RANGE.max,
                 step: 1,
                 inputMode: 'numeric',
-                value: localPortDraft,
+                value: localPortDraft.draft,
                 disabled: !localPortReady,
                 'aria-label': t(props.t, 'local.portTitle'),
-                onChange: (event: { currentTarget: { value: string } }) => setLocalPortDraft(event.currentTarget.value),
+                onChange: (event: { currentTarget: { value: string } }) => dispatchLocalPortDraft({ type: 'edit', draft: event.currentTarget.value }),
                 onKeyDown: (event: { key: string; preventDefault: () => void }) => {
                   if (event.key === 'Enter') {
                     event.preventDefault()
@@ -749,7 +735,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
               h('button', {
                 type: 'button',
                 className: 'pbb-action',
-                disabled: !localPortReady || !localPortValid || parsedLocalPort === localPort,
+                disabled: !localPortReady || !localPortView.valid || localPortView.unchanged,
                 onClick: applyLocalPort,
               }, t(props.t, 'remote.limitApply')),
             ),
@@ -758,10 +744,12 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
             h('div', { className: 'pbb-switchText' },
               h('label', { className: 'pbb-switchTitle', htmlFor: 'deeppilot-funnel-source-limit' }, t(props.t, 'remote.limitTitle')),
               h('span', { className: 'pbb-switchDesc' }, t(props.t, 'remote.limitDescription')),
-              !remoteLimitValid
+              !remoteLimitView.valid
                 ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'remote.limitInvalid'))
-                : remoteLimitMessage
-                  ? h('p', { className: 'pbb-diag' + (remoteLimitMessage.startsWith(t(props.t, 'remote.limitFailed')) ? ' pbb-diagBad' : '') }, remoteLimitMessage)
+                : remoteLimitDraft.message
+                  ? h('p', {
+                      className: 'pbb-diag' + (remoteLimitDraft.failed ? ' pbb-diagBad' : ''),
+                    }, remoteLimitDraft.message)
                   : null,
             ),
             h('div', { className: 'pbb-limitControl' },
@@ -770,13 +758,13 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
                 className: 'pbb-numberInput',
                 type: 'number',
                 min: 1,
-                max: MAX_FUNNEL_CONNECTIONS_PER_SOURCE,
+                max: REMOTE_LIMIT_RANGE.max,
                 step: 1,
                 inputMode: 'numeric',
-                value: remoteLimitDraft,
+                value: remoteLimitDraft.draft,
                 disabled: !remoteConnectionLimitReady,
                 'aria-label': t(props.t, 'remote.limitTitle'),
-                onChange: (event: { currentTarget: { value: string } }) => setRemoteLimitDraft(event.currentTarget.value),
+                onChange: (event: { currentTarget: { value: string } }) => dispatchRemoteLimitDraft({ type: 'edit', draft: event.currentTarget.value }),
                 onKeyDown: (event: { key: string; preventDefault: () => void }) => {
                   if (event.key === 'Enter') {
                     event.preventDefault()
@@ -787,7 +775,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
               h('button', {
                 type: 'button',
                 className: 'pbb-action',
-                disabled: !remoteConnectionLimitReady || !remoteLimitValid || parsedRemoteLimit === remoteConnectionLimit,
+                disabled: !remoteConnectionLimitReady || !remoteLimitView.valid || remoteLimitView.unchanged,
                 onClick: applyRemoteLimit,
               }, t(props.t, 'remote.limitApply')),
             ),
@@ -985,7 +973,7 @@ export function DeepPilotSettingsPage(props: Record<string, any>): any {
               disabled: !debugSwitchReady,
               className: 'pbb-switch' + (debugEnabled ? ' pbb-switchOn' : ''),
               onClick: () => {
-                if (typeof props.setDeepPilotDebug === 'function') props.setDeepPilotDebug(!debugEnabled)
+                if (can('setDebug')) props.setDeepPilotDebug!(!debugEnabled)
               },
             }))),
         relayTestError ? h('p', { className: 'pbb-diag pbb-diagBad' }, relayTestError) : null,
