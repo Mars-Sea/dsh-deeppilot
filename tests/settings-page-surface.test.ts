@@ -34,8 +34,11 @@ function collect(): Surface {
   for (const match of source.matchAll(/\bprops\.([A-Za-z_][A-Za-z0-9_]*)/g)) {
     props.add(match[1]!)
   }
+  // 宽口径：页面里任何形如 `namespace.key` 的字符串字面量都算 i18n key。
+  // 理由是提取后一部分 key 会从 `t(props.t, 'x.y')` 搬进导出的 key 对照表，
+  // 窄口径会漏掉它们—— surface 要钉的是「页面引用了哪些 key」，不是调用形状。
   const i18nKeys = new Set<string>()
-  for (const match of source.matchAll(/\bt\(\s*props\.t\s*,\s*'([^']+)'/g)) {
+  for (const match of source.matchAll(/'([a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+)'/g)) {
     i18nKeys.add(match[1]!)
   }
   // 守卫数量：提取会把这批 typeof 检查收敛到一处，数字应当下降。
