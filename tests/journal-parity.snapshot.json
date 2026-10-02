@@ -1,0 +1,217 @@
+{
+  "prompt": {
+    "first": {
+      "receipt": {
+        "clientSendId": "<sendId>",
+        "status": "accepted",
+        "userSeq": 7
+      },
+      "calls": 1
+    },
+    "duplicate": {
+      "receipt": {
+        "clientSendId": "<sendId>",
+        "status": "accepted",
+        "userSeq": 7
+      },
+      "calls": 0
+    },
+    "changedContentReceipt": {
+      "status": "rejected",
+      "code": "E_PROTOCOL"
+    },
+    "wrongDevice": {
+      "clientSendId": "<sendId>",
+      "status": "notFound"
+    },
+    "wrongSession": {
+      "clientSendId": "<sendId>",
+      "status": "notFound"
+    },
+    "lookupHit": {
+      "clientSendId": "<sendId>",
+      "status": "accepted",
+      "userSeq": 7
+    },
+    "afterRestart": {
+      "receipt": {
+        "clientSendId": "<sendId>",
+        "status": "accepted",
+        "userSeq": 7
+      },
+      "calls": 0
+    },
+    "sameInstanceAfterRestart": true,
+    "operationThrows": {
+      "status": "unknown",
+      "code": "<undefined>"
+    },
+    "operationThrowsAfterRestart": {
+      "clientSendId": "<sendId>",
+      "status": "unknown"
+    },
+    "cases": {
+      "duplicateCalls": {
+        "receipt": {
+          "clientSendId": "<sendId>",
+          "status": "accepted",
+          "userSeq": 7
+        },
+        "calls": 0
+      },
+      "afterRestartCalls": {
+        "receipt": {
+          "clientSendId": "<sendId>",
+          "status": "accepted",
+          "userSeq": 7
+        },
+        "calls": 0
+      }
+    },
+    "expired": {
+      "status": "expired"
+    },
+    "capacityFull": "covered by tests/prompt-delivery.test.ts (capacity=1)",
+    "corrupt": {
+      "status": "unknown"
+    },
+    "corruptLookup": {
+      "clientSendId": "<sendId>",
+      "status": "unknown"
+    },
+    "unwritableDir": {
+      "status": "unknown"
+    }
+  },
+  "mutation": {
+    "first": {
+      "receipt": {
+        "ok": true,
+        "value": {
+          "sessionId": "s-1"
+        }
+      },
+      "calls": 1
+    },
+    "duplicate": {
+      "receipt": {
+        "ok": true,
+        "value": "<undefined>",
+        "replayed": true
+      },
+      "calls": 0
+    },
+    "changedContent": {
+      "receipt": {
+        "ok": false,
+        "code": "E_PROTOCOL",
+        "message": "clientRequestId was reused with different content",
+        "replayed": true
+      },
+      "calls": 0
+    },
+    "operationRejected": {
+      "receipt": {
+        "ok": false,
+        "code": "E_BUSY",
+        "message": "busy"
+      },
+      "calls": 1
+    },
+    "operationThrows": {
+      "receipt": {
+        "ok": false,
+        "code": "E_INTERNAL",
+        "message": "mutation outcome is unknown; do not retry automatically"
+      },
+      "calls": 1
+    },
+    "afterRestart": {
+      "receipt": {
+        "ok": true,
+        "value": "<undefined>",
+        "replayed": true
+      },
+      "calls": 0
+    },
+    "expired": {
+      "receipt": {
+        "ok": false,
+        "code": "E_PROTOCOL",
+        "message": "clientRequestId is outside the retry window"
+      },
+      "calls": 0
+    },
+    "capacityConstant": 10000,
+    "corrupt": {
+      "receipt": {
+        "ok": false,
+        "code": "E_INTERNAL",
+        "message": "mutation journal unavailable"
+      },
+      "calls": 0
+    },
+    "unwritableDir": {
+      "receipt": {
+        "ok": false,
+        "code": "E_INTERNAL",
+        "message": "mutation journal could not persist the request"
+      },
+      "calls": 0
+    },
+    "invalidId": {
+      "receipt": {
+        "ok": false,
+        "code": "E_PROTOCOL",
+        "message": "invalid clientRequestId"
+      },
+      "calls": 0
+    },
+    "unknownAfterRestart": {
+      "receipt": {
+        "ok": false,
+        "code": "E_INTERNAL",
+        "message": "mutation outcome is unknown; do not retry automatically",
+        "replayed": true
+      },
+      "calls": 0
+    },
+    "persistValuesReplay": {
+      "receipt": {
+        "ok": true,
+        "value": {
+          "sessionId": "s-1"
+        },
+        "replayed": true
+      },
+      "calls": 0
+    },
+    "persistValuesInstanceIsSingleton": true
+  },
+  "openers": {
+    "deliverySamePathSameInstance": true,
+    "mutationSamePathSameInstance": true,
+    "mutationFlagIgnoredByKey": true,
+    "deliveryPathlessIsFresh": true,
+    "mutationPathlessIsFresh": true,
+    "fileShape": {
+      "mutationVersion": 1,
+      "mutationEntryIsPair": false,
+      "mutationEntryKeys": [
+        "createdAt",
+        "fingerprint",
+        "key",
+        "status",
+        "value"
+      ],
+      "promptVersion": 1,
+      "promptEntryIsPair": true,
+      "promptEntryValueKeys": [
+        "createdAt",
+        "fingerprint",
+        "receipt",
+        "sessionId"
+      ]
+    }
+  }
+}
