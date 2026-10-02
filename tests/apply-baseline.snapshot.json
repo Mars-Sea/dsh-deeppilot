@@ -1,0 +1,167 @@
+{
+  "boot": {
+    "options": {
+      "enabled": true,
+      "local": {
+        "enabled": false
+      },
+      "remote": {
+        "enabled": false
+      },
+      "push": {
+        "provider": "none"
+      }
+    },
+    "dataDirIsolation": true,
+    "report": {
+      "protocolVersion": 2,
+      "serverVersion": "0.9.1",
+      "pluginVersion": "0.9.1",
+      "enabled": true,
+      "identityPath": "<dataDir>/devices-v2.json",
+      "pairingReady": true,
+      "activeConnections": 0,
+      "historyBufferMax": 2000,
+      "lanAddresses": [
+        "<lanIp>"
+      ],
+      "local": {
+        "phase": "disabled",
+        "port": 3098,
+        "endpoints": [],
+        "updatedAt": "<ts>"
+      },
+      "remote": {
+        "provider": "tailscale-funnel",
+        "phase": "disabled",
+        "updatedAt": "<ts>"
+      },
+      "devices": []
+    },
+    "reportFieldTypes": {
+      "protocolVersion": "number",
+      "serverVersion": "string",
+      "pluginVersion": "string",
+      "enabled": "boolean",
+      "identityPath": "string",
+      "pairingReady": "boolean",
+      "activeConnections": "number",
+      "historyBufferMax": "number",
+      "lanAddresses": "array",
+      "local": "object",
+      "remote": "object",
+      "devices": "array"
+    },
+    "local": {
+      "phase": "disabled",
+      "port": 3098,
+      "endpoints": [],
+      "endpointsEveryEntryIsHttpsUrl": true,
+      "tlsIdentityRegenerated": false,
+      "updatedAt": "<ts>"
+    },
+    "remote": {
+      "provider": "tailscale-funnel",
+      "phase": "disabled",
+      "updatedAt": "<ts>"
+    },
+    "relayTestNotRelay": {
+      "url": "",
+      "overall": "failed",
+      "tokenIssued": false,
+      "steps": [
+        {
+          "id": "health",
+          "ok": false,
+          "message": "当前推送模式不是中继（provider=none）。启用方式二选一：① 零配置——在 ios/project.yml 填写 DSPushEnrollKey（与服务器 RELAY_ENROLL_KEY 一致）并重新安装 App，打开 App 即自动启用；② 手动——将 push.provider 设为 relay 并填入 relayToken"
+        }
+      ]
+    },
+    "pushTestNotConfigured": {
+      "transport": "none",
+      "overall": "not-configured",
+      "message": "推送未启用（provider disabled）。可先用「测试访问与注册」完成中继注册，或在配置中设置 push.provider",
+      "results": []
+    },
+    "pairing": {
+      "keys": [
+        "audience",
+        "code",
+        "expiresAt"
+      ],
+      "codeLength": 32,
+      "codeIsBase64Url": true,
+      "audienceMatchesPattern": true,
+      "expiresInSeconds": 300
+    }
+  },
+  "configSequence": {
+    "pushRelayHttp": {
+      "reportUnchangedOutsideTimestamps": true,
+      "pushTest": {
+        "transport": "none",
+        "overall": "not-configured",
+        "message": "推送未启用（relayUrl must be an https URL）。可先用「测试访问与注册」完成中继注册，或在配置中设置 push.provider",
+        "results": []
+      },
+      "relayTest": {
+        "url": "http://insecure.example",
+        "overall": "failed",
+        "tokenIssued": false,
+        "steps": [
+          {
+            "id": "health",
+            "ok": false,
+            "message": "relayUrl 必须是 https 地址：注册请求携带共享密钥，明文 HTTP 会把它暴露给链路上的任何节点"
+          }
+        ]
+      }
+    },
+    "localEnabled": {
+      "local": {
+        "phase": "online",
+        "port": "<port>",
+        "endpoints": [
+          "<endpoint>"
+        ],
+        "endpointsEveryEntryIsHttpsUrl": true,
+        "tlsFingerprint": "<tlsFingerprint>",
+        "tlsIdentityRegenerated": true,
+        "updatedAt": "<ts>"
+      },
+      "idleVolatileUpdateKeepsLocalOnline": true
+    }
+  },
+  "surfaces": {
+    "dataPlaneActive": true,
+    "residentClientStarted": true,
+    "sessionListCallsAtBoot": 1,
+    "workspaceFollowOpened": true,
+    "effectCleanupsRegistered": 5,
+    "updateFieldsAbsentInReport": true,
+    "typertContribution": {
+      "package": "dsh-deeppilot",
+      "face": "host",
+      "serviceCount": 0,
+      "invocationIds": [
+        "dsh-deeppilot#deeppilot/report",
+        "dsh-deeppilot#deeppilot/beginPairing",
+        "dsh-deeppilot#deeppilot/revokeDevice",
+        "dsh-deeppilot#deeppilot/setDeviceName",
+        "dsh-deeppilot#deeppilot/setDeviceScopes",
+        "dsh-deeppilot#deeppilot/testRelay",
+        "dsh-deeppilot#deeppilot/testPush"
+      ]
+    },
+    "logSignals": {
+      "dataPlaneActive": true,
+      "localDisabled": true,
+      "deviceRegistryLoaded": true
+    }
+  },
+  "dispose": {
+    "typertUnregisterCalls": 1,
+    "dshHomeRestored": true,
+    "tempDirRemoved": true
+  }
+}
