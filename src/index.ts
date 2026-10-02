@@ -7,13 +7,12 @@ import type { Duplex } from 'node:stream'
 import type { Context } from '@deepseek-ai/cordis'
 import { WebSocketServer } from 'ws'
 import { BridgeConnection } from './connection.ts'
+import { PushGateway } from './push-gateway.ts'
 import { ConnectionGate } from './connection-gate.ts'
 import { HostBridge } from './host-bridge.ts'
-import type { PushOutlet } from './host-bridge.ts'
 import { DshApiProxy, type DshInteractionKind } from './dsh-api-proxy.ts'
 import { applyReportRemote } from './report-remote.ts'
-import { runRelayProbe } from './relay-test.ts'
-import type { DeepPilotReport, PushTestResult } from './report-wire.ts'
+import type { DeepPilotReport } from './report-wire.ts'
 import { DeviceStore, MAX_DEVICES, bridgeDataDir, deviceDisplayName, ensurePrivateBridgeDataDir, expandHome, migrateLegacyBridgeDataDir } from './token.ts'
 import type { ApnsEnvironment } from './token.ts'
 import {
@@ -22,9 +21,6 @@ import {
   loadOrCreateHostAudience,
   normalizeDeviceScopes,
 } from './device-auth.ts'
-import { ApnsClient } from './apns.ts'
-import { RelayClient } from './relay-client.ts'
-import type { PushNotification } from './protocol.ts'
 import {
   DEFAULT_REMOTE_HOSTNAME,
   normalizeRemoteHostname,
@@ -34,13 +30,10 @@ import {
 import { normalizeFunnelConnectionLimit } from './funnel-policy.ts'
 import { localLANIPv4Addresses } from './local-address.ts'
 import { UpdateChecker, type UpdateInfo } from './update-check.ts'
-import { DEFAULT_RELAY_URL, normalizeOptions } from './config.ts'
+import { normalizeOptions } from './config.ts'
 import type { Config } from './config.ts'
 import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
-import { pushContent, mayReceivePush, shouldPrunePushToken, shouldReEnrollRelayToken } from './push-policy.ts'
-import { LiveActivityPushManager } from './live-activity.ts'
-import { WidgetPushScheduler } from './widget-push.ts'
 import type { PushDelivery } from './protocol.ts'
 import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
 import { DEFAULT_LOCAL_PORT, localEndpointURLs, localListenError, normalizeLocalPort } from './local-policy.ts'
@@ -145,59 +138,21 @@ export function apply(ctx: Context, options: unknown): void {
   // a storage failure degrades the bridge instead of killing the host.
   const dataDir = bridgeDataDir()
 
-  // ---------- zero-touch push enrollment (distributed builds) ----------
+  // ---------- offline push (F-9) ----------
 
-  /**
-   * Persistent relay-enrollment cell (deeppilot/push-relay.json). A
-   * distributed app presents the distributor's shared enrollKey during
-   * c2s.push.register; the bridge then auto-enables relay mode, enrolls with
-   * the operator's relay and caches the issued token. Users never fill in
-   * anything; explicit config always wins over the auto flag.
-   */
-  interface RelayEnrollmentCell {
-    clientId?: string
-    autoRelay?: boolean
-    enrollKey?: string
-    token?: string
-  }
-  const pushRelayPath = join(dataDir, 'push-relay.json')
-  const enrollmentCell: RelayEnrollmentCell = {}
-  let enrollmentWriteTail: Promise<void> = Promise.resolve()
+  // 推送的全部行为住在 PushGateway：enrollment 与持久化、中继注册、sender
+  // 缓存与退避、两个 scheduler、PushOutlet 四方法、两个自测。这里只声明它并
+  // 注入依赖——apply() 不再持有任何推送状态。详见 src/push-gateway.ts 文件头。
+  const pushGateway = new PushGateway({
+    config: currentConfig,
+    dataDir,
+    devices: () => auth.devices,
+    audience: () => auth.audience,
+    connections: () => connections,
+    enabledNow,
+    log,
+  })
 
-  function persistEnrollment(): void {
-    const snapshot = JSON.stringify({ version: 1, ...enrollmentCell }, null, 2) + '\n'
-    enrollmentWriteTail = enrollmentWriteTail.then(async () => {
-      const tempPath = pushRelayPath + '.' + randomBytes(6).toString('hex') + '.tmp'
-      try {
-        await mkdir(dataDir, { recursive: true })
-        await writeFile(tempPath, snapshot, { mode: 0o600 })
-        await rename(tempPath, pushRelayPath)
-      } catch {
-        await unlink(tempPath).catch(() => {})
-        // best-effort persistence; enrollment retries on next trigger
-      }
-    })
-  }
-
-  /** Fired from BridgeConnection when an app presents its built-in key. */
-  const handlePushEnrollKey = async (enrollKey: string): Promise<void> => {
-    if (enrollmentCell.enrollKey !== enrollKey) {
-      enrollmentCell.enrollKey = enrollKey
-    }
-    const configuredProvider = currentConfig().push?.provider
-    // Only flip when the user has not made an explicit choice.
-    if (!configuredProvider || configuredProvider === 'none') {
-      if (!enrollmentCell.autoRelay) {
-        enrollmentCell.autoRelay = true
-        log('push relay mode auto-enabled by enrolled app')
-      }
-    }
-    persistEnrollment()
-    // Enroll inline so the register handler sees final readiness: the first
-    // offline notification must not depend on a reconnect.
-    const url = (currentConfig().push?.relayUrl ?? '').trim() || DEFAULT_RELAY_URL
-    await ensureRelayEnrolled(url)
-  }
   const pairingCodes = new PairingCodeManager()
   const auth: { audience: string | null; devices: DeviceStore | null } = {
     audience: null,
@@ -222,15 +177,7 @@ export function apply(ctx: Context, options: unknown): void {
         log(`device registry loaded from ${expandHome(cfg.devicesPath ?? join(dataDir, 'devices-v2.json'))}: ${rows.length} device(s), ${registered} push registration(s)`)
       }
       // Restore zero-touch push enrollment state (best effort).
-      try {
-        const raw = JSON.parse(await readFile(pushRelayPath, 'utf8')) as RelayEnrollmentCell
-        if (typeof raw.clientId === 'string') enrollmentCell.clientId = raw.clientId
-        if (typeof raw.enrollKey === 'string') enrollmentCell.enrollKey = raw.enrollKey
-        if (typeof raw.token === 'string') enrollmentCell.token = raw.token
-        if (raw.autoRelay === true) enrollmentCell.autoRelay = true
-      } catch {
-        // first boot: no enrollment yet
-      }
+      await pushGateway.restore()
     } catch (error) {
       const message = String(error)
       log('auth material unavailable, bridge degraded: ' + message)
@@ -251,58 +198,6 @@ export function apply(ctx: Context, options: unknown): void {
    * connected-skip and category-mute filters — an explicit user action must
    * always be able to prove delivery end to end.
    */
-  const runPushSelfTest = async (): Promise<PushTestResult> => {
-    const resolved = resolvePushConfig(currentConfig())
-    if (!resolved.ok) {
-      return {
-        transport: 'none',
-        overall: 'not-configured',
-        message: '推送未启用（' + resolved.reason + '）。可先用「测试访问与注册」完成中继注册，或在配置中设置 push.provider',
-        results: [],
-      }
-    }
-    const tokenized = (auth.devices?.list() ?? []).filter((device) => device.apns !== undefined)
-    if (!auth.devices || tokenized.length === 0) {
-      return {
-        transport: resolved.value.kind,
-        overall: 'no-targets',
-        message: '还没有设备注册离线推送——在手机上打开 DeepPilot 并允许系统通知，等状态变为「已就绪」后再试',
-        results: [],
-      }
-    }
-    const send = await senderFor(resolved.value)
-    if (!send) {
-      return { transport: resolved.value.kind, overall: 'failed', message: '发送通道不可用（检查 .p8 密钥文件或中继配置）', results: [] }
-    }
-    const notification: PushNotification = {
-      notificationId: 'test-' + Date.now(),
-      category: 'turn.completed',
-      sessionId: 'push-test',
-      title: 'DeepPilot 测试推送',
-      body: '收到这条通知说明离线推送链路正常',
-    }
-    const results = await Promise.all(tokenized.map(async (device) => {
-      const registration = device.apns!
-      const { outcome, reason } = await send({
-        deviceToken: registration.token,
-        environment: registration.environment,
-        notification,
-      })
-      return {
-        name: deviceDisplayName(device),
-        environment: registration.environment,
-        outcome,
-        // First 10 hex chars let the operator verify the stored token matches
-        // what the device currently holds (tokens rotate on reinstall).
-        tokenFingerprint: registration.token.slice(0, 10),
-        ...(reason !== undefined ? { reason } : {}),
-      }
-    }))
-    const overall: PushTestResult['overall'] = results.some((r) => r.outcome === 'sent') ? 'sent' : 'failed'
-    log('push self-test: ' + overall + ' (' + results.map((r) => `"${r.name}"=${r.outcome}${r.reason ? '/' + r.reason : ''}`).join(', ') + ')')
-    return { transport: resolved.value.kind, overall, results }
-  }
-
   const connections = new Set<BridgeConnection>()
 
   const closeConnectionsForBridge = (bridge: HostBridge): void => {
@@ -340,337 +235,6 @@ export function apply(ctx: Context, options: unknown): void {
     }
     return revoked
   }
-
-  // ---------- offline push outlet (F-9) ----------
-
-  type PushConfigSnapshot =
-    | { kind: 'apns'; teamId: string; keyId: string; keyPath: string; bundleId: string }
-    | { kind: 'relay'; url: string; token: string }
-
-  const resolvePushConfig = (config: Config): { ok: true; value: PushConfigSnapshot } | { ok: false; reason: string } => {
-    const push = config.push ?? {}
-    // Auto-enabled by an enrolled distributed app when the user made no
-    // explicit provider choice.
-    const configured = push.provider ?? 'none'
-    const effectiveProvider = configured === 'none' && enrollmentCell.autoRelay === true ? 'relay' : configured
-    if (effectiveProvider === 'relay') {
-      const url = (push.relayUrl ?? '').trim() || DEFAULT_RELAY_URL
-      const token = (push.relayToken ?? '').trim() || enrollmentCell.token || ''
-      if (!/^https:\/\//i.test(url)) return { ok: false, reason: 'relayUrl must be an https URL' }
-      if (!token) return { ok: false, reason: 'relay token not enrolled yet' }
-      return { ok: true, value: { kind: 'relay', url, token } }
-    }
-    if (effectiveProvider === 'apns') {
-      const teamId = (push.teamId ?? '').trim()
-      const keyId = (push.keyId ?? '').trim()
-      const keyPath = expandHome((push.keyPath ?? '').trim() || join(dataDir, 'apns', 'AuthKey.p8'))
-      const bundleId = (push.bundleId ?? '').trim()
-      if (!teamId || !keyId || !bundleId) return { ok: false, reason: 'teamId/keyId/bundleId missing' }
-      return { ok: true, value: { kind: 'apns', teamId, keyId, keyPath, bundleId } }
-    }
-    return { ok: false, reason: 'provider disabled' }
-  }
-
-  /**
-   * Zero-touch enrollment against the operator's relay. Idempotent and
-   * cached in the persistent cell; a failure disables push for this config
-   * fingerprint with one log line until something changes.
-   */
-  let enrollAttemptFor: string | undefined
-  let enrollLastAttemptAt = 0
-  const ensureRelayEnrolled = async (url: string): Promise<string | undefined> => {
-    // The enrollment body carries the distributor's shared key; a mis-typed
-    // http:// relayUrl must never leak it in cleartext. (Send-path requests
-    // are already gated by resolvePushConfig — enrollment call sites are not.)
-    if (!/^https:\/\//i.test(url.trim())) {
-      log('push relay enrollment refused: relayUrl must be an https URL')
-      return undefined
-    }
-    if (enrollmentCell.token) return enrollmentCell.token
-    const fingerprint = url + ':' + String(enrollmentCell.enrollKey ?? '')
-    if (fingerprint !== enrollAttemptFor) {
-      enrollAttemptFor = fingerprint
-      enrollLastAttemptAt = 0
-    }
-    // Same fingerprint failing repeatedly: throttle to one attempt/minute so
-    // a down relay cannot turn every notification into an outbound storm,
-    // while transient failures still recover quickly.
-    if (Date.now() - enrollLastAttemptAt < 60_000) return undefined
-    enrollLastAttemptAt = Date.now()
-    try {
-      if (!enrollmentCell.clientId) {
-        enrollmentCell.clientId = 'u_' + randomBytes(16).toString('base64url')
-        persistEnrollment()
-      }
-      const client = new RelayClient({ url, debug: currentConfig().diagnostics?.debug === true, log })
-      const token = await client.enroll(enrollmentCell.clientId, enrollmentCell.enrollKey ?? '')
-      if (!token) {
-        log('push relay enrollment failed (' + url + '); will retry on next trigger')
-        return undefined
-      }
-      enrollmentCell.token = token
-      persistEnrollment()
-      log('push relay enrollment succeeded')
-      return token
-    } catch (error) {
-      log('push relay enrollment error: ' + String(error))
-      return undefined
-    }
-  }
-
-  interface SendOutcome { outcome: 'sent' | 'invalid-token' | 'failed'; reason?: string }
-  type PushSender = (
-    request: { deviceToken: string; environment: ApnsEnvironment; notification: PushDelivery },
-  ) => Promise<SendOutcome>
-
-  interface CachedSender {
-    fingerprint: string
-    send: PushSender
-    dispose?: () => Promise<void>
-  }
-  let cachedSender: CachedSender | undefined
-  /**
-   * Last failed APNs-sender build. The config fingerprint cannot see the
-   * filesystem, so remembering a failure forever meant "copy the .p8 into
-   * place later" never recovered without an edit or restart; throttle the
-   * retry by time instead — same pattern as relay enrollment below.
-   */
-  let senderFailedFor: { fingerprint: string; at: number } | undefined
-  const SENDER_FAILURE_RETRY_MS = 60_000
-
-  /**
-   * Lazily build the push sender for the current config. A broken config
-   * (unreadable .p8) disables push for that fingerprint with exactly one log
-   * line instead of failing on every event.
-   */
-  const senderFor = async (resolved: PushConfigSnapshot): Promise<PushSender | undefined> => {
-    const fingerprint = JSON.stringify(resolved)
-    if (cachedSender?.fingerprint === fingerprint) return cachedSender.send
-    // A recent failure only blocks retries for a short window: a permanently
-    // broken config must not log-storm on every event, but the same config
-    // with the key file since added MUST get another chance.
-    if (
-      senderFailedFor?.fingerprint === fingerprint &&
-      Date.now() - senderFailedFor.at < SENDER_FAILURE_RETRY_MS
-    ) {
-      return undefined
-    }
-    if (cachedSender) {
-      await cachedSender.dispose?.().catch(() => {})
-      cachedSender = undefined
-    }
-    if (resolved.kind === 'relay') {
-      // resolvePushConfig already guarantees a token exists in the cell
-      // (config token or a completed enrollment).
-      const client = new RelayClient({ url: resolved.url, token: resolved.token, debug: currentConfig().diagnostics?.debug === true, log })
-      cachedSender = {
-        fingerprint,
-        send: (request) => client.send(request),
-      }
-      log('push relay enabled')
-    } else {
-      try {
-        await readFile(expandHome(resolved.keyPath), 'utf8')
-      } catch (error) {
-        senderFailedFor = { fingerprint, at: Date.now() }
-        log('apns push unavailable (key unreadable at ' + resolved.keyPath + '): ' + String(error))
-        return undefined
-      }
-      const client = new ApnsClient({
-        teamId: resolved.teamId,
-        keyId: resolved.keyId,
-        keyPath: resolved.keyPath,
-        bundleId: resolved.bundleId,
-        debug: currentConfig().diagnostics?.debug === true,
-        log,
-      })
-      cachedSender = {
-        fingerprint,
-        send: (request) => client.send({
-          ...request.notification,
-          deviceToken: request.deviceToken,
-          environment: request.environment,
-        }),
-        dispose: () => client.dispose(),
-      }
-      log('apns push enabled')
-    }
-    senderFailedFor = undefined
-    return cachedSender.send
-  }
-
-  /**
-   * Fan one notification-worthy event out to paired devices holding an APNs
-   * token. Rules:
-   *  - devices with a live WebSocket are skipped (they already got the WS
-   *    frame and will raise the local notification themselves);
-   *  - only devices granted `notifications.register` are candidates — a
-   *    device whose scope was revoked must not receive offline pushes
-   *    (R1/P2 S→C permission policy);
-   *  - each device is delivered on ITS registered environment (the build
-   *    kind it self-reported), so sandbox and production devices coexist;
-   *  - the device's per-category switches suppress muted categories;
-   *  - only APNs' terminal Unregistered/ExpiredToken verdicts prune storage;
-   *    BadDeviceToken may be an environment mismatch and stays diagnosable.
-   */
-  const widgetPush = new WidgetPushScheduler(async () => {
-    if (!enabledNow()) return
-    const resolved = resolvePushConfig(currentConfig())
-    if (!resolved.ok) return
-    const devices = auth.devices
-    const send = await senderFor(resolved.value)
-    if (!devices || !send) return
-    const sent = new Set<string>()
-    for (const device of devices.list()) {
-      const registration = device.widgetApns
-      if (!registration || device.revokedAt !== undefined ||
-          !(['notifications.register', 'sessions.read', 'interactions.respond'] as const).every(scope =>
-            device.scopes?.includes(scope)) ||
-          Date.now() - registration.updatedAt > 7 * 24 * 60 * 60 * 1000) continue
-      const key = registration.environment + ':' + registration.token
-      if (sent.has(key)) continue
-      sent.add(key)
-      const { outcome, reason } = await send({
-        deviceToken: registration.token, environment: registration.environment,
-        notification: { kind: 'widget' },
-      })
-      if (shouldPrunePushToken(outcome, reason)) {
-        devices.clearWidgetPushToken(device.deviceId, registration.token)
-      }
-      if (resolved.value.kind === 'relay' && reason === 'HTTP 401' &&
-          enrollmentCell.token === resolved.value.token && enrollmentCell.enrollKey) {
-        enrollmentCell.token = undefined
-        persistEnrollment()
-        await ensureRelayEnrolled(resolved.value.url)
-      }
-    }
-  })
-
-  const liveActivityPush = new LiveActivityPushManager(() => auth.devices ?? undefined, async (deviceToken, environment, notification) => {
-    if (!enabledNow()) return { outcome: 'failed' }
-    const resolved = resolvePushConfig(currentConfig())
-    if (!resolved.ok) return { outcome: 'failed' }
-    const send = await senderFor(resolved.value)
-    if (!send) return { outcome: 'failed' }
-    const result = await send({ deviceToken, environment, notification })
-    if (resolved.value.kind === 'relay' && result.reason === 'HTTP 401' &&
-        enrollmentCell.token === resolved.value.token && enrollmentCell.enrollKey) {
-      enrollmentCell.token = undefined
-      persistEnrollment()
-      await ensureRelayEnrolled(resolved.value.url)
-    }
-    return result
-  })
-
-  const makePushOutlet = (): PushOutlet => ({
-    widgetChanged: () => widgetPush.changed(),
-    liveActivityChanged: sessions => liveActivityPush.changed(sessions),
-    // The capability bit must tell the truth: only advertise push when the
-    // provider is fully configured, otherwise clients would suppress their
-    // local banners expecting a delivery that never happens.
-    isAvailable: () => {
-      const resolved = resolvePushConfig(currentConfig())
-      if (!resolved.ok) return false
-      // Relay mode is only truly ready once enrollment produced a token;
-      // advertising earlier would make clients suppress their local banners
-      // for deliveries that cannot happen yet.
-      if (resolved.value.kind === 'relay' && !resolved.value.token) return false
-      return true
-    },
-    fanOut: (sourceNotification) => {
-      const notification = pushContent({ ...sourceNotification, hostAudience: auth.audience ?? undefined }, currentConfig().push?.contentMode)
-      void (async () => {
-        let resolved = resolvePushConfig(currentConfig())
-        if (!resolved.ok && resolved.reason === 'relay token not enrolled yet') {
-          // A registration carried the enrollKey but enrollment has not run —
-          // try once now, then re-resolve.
-          const relayUrl = (currentConfig().push?.relayUrl ?? '').trim() || DEFAULT_RELAY_URL
-          await ensureRelayEnrolled(relayUrl)
-          resolved = resolvePushConfig(currentConfig())
-        }
-        if (!resolved.ok) return
-        const devices = auth.devices
-        if (!devices) return
-        const send = await senderFor(resolved.value)
-        if (!send) return
-        const transport = resolved.value.kind
-        const connectedIds = new Set<string>()
-        for (const connection of connections) {
-          const id = connection.connectedDeviceId
-          if (id && connection.suppressesAlertPush) connectedIds.add(id)
-        }
-        // Observability first: push failures used to be completely silent
-        // (outcomes were debug-gated), which made field diagnosis impossible.
-        // Every dispatch and every skip now leaves one flat log line —
-        // categories and outcomes only, never message bodies.
-        const candidates = devices.list().filter((device) => {
-          const registration = device.apns
-          if (!registration) return false
-          if (connectedIds.has(device.deviceId)) return false
-          if (!mayReceivePush(device, notification)) {
-            if (currentConfig().diagnostics?.debug === true) {
-              log(`push skip "${deviceDisplayName(device)}": notification permission not granted`)
-            }
-            return false
-          }
-          if (registration.categories?.[notification.category] === false) {
-            if (currentConfig().diagnostics?.debug === true) {
-              log(`push skip "${deviceDisplayName(device)}": category ${notification.category} muted`)
-            }
-            return false
-          }
-          return true
-        })
-        if (candidates.length === 0) {
-          const tokenized = devices.list().filter((device) => device.apns !== undefined).length
-          log(`push(${transport}) ${notification.category}: no offline targets (connected=${connectedIds.size}, tokenized=${tokenized})`)
-          return
-        }
-        // Relay self-heal inputs, resolved once per dispatch: the URL we are
-        // actually sending through, and whether the credential came from the
-        // zero-touch cell (explicit relayToken configs are never rewritten).
-        const relayUrl = resolved.value.kind === 'relay' ? resolved.value.url : undefined
-        const relayTokenUsed = resolved.value.kind === 'relay' ? resolved.value.token : undefined
-        const usedCellToken = relayTokenUsed !== undefined && relayTokenUsed === enrollmentCell.token
-        const hasEnrollKey = Boolean(enrollmentCell.enrollKey)
-        for (const device of candidates) {
-          const registration = device.apns!
-          void send({ deviceToken: registration.token, environment: registration.environment, notification })
-            .then(({ outcome, reason }) => {
-              log(`push(${transport}) ${notification.category} → "${deviceDisplayName(device)}" [${registration.environment}] = ${outcome}${reason ? ' (' + reason + ')' : ''}`)
-              if (shouldPrunePushToken(outcome, reason)) {
-                devices.clearPushToken(device.deviceId)
-                log(`push: pruned stale token of "${deviceDisplayName(device)}" (${reason ?? 'unknown'}) — app re-registers on next launch`)
-                return
-              }
-              if (
-                relayUrl !== undefined &&
-                shouldReEnrollRelayToken(transport, outcome, reason, {
-                  usedCellToken,
-                  hasEnrollKey,
-                  // Compare-and-clear: a delayed 401 from another request sent
-                  // with the old credential must not erase a token that an
-                  // earlier callback has already refreshed.
-                  tokenStillCurrent: enrollmentCell.token === relayTokenUsed,
-                })
-              ) {
-                // The relay no longer honors the cached credential. Drop it and
-                // re-derive from the enroll key; ensureRelayEnrolled's own
-                // throttle keeps parallel 401s from storming the endpoint, and
-                // senderFor's config fingerprint rebuilds the client with the
-                // fresh token on the next dispatch.
-                enrollmentCell.token = undefined
-                persistEnrollment()
-                log('push relay credential rejected (HTTP 401); re-enrolling')
-                void ensureRelayEnrolled(relayUrl)
-              }
-            })
-            .catch(() => {})
-        }
-      })()
-    },
-  })
-
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES })
   let remoteSupervisor: RemoteSupervisor | undefined
@@ -795,47 +359,7 @@ export function apply(ctx: Context, options: unknown): void {
     }
     log(`device scopes updated id=${auditLabel(deviceId)} scopes=${updated.join(',')}`)
     return updated
-  }, async () => {
-      const push = currentConfig().push ?? {}
-      const configured = push.provider ?? 'none'
-      const effective = configured === 'none' && enrollmentCell.autoRelay === true ? 'relay' : configured
-      if (effective !== 'relay') {
-        return {
-          url: '',
-          overall: 'failed' as const,
-          tokenIssued: false,
-          steps: [{ id: 'health' as const, ok: false, message: `当前推送模式不是中继（provider=${configured}）。启用方式二选一：① 零配置——在 ios/project.yml 填写 DSPushEnrollKey（与服务器 RELAY_ENROLL_KEY 一致）并重新安装 App，打开 App 即自动启用；② 手动——将 push.provider 设为 relay 并填入 relayToken` }],
-        }
-      }
-      const url = (push.relayUrl ?? '').trim() || DEFAULT_RELAY_URL
-      if (!/^https:\/\//i.test(url)) {
-        return {
-          url,
-          overall: 'failed' as const,
-          tokenIssued: false,
-          steps: [{ id: 'health' as const, ok: false, message: 'relayUrl 必须是 https 地址：注册请求携带共享密钥，明文 HTTP 会把它暴露给链路上的任何节点' }],
-        }
-      }
-      // The enroll step needs an identity; mint one now so a successful test
-      // doubles as a completed enrollment.
-      if (!enrollmentCell.clientId && enrollmentCell.enrollKey) {
-        enrollmentCell.clientId = 'u_' + randomBytes(16).toString('base64url')
-        persistEnrollment()
-      }
-      return await runRelayProbe({
-        url,
-        clientId: enrollmentCell.clientId,
-        enrollKey: enrollmentCell.enrollKey,
-        manualToken: Boolean((push.relayToken ?? '').trim()),
-        onEnrolled: (token) => {
-          enrollmentCell.token = token
-          persistEnrollment()
-          log('push relay enrollment succeeded (via settings self-test)')
-        },
-      })
-    }, async () => {
-      return await runPushSelfTest()
-    })
+  }, () => pushGateway.relayTest(), () => pushGateway.selfTest())
   const state: { bridge?: HostBridge } = {}
   let pendingUpgrades = 0
   const authRateLimiter = new AuthRateLimiter()
@@ -987,7 +511,7 @@ export function apply(ctx: Context, options: unknown): void {
                 onDeviceAuthenticated: (deviceId) => {
                   log(`device authenticated id=${auditLabel(deviceId)} source=${auditLabel(live.source)}`)
                 },
-                onPushEnrollKey: handlePushEnrollKey,
+                onPushEnrollKey: (enrollKey) => pushGateway.enrollKey(enrollKey),
                 // A device that unbinds itself from the app must not leave a
                 // second socket (e.g. an older install) still live: the
                 // registry tombstone is already written by the handler, so
@@ -1237,7 +761,7 @@ export function apply(ctx: Context, options: unknown): void {
         join(dataDir, 'schedule-mutations-v1.json'),
         join(dataDir, 'fork-mutations-v1.json'),
       )
-      bridge.setPushOutlet(makePushOutlet())
+      bridge.setPushOutlet(pushGateway)
       state.bridge = bridge
       bridge.start()
       log('data plane active (mux + host streams)')
@@ -1254,16 +778,9 @@ export function apply(ctx: Context, options: unknown): void {
     const bridge = state.bridge
     state.bridge = undefined
     bridge?.dispose()
-    const sender = cachedSender
-    cachedSender = undefined
     updateChecker.dispose()
-    widgetPush.dispose()
-    liveActivityPush.dispose()
+    await pushGateway.dispose()
     const wssClosed = new Promise<void>((resolve) => wss.close(() => resolve()))
-    await Promise.allSettled([
-      enrollmentWriteTail,
-      sender?.dispose?.() ?? Promise.resolve(),
-      wssClosed,
-    ])
+    await Promise.allSettled([wssClosed])
   }, 'deeppilot: process resources')
 }
