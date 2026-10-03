@@ -5,6 +5,42 @@
 
 ## Current decision
 
+- **Audited release:** `dsh-v0.2.1-alpha.1` (official release page:
+  <https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-alpha.1>),
+  published 2026-10-03 on the npm `alpha` dist-tag. It is **not** `latest`;
+  `latest`/`next` still point at `0.2.0-rc.2`, which is what the current Host runs.
+- **Comparison baseline:** `dsh-v0.2.0-rc.2` (the previous plugin baseline).
+- **Plugin runtime verdict:** **no breaking change in the DSH APIs that DeepPilot
+  currently calls.** All 12 peer packages have **zero** changed `src/` files
+  between the two tags — each changed only its `package.json` version field and
+  its READMEs. See the 2026-10-03 entry below for the full finding-by-finding
+  table and for the three official upgrade guides checked against this plugin.
+- **Nothing was changed to support this release.** `package.json`,
+  `package-lock.json`, generated `lib/`, `COMPATIBILITY.md`, and `PROTOCOL.md`
+  deliberately still describe the `0.2.0-rc.2` baseline. The release-audit-only
+  scope was agreed before the audit ran, so no version bump, no dependency
+  install, and no `lib/` regeneration was performed.
+- **Peer range still admits it:** `>=0.2.0-rc.2 <0.3.0-0` satisfies
+  `0.2.1-alpha.1` under `semver.satisfies(..., { includePrerelease: true })`,
+  which is how DSH's `evaluatePluginCompatibility` gates activation. The same
+  holds for the `~4.0.4` / `~3.18.4` vendor ranges against `4.0.5-alpha.1` /
+  `3.18.5-alpha.1`. Under npm's **default** prerelease handling those three do
+  not match, so installing on an alpha host from npm reports peer warnings.
+- **Protocol verdict:** no required DeepPilot phone-protocol break. Protocol v2,
+  pairing state, and device records are unchanged; already-paired phones need no
+  action.
+- **Two tracked follow-ups:**
+  1. **Schedule documentation is now stale.** Automation tasks became a
+     built-in Web capability and `@deepseek-ai/dsh-experimental-schedule-bundle`
+     is in DSH's new `RETIRED_BUNDLES` set, so the user instruction "enable
+     Automation tasks in the plugin manager" points at a retired bundle.
+     Affects `PROTOCOL.md`, `COMPATIBILITY.md`, and the iOS copy. **Open.**
+  2. ~~`subagent_session` is unmapped.~~ **Resolved 2026-10-03:** mapped to
+     `E_PROTOCOL` in `src/wire-errors.ts` and added to the frozen expectation in
+     `tests/wire-errors.test.ts`. 525 unit tests, typecheck, and build pass.
+
+### Previous decision — `dsh-v0.2.0-rc.2`
+
 - **Audited release:** `dsh-v0.2.0-rc.2` (official release page:
   <https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.0-rc.2>).
 - **Comparison baseline:** `dsh-v0.2.0-rc.1` (the previous plugin baseline).
@@ -34,6 +70,133 @@
   out of the shipped Web composition. See "Automation is now an optional
   bundle" below. The plugin needs no code change; the phone's copy now points
   at the bundle.
+
+## 2026-10-03 — audit of `dsh-v0.2.1-alpha.1`
+
+### Scope and method
+
+Compared `dsh-v0.2.0-rc.2...dsh-v0.2.1-alpha.1` (**266 commits, 4190 changed
+files**) from a fresh blobless clone
+(`git clone --filter=blob:none --no-checkout`), unshallowed before measuring.
+Package names were mapped to monorepo paths by reading every `package.json`
+through a sparse checkout, then each package's `src/` was diffed with
+`git diff --name-status`. Baseline SHA `639ed015`, target SHA `5badb150`.
+
+### Peer packages: 12 of 12 have zero changed source
+
+Every peer package this plugin declares in `package.json` changed **only** its
+`package.json` and its READMEs. No `src/` file moved:
+
+| Package | Path | Version | Changed `src/` files |
+| --- | --- | --- | --- |
+| `@deepseek-ai/dsh` | `apps/cli` | `0.2.0-rc.2` → `0.2.1-alpha.1` | 0 |
+| `@deepseek-ai/dsh-api-gateway` | `packages/api/gateway` | `0.2.0-rc.2` → `0.2.1-alpha.1` | 0 |
+| `@deepseek-ai/dsh-api-remotes` | `packages/api/remotes` | `0.2.0-rc.2` → `0.2.1-alpha.1` | 0 |
+| `@deepseek-ai/dsh-client-connection` | `packages/client/connection` | `0.2.0-rc.2` → `0.2.1-alpha.1` | 0 |
+| `@deepseek-ai/dsh-client-locale` | `packages/client/locale` | `0.2.0-rc.2` → `0.2.1-alpha.1` | 0 |
+| `@deepseek-ai/dsh-client-ui-settings` | `packages/client/ui-settings` | `0.2.0-rc.2` → `0.2.1-alpha.1` | 0 |
+| `@deepseek-ai/dsh-client-ui-slots` | `packages/client/ui-slots` | `0.2.0-rc.2` → `0.2.1-alpha.1` | 0 |
+| `@deepseek-ai/dsh-settings` | `packages/settings/settings` | `0.2.0-rc.2` → `0.2.1-alpha.1` | 0 |
+| `@deepseek-ai/dsh-typert-protocol` | `packages/typert/protocol` | `0.2.0-rc.2` → `0.2.1-alpha.1` | 0 |
+| `@deepseek-ai/dsh-typert-registry` | `packages/typert/registry` | `0.2.0-rc.2` → `0.2.1-alpha.1` | 0 |
+| `@deepseek-ai/cordis` | `vendor/cordis` | `4.0.4` → `4.0.5-alpha.1` | 0 |
+| `@deepseek-ai/schemastery` | `vendor/schemastery` | `3.18.4` → `3.18.5-alpha.1` | 0 |
+
+The only non-manifest, non-README change inside a peer package is a **new test
+case** in `packages/api/gateway/tests/gateway.host.spec.ts`, which records a
+behaviour fix: a Service already disposed is skipped during SRC resolution. No
+shipped code changed, so `typertGateway.wireStream.open(endpoint, payload,
+uplink, peer, signal)` keeps its argument order — the seam this plugin's
+highest-risk integration depends on.
+
+### High-risk service surfaces
+
+| Area | Finding | DeepPilot impact |
+| --- | --- | --- |
+| `api/session-controller` (`src/index.ts`, `src/list.ts`) | Adds one optional config key `listWorkSliceMs` (natural, min 1, **default 16**) and threads it into `new ApiSessionList(ctx, resolved.listWorkSliceMs)` so large listings yield between rows. No `@Remote` method signature changed. | None. The hand-written `SessionControllerLike` mirror still matches; the plugin never constructs the controller. |
+| `api/workspace-controller` | Zero changed `src/` files. | None. |
+| `schedule/schedule` | `src/tools.ts` and `src/invariant.ts` **deleted**; `ScheduleService.inject` drops `'tools'`; `src/types.ts` gains `SubagentSessionError`. | See the two rows below. |
+| `boot/app-boot` | `createRuntimeResolution` now returns a `ProfileRuntimeResolution` **class instance** instead of a frozen plain object, and a new `RETIRED_BUNDLES` set exists. | None. `app-boot` is not in this plugin's peer set. |
+
+### The three announced breaking changes, checked against this plugin
+
+Each was traced to its implementation in the DSH tree rather than accepted from
+the release note.
+
+| Breaking change | Where it actually lands | DeepPilot impact |
+| --- | --- | --- |
+| **Runtime invariant plugins and every `./invariant` export removed.** | `@deepseek-ai/dsh-invariants`, `InvariantRegistry`, `InvariantInstaller` and all `<package>/invariant` subpaths stop being published; `sdk-minimal` drops five rows. Official guide: `docs/upgrade-guide/v0.2.0-rc.2/remove-runtime-invariants/`. | **None.** The plugin source contains zero `invariant` references. In `package-lock.json` the package appears only as a transitive dependency of `dsh-credentials`, `dsh-scope`, `dsh-settings` and `dsh-system-prompt` — packages this plugin does not import or configure. `cordis.patch.yml` declares no invariant rows, so no `patch: entry ... not found` warning can occur. |
+| **Subpath plugins no longer read their own `package.json`; text and icon must come from subpath exports.** | `boot/app-boot/src/package-meta.ts`: `manifestPath` is now `packageName === specifier ? optionalResourcePath(...) : undefined`, so only a package-root specifier reads a manifest; a subpath instead takes its icon from an exported `<specifier>/icon`. A new `assertPackageOwned` keeps an exported icon inside its owning package. Official guide: `docs/upgrade-guide/v0.2.0-rc.2/subpath-plugin-display-manifest/`, which states the affected group is "authors who export a subpath `package.json`". | **None.** `package.json` exports `./package.json` (package root) but **not** `./client/package.json`, and the root manifest still supplies `name`, `description` and `icon.svg`. Verified against Node's real exports gate in this repo: `dsh-deeppilot/client/package.json`, `dsh-deeppilot/client/icon` and `dsh-deeppilot/client/locale/en.json` all fail with `ERR_PACKAGE_PATH_NOT_EXPORTED` **today**, so the old code could never have resolved them either. Old and new resolution therefore produce the same result. |
+| **Composer statistics split into `activity` and `usage` entries; plugins overriding the old `stats` row must change their registered ID.** | The `stats` composer row was reworked (the `composer-session-stats-pills` design note is archived). | **None.** The plugin registers exactly one client extension — `slots.inject('settings.section', ...)` in `src/client/index.ts:478` — and never registers a composer row. The `row.stats` at `src/host-bridge.ts:663` is this plugin's own wire structure, unrelated to the composer extension. |
+
+### Automation tasks moved into the Web composition
+
+This is the one substantive product change, and it invalidates documentation
+rather than code.
+
+`boot/app-boot/src/profile.ts` adds:
+
+```ts
+const RETIRED_BUNDLES: ReadonlySet<string> = new Set([
+  '@deepseek-ai/dsh-experimental-schedule-bundle',
+])
+```
+
+and removes that bundle from `OPTIONAL_BUNDLES` (replaced by
+`@deepseek-ai/dsh-experimental-inspector-profile`). `loadProfileDirectory`
+rewrites the profile's `package.json` to drop the retired entry; stored tasks and
+delivery records survive on disk. The official guide
+(`docs/upgrade-guide/v0.2.0-rc.2/schedule-bundle-retired/`) states that
+`@deepseek-ai/dsh-web-app` now mounts `schedule` and `ui-schedule` in **every**
+Web profile.
+
+The plugin needs no code change. It resolves the service lazily through
+`ctx.get('schedule')` (the fix recorded in the 2026-09-29 entry), never lists
+`schedule` in `inject`, and already reports `E_UNSUPPORTED` when the service is
+absent. On a `0.2.1-alpha.1` Web profile the service is simply always present,
+so `welcome.capabilities.schedules` becomes `true` by default instead of by
+opt-in.
+
+What is now wrong is the instruction the plugin gives users. `PROTOCOL.md`
+(line 899), `COMPATIBILITY.md` (lines 39–47), `docs/RELEASE_NOTES-0.9.0.md`, and
+`docs/DEEPPILOT_FEATURE_PLAN.md` all tell the user to enable **Automation tasks**
+in the plugin manager, and the iOS copy repeats it. On this release that entry is
+retired and auto-cleaned, so the instruction sends users after a bundle that no
+longer exists.
+
+The upgrade guide's migration step 2 — keep `schedule`/`ui-schedule` overrides in
+a patch layer and delete a top-level `time-context` override — **does not apply
+here**: `cordis.patch.yml` is 20 lines long and contains only the three
+directory-picker rows, with no `schedule`, `ui-schedule` or `time-context`
+entries.
+
+### New Schedule refusal: `subagent_session`
+
+`ScheduleService` now refuses `create` and `update` when the target Session has
+a delegation depth above zero, returning a new stable `ScheduleInputError`
+code `subagent_session` ("This Session belongs to subagent routing, which never
+receives reminder delivery"). `delete` deliberately still works so tasks stored
+before the rule existed stay removable. The refusal is also visible to subagents
+because the bridge reaches this code through the same `@Remote` methods.
+
+`src/wire-errors.ts` now maps twelve Schedule codes, adding `subagent_session` →
+`E_PROTOCOL` alongside `schedule_not_found`, `invalid_selector`, `not_future`,
+`frequency_too_high`, `schedule_ended` and the rest. It was chosen over
+`E_UNSUPPORTED` because the capability exists on the host — it is this request's
+target that can never be satisfied, so a phone retry is pointless — which puts it
+in the same class as the other input-shaped Schedule refusals. Without the
+mapping `wireErrorOf` falls through to `WIRE_ERROR_FALLBACK` (`E_INTERNAL`), which
+would tell the client the failure was worth retrying.
+
+### Re-audit procedure used
+
+Same blobless-clone method as the rc.2 and rc.1 entries, with two refinements:
+unshallow before measuring (a `--depth=1` clone silently under-reports the diff,
+returning 4190 vs 4760 paths depending on history), and resolve peer package
+names through a sparse `package.json` checkout instead of guessing directory
+names — the monorepo maps `@deepseek-ai/dsh-api-gateway` to
+`packages/api/gateway`, `@deepseek-ai/dsh` to `apps/cli`, and the two vendored
+packages to `vendor/`.
 
 ## 2026-09-29 — audit of `dsh-v0.2.0-rc.2`
 
