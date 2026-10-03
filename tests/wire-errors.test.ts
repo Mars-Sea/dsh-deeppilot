@@ -44,6 +44,7 @@ const SCHEDULE: Record<string, string> = {
   'time_out_of_range': 'E_PROTOCOL',
   'frequency_too_high': 'E_PROTOCOL',
   'schedule_ended': 'E_PROTOCOL',
+  'subagent_session': 'E_PROTOCOL',
 }
 
 test('每个域的 Host code 映射到冻结的 wire 码', () => {

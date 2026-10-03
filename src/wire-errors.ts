@@ -76,6 +76,11 @@ const DOMAIN_TABLES: Record<ErrorDomain, Readonly<Record<string, WireErrorCode>>
     'time_out_of_range': 'E_PROTOCOL',
     'frequency_too_high': 'E_PROTOCOL',
     'schedule_ended': 'E_PROTOCOL',
+    // DSH 0.2.1-alpha.1 新增：目标会话属于子代理路由，投递永远到不了它，
+    // Host 对 create/update 拒绝（delete 仍放行以便清理旧数据）。
+    // 归 E_PROTOCOL 而非 E_UNSUPPORTED：能力本身在宿主上存在，是这次请求
+    // 的目标不可满足，重试无意义。与其余「参数/时序不合法」类拒绝同档。
+    'subagent_session': 'E_PROTOCOL',
   },
 }
 
