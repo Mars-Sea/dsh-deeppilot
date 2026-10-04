@@ -29,6 +29,16 @@
 - **Protocol verdict:** no required DeepPilot phone-protocol break. Protocol v2,
   pairing state, and device records are unchanged; already-paired phones need no
   action.
+- **Release verdict (`0.9.2`, shipped 2026-10-04):** `scripts/smoke-live.mts`
+  was run against a live **`dsh-v0.2.1-alpha.1`** web profile and passed with
+  **0 failures**. This is the first live-host verification since the 0.9.1
+  entry, and it retires the gate that entry left open ("pending separate
+  authorization before the `0.9.1` release ships") — on a newer host than the
+  rc.2 that entry contemplated, which is strictly stronger evidence: the
+  `0.2.1-alpha.1` source-diff above found zero changed `src/` files across all
+  12 peer packages, and the live run agrees. The plugin's own build and type
+  baselines stay pinned to `0.2.0-rc.2`; nothing about the pin changed for this
+  release.
 - **Two tracked follow-ups:**
   1. **Schedule documentation is now stale.** Automation tasks became a
      built-in Web capability and `@deepseek-ai/dsh-experimental-schedule-bundle`
@@ -63,6 +73,9 @@
   against the new range. The one remaining release-only step is a live
   `scripts/smoke-live.mts` run on a real rc.2 host, pending separate
   authorization before the `0.9.1` release ships.
+  **Closed 2026-10-04:** that gate was discharged by the `0.9.2` live run
+  instead — see the release verdict in "Current decision" above. It ran on
+  `0.2.1-alpha.1` rather than rc.2, which supersedes this entry's intent.
 - **Protocol verdict:** no required DeepPilot phone-protocol break. Protocol v2,
   pairing state, and device records are unchanged; already-paired phones need no
   action.
