@@ -29,6 +29,31 @@
 - **Protocol verdict:** no required DeepPilot phone-protocol break. Protocol v2,
   pairing state, and device records are unchanged; already-paired phones need no
   action.
+- **Release verdict (`0.9.3`, published 2026-10-05, tag `v0.9.3` @ `b85869b`):**
+  shipped to `latest`. Verified on the registry: version present, `dist-tags.latest`
+  moved off `0.9.2`, 65 files, `dist.shasum` `90f0c665c395a7043eb3689a291cf28c88bc39ab`
+  byte-identical to the locally verified `npm pack` output, and a clean install plus
+  a real `dsh --profile web --dump-config` compose (188 entries) with the plugin's
+  three `cordis.patch.yml` entries present and no missing-module error. Ships
+  issue #24 (`100.64.0.0/10` becomes a selectable pairing target) and the Windows
+  journal `fsync` tolerance fix. Protocol v2 unchanged; paired phones need no action.
+  - **`gitHead` deviation, recorded rather than hidden.** The registry records
+    `gitHead` `fbda6a5`, the docs-only commit that added `RELEASE_NOTES-0.9.3.md`,
+    while tag `v0.9.3` points at `b85869b`. The cause is ordering, not content:
+    the tarball was packed before that docs commit, and npm stamps `gitHead`
+    from HEAD at publish time. The shipped bytes are provably `b85869b`'s tree —
+    the published `dist.shasum` equals the local `npm pack` output and the tarball
+    does not contain `RELEASE_NOTES-0.9.3.md`. `fbda6a5` is `b85869b`'s child and
+    changes no packaged file. Versions are immutable on npm, so this cannot be
+    corrected retroactively; **do it differently next time: commit every doc file
+    before packing, and pack after the last commit.** The 0.9.2 entry below had
+    `gitHead` matching the tag because no commit landed between pack and publish.
+  - **Install caveat users will hit — DSH's release-age policy.** Confirmed again
+    while verifying this release: `dsh plugin add --profile web` writes a
+    `minimumReleaseAgeExclude` entry in `pnpm-workspace.yaml` and an explicit
+    `dsh-deeppilot@0.9.3` installs the new version. Expect the unversioned form to
+    resolve to a slightly older release for a while; this is expected DSH
+    behaviour, not a publishing failure.
 - **Release verdict (`0.9.2`, published 2026-10-05, tag `v0.9.2` @ `4b43671`):**
   shipped to `latest`. Verified on the registry: version present, `dist-tags.latest`
   moved off `0.9.1`, `gitHead` `4b436715` matches the tag and HEAD, 65 files,
