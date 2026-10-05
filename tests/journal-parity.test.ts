@@ -195,7 +195,14 @@ async function record(): Promise<Baseline> {
     prompt.corrupt = { status: corruptReceipt.status }
     prompt.corruptLookup = corrupt.lookup('device-1', sendId(), 's-1')
 
-    const unwritable = join('/proc/definitely/not/writable', 'x.json')
+    // 不可写目标用 scratch 目录内的「普通文件/子文件」构造，任何平台都得到
+    // ENOTDIR。原先写死 /proc/definitely/not/writable：/proc 是 Linux 专属伪文件
+    // 系统，macOS 上它不存在所以本分支一直是「路径不可用」，从未在 Linux 上被
+    // 执行过；在 Linux 上向该路径 dispatch 会无限挂起而不是快速失败（曾挂住
+    // CI 的 plugin job）。此处改用与平台无关的构造，快照语义不变。
+    const notADirectory = join(dir, 'not-a-directory')
+    writeFileSync(notADirectory, 'x')
+    const unwritable = join(notADirectory, 'x.json')
     const blocked = openDispatchJournal({ path: unwritable, codec: promptDeliveryCodec, joinInFlight: true, maxFileBytes: 8 * 1024 * 1024 })
     const blockedReceipt = await blocked.dispatch('device-1', sendId(), { sessionId: 's-1', content: { text: 'd' } }, async () => ({ ok: true, value: 4 }))
     prompt.unwritableDir = { status: blockedReceipt.status }
@@ -226,7 +233,12 @@ async function record(): Promise<Baseline> {
     const corruptPath = join(dir, 'corrupt.json')
     writeFileSync(corruptPath, '[1,2,3]')
         mutation.corrupt = await runMutation(corruptPath, sendId(), { sessionId: 's-1' })
-    mutation.unwritableDir = await runMutation(join('/proc/definitely/not/writable', 'y.json'), sendId(), { sessionId: 's-1' })
+    // 不可写目标同样用 scratch 内的普通文件/子文件（ENOTDIR），理由同 prompt 侧：
+    // /proc 是 Linux 专属路径，而 dispatch-journal 的 save() 全是同步 fs 调用，
+    // 向 /proc 写入会阻塞整个事件循环而不是返回错误。
+    const notADirectory = join(dir, 'not-a-directory-mutation')
+    writeFileSync(notADirectory, 'x')
+    mutation.unwritableDir = await runMutation(join(notADirectory, 'y.json'), sendId(), { sessionId: 's-1' })
 
     // validSendId 守卫：mutation 侧独有。
     mutation.invalidId = await runMutation(path, 'not-a-send-id', { sessionId: 's-1' })
