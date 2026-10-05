@@ -648,6 +648,7 @@ export function apply(ctx: Context, options: unknown): void {
         join(dataDir, 'prompt-deliveries-v1.json'),
         join(dataDir, 'schedule-mutations-v1.json'),
         join(dataDir, 'fork-mutations-v1.json'),
+        log,
       )
       bridge.setPushOutlet(pushGateway)
       state.bridge = bridge

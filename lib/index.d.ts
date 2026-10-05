@@ -59,7 +59,7 @@ type DispatchOutcome =
 {
   kind: 'mismatch';
 } |
-/** 文件损坏 / 目录不可造，journal 已降级。 */
+/** 构造期解析失败：journal 已永久降级，本次进程不再投递。 */
 {
   kind: 'unavailable';
 } |
@@ -81,7 +81,10 @@ type DispatchOutcome =
 {
   kind: 'crashed';
 } |
-/** 预留条目时写盘失败。 */
+/**
+ * 预留条目时落盘失败——上游**没有**被调用，但无从判断 rename 是否已经
+ * 生效（save() 可能在 rename 之后才抛），因此条目留在内存里按 unknown 处理。
+ */
 {
   kind: 'reserve-failed';
 } |
@@ -125,12 +128,26 @@ interface DispatchJournalOptions<TRequest = unknown, TResult = unknown> {
    * mutation 否（重复方立刻拿到 unknown → E_INTERNAL）。两者都由对等快照钉住。
    */
   joinInFlight?: boolean;
+  /**
+   * 落盘失败的诊断输出。由调用方注入它已有的 logger；缺省即静默。
+   * 只打阶段与 errno，绝不打条目内容或消息体（plugin 的日志禁令）。
+   */
+  log?: (message: string) => void;
+  /**
+   * 目录 fsync 里「对 fd 调用 fsync」这一步的覆盖点，缺省即 `fsyncSync`。
+   *
+   * 存在的唯一理由是可测：Linux CI 上复现不出 Windows 的 EPERM。注入点刻意
+   * 停在 fd 这一层而不是替换整个目录 fsync——容忍 EPERM 的判断必须留在真实
+   * 路径里被测到，换掉整函数就等于把待测逻辑一起换掉了。
+   */
+  fsyncFileDescriptor?: (fd: number) => void;
 }
 /** Durable at-most-once dispatch. Unknown outcomes are never automatically retried. */
 declare class DispatchJournal<TRequest = unknown, TResult = unknown> {
   private readonly options;
   private entries;
   private inFlight;
+  /** 只由构造期的解析失败置位，见下方 catch；运行期落盘失败不碰它。 */
   private healthy;
   private readonly maxFileBytes;
   private readonly capacity;
@@ -141,6 +158,15 @@ declare class DispatchJournal<TRequest = unknown, TResult = unknown> {
   /** id 的纪元前缀是否还在保留窗口内（未来 5 分钟以上同样算非法）。 */
   private expired;
   private save;
+  /**
+   * 落盘一次，失败只报不降级。
+   *
+   * 与 `healthy` 的分工：`healthy` 只由构造期的解析失败置位，运行期的磁盘错误
+   * 不再拉黑整个进程——此前一次 save() 失败就让本进程余下的所有投递永久返回
+   * unknown，直到 DSH 重启（issue #20 / #26）。现在只影响当次投递，下一次
+   * dispatch 会重新尝试。
+   */
+  private persist;
   /** 查询既有回执；`request` 交给 codec 的 matches 判定（缺省即不提供 lookup）。 */
   lookup(deviceId: string, id: string, request?: unknown): TResult | undefined;
   /**
@@ -797,6 +823,8 @@ type ScheduleBridgeResult<T> = {
 declare class HostBridge {
   private readonly apiProxy;
   private readonly historyBufferMax;
+  /** 三个 journal 的落盘失败诊断输出；缺省即静默。不打任何消息体。 */
+  private readonly log?;
   readonly id: number;
   private summaries;
   private activeTools;
@@ -820,7 +848,9 @@ declare class HostBridge {
   }, DeliveryReceipt>;
   readonly scheduleMutations: DispatchJournal<unknown, MutationDispatchResult<unknown>>;
   readonly forkMutations: DispatchJournal<unknown, MutationDispatchResult<unknown>>;
-  constructor(apiProxy: ApiProxyLike, historyBufferMax?: number, deliveryJournalPath?: string, scheduleJournalPath?: string, forkJournalPath?: string);
+  constructor(apiProxy: ApiProxyLike, historyBufferMax?: number, deliveryJournalPath?: string, scheduleJournalPath?: string, forkJournalPath?: string,
+  /** 三个 journal 的落盘失败诊断输出；缺省即静默。不打任何消息体。 */
+  log?: ((message: string) => void) | undefined);
   private pushOutlet;
   private widgetFingerprint;
   /**

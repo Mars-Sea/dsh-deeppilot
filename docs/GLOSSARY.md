@@ -32,12 +32,14 @@ Bridge 与手机之间的那条协议缝。host 侧的属主是 `src/wire-regist
 
 Host 控制器错误码、Bridge 结果、wire `E_*` 码三种词之间的一一对应。唯一属主是
 `src/wire-errors.ts`：每个域一张「Host code -> wire code」表，Bridge 失败结果直接
-携带 wire 码。`E_BUSY` 与 `E_PROTOCOL` 决定客户端是否重试。
+携带 wire 码。`E_BUSY` 与 `E_PROTOCOL` 决定客户端是否重试。Host 码带命名空间
+（`session/agent-busy`）时先原样查表、再剥前缀兜底；落在 `E_INTERNAL` 时把
+`details.reason` 并入 `message`，真实原因才到得了手机。
 
 ## 二、既有关联词
 
 | 词 | 含义 | 属主 |
 |---|---|---|
-| journal | 持久 at-most-once 投递/变更记录 | `src/prompt-delivery.ts`、`src/mutation-journal.ts` |
+| journal | 持久 at-most-once 投递/变更记录 | `src/dispatch-journal.ts`（prompt 投递与 schedule/fork 变更共用） |
 | report Remote | 设置页读取的 Bridge 事实快照 | `src/report-wire.ts`、`src/report-service.ts` |
 | Funnel / Relay | 两条对外传输：Tailscale Funnel 与自建中继 | `src/remote-supervisor.ts`、`src/relay-client.ts` |

@@ -10,6 +10,11 @@
  * 核心拥有：key 派生、原子写盘（temp + fsync + rename + 目录 fsync）、加载与
  * 逐字段校验、保留清扫、容量、healthy 降级、在途去重、opener 单例。
  *
+ * healthy 的唯一来源是**构造期的解析失败**（文件损坏，续写会写坏格式）；
+ * 运行期的落盘失败只影响当次投递，下次投递重新尝试落盘。两者曾经共用同一个
+ * 标志位，一次瞬时磁盘错误就让整个进程的所有投递永久短路到 DSH 重启
+ * （issue #20 / #26）。
+ *
  * codec 拥有：一次投递的全部「方言」。它同时是两个 adapter——prompt 回执与
  * mutation 结果——因此这条缝是真的，不是假想的。
  */
@@ -41,7 +46,7 @@ export type DispatchOutcome =
   | { kind: 'replay'; entry: JournalEntry }
   /** 同一 id 搭不同内容。 */
   | { kind: 'mismatch' }
-  /** 文件损坏 / 目录不可造，journal 已降级。 */
+  /** 构造期解析失败：journal 已永久降级，本次进程不再投递。 */
   | { kind: 'unavailable' }
   /** id 的纪元前缀超出保留窗口。 */
   | { kind: 'expired' }
@@ -51,7 +56,10 @@ export type DispatchOutcome =
   | { kind: 'ran'; entry: JournalEntry; result: OperationResult }
   /** operation 抛错：条目保持 unknown，且不得自动重试。 */
   | { kind: 'crashed' }
-  /** 预留条目时写盘失败。 */
+  /**
+   * 预留条目时落盘失败——上游**没有**被调用，但无从判断 rename 是否已经
+   * 生效（save() 可能在 rename 之后才抛），因此条目留在内存里按 unknown 处理。
+   */
   | { kind: 'reserve-failed' }
   /** id 形状不合法（仅 mutation 变体开启这道守卫）。 */
   | { kind: 'invalid-id' }
@@ -93,6 +101,19 @@ export interface DispatchJournalOptions<TRequest = unknown, TResult = unknown> {
    * mutation 否（重复方立刻拿到 unknown → E_INTERNAL）。两者都由对等快照钉住。
    */
   joinInFlight?: boolean
+  /**
+   * 落盘失败的诊断输出。由调用方注入它已有的 logger；缺省即静默。
+   * 只打阶段与 errno，绝不打条目内容或消息体（plugin 的日志禁令）。
+   */
+  log?: (message: string) => void
+  /**
+   * 目录 fsync 里「对 fd 调用 fsync」这一步的覆盖点，缺省即 `fsyncSync`。
+   *
+   * 存在的唯一理由是可测：Linux CI 上复现不出 Windows 的 EPERM。注入点刻意
+   * 停在 fd 这一层而不是替换整个目录 fsync——容忍 EPERM 的判断必须留在真实
+   * 路径里被测到，换掉整函数就等于把待测逻辑一起换掉了。
+   */
+  fsyncFileDescriptor?: (fd: number) => void
 }
 
 const DEFAULT_CAPACITY = 10_000
@@ -100,10 +121,50 @@ const DEFAULT_RETENTION_MS = 7 * 24 * 3600 * 1000
 /** 比保留窗口多宽限 5 分钟：边界附近的条目不会被反复删了又写。 */
 const SWEEP_GRACE_MS = 5 * 60 * 1000
 
+/**
+ * 目录 fsync 的三个「平台不支持」码。
+ *
+ * Windows 上 `openSync(dir, 'r')` 成功但 `fsyncSync(dirfd)` 必定抛错（社区实测
+ * 报 EPERM，issue #20 / #26）；EISDIR / EINVAL 是同一现象的其他平台变体。
+ * 这三个码在本调用点都不代表数据损坏：文件内容已在 rename 之前 fsync 过，且
+ * rename 在同一目录内是原子的，跳过的只是目录项的额外耐久性保证。
+ */
+const TOLERATED_DIR_FSYNC_CODES: ReadonlySet<string> = new Set(['EPERM', 'EISDIR', 'EINVAL'])
+
+/** errno 优先，取不到就退回错误本身的字符串（诊断用，不参与控制流）。 */
+function errnoOf(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return typeof code === 'string' ? code : String(error)
+}
+
+/** 这类错误是否属于「该平台不支持目录 fsync」而非真的写坏了。 */
+export function isToleratedDirectoryFsyncError(error: unknown): boolean {
+  return TOLERATED_DIR_FSYNC_CODES.has(errnoOf(error))
+}
+
+/**
+ * 目录 fsync：把 rename 造成的目录项变更推给磁盘。
+ *
+ * 按 errno 而非 `process.platform` 判断：WSL / Wine 之类环境下平台名并不可靠，
+ * 而 errno 才是真正决定「这个平台支不支持」的信号（issue #26 给的两种建议里，
+ * 按 errno 的那种才是对的）。其余 errno（EIO、ENOSPC……）照旧抛出。
+ */
+export function fsyncDirectory(dirPath: string, fsync: (fd: number) => void = fsyncSync): void {
+  const fd = openSync(dirPath, 'r')
+  try {
+    fsync(fd)
+  } catch (error) {
+    if (!isToleratedDirectoryFsyncError(error)) throw error
+  } finally {
+    closeSync(fd)
+  }
+}
+
 /** Durable at-most-once dispatch. Unknown outcomes are never automatically retried. */
 export class DispatchJournal<TRequest = unknown, TResult = unknown> {
   private entries: Record<string, JournalEntry> = Object.create(null)
   private inFlight = new Map<string, Promise<TResult>>()
+  /** 只由构造期的解析失败置位，见下方 catch；运行期落盘失败不碰它。 */
   private healthy = true
   private readonly maxFileBytes: number
   private readonly capacity: number
@@ -126,7 +187,8 @@ export class DispatchJournal<TRequest = unknown, TResult = unknown> {
       const loaded = this.options.codec.parse(parsed.entries)
       for (const key of Object.keys(loaded)) this.entries[key] = loaded[key]!
     } catch {
-      // 任何不合法都让 journal 降级：宁可拒绝新投递，也不要按错格式续写。
+      // 唯一会把 healthy 拉黑的地方：文件读不出来或不合法。宁可整个进程都拒绝
+      // 投递，也不按一个可能是错的格式续写（续写会污染此后每一次回放）。
       this.healthy = false
     }
   }
@@ -154,8 +216,25 @@ export class DispatchJournal<TRequest = unknown, TResult = unknown> {
       closeSync(fd)
     }
     renameSync(temp, path)
-    const dir = openSync(dirname(path), 'r')
-    try { fsyncSync(dir) } finally { closeSync(dir) }
+    fsyncDirectory(dirname(path), this.options.fsyncFileDescriptor)
+  }
+
+  /**
+   * 落盘一次，失败只报不降级。
+   *
+   * 与 `healthy` 的分工：`healthy` 只由构造期的解析失败置位，运行期的磁盘错误
+   * 不再拉黑整个进程——此前一次 save() 失败就让本进程余下的所有投递永久返回
+   * unknown，直到 DSH 重启（issue #20 / #26）。现在只影响当次投递，下一次
+   * dispatch 会重新尝试。
+   */
+  private persist(): boolean {
+    try {
+      this.save()
+      return true
+    } catch (error) {
+      this.options.log?.('journal 落盘失败，本次投递按未确认处理，下次投递会重新尝试：' + errnoOf(error))
+      return false
+    }
   }
 
   /** 查询既有回执；`request` 交给 codec 的 matches 判定（缺省即不提供 lookup）。 */
@@ -202,8 +281,9 @@ export class DispatchJournal<TRequest = unknown, TResult = unknown> {
     // 先落盘预约再跑上游：进程在两次之间死掉，重启后也能识别「结果未知」。
     const entry: JournalEntry = { fingerprint, createdAt: Number(id.slice(0, 13)), ...codec.reserve(request, id) }
     this.entries[key] = entry
-    try { this.save() } catch {
-      this.healthy = false
+    if (!this.persist()) {
+      // 预约没落盘就不能跑上游。条目**保留**在内存里：save() 可能是在 rename
+      // 之后才抛的，磁盘上或许已经有这条 unknown，抹掉等于把它从表里除名。
       return codec.resultOf({ kind: 'reserve-failed' }, id)
     }
 
@@ -217,7 +297,9 @@ export class DispatchJournal<TRequest = unknown, TResult = unknown> {
         // 上游可能在传输失败前已经接受：条目保持 unknown，绝不自动重试。
         return codec.resultOf({ kind: 'crashed' }, id)
       }
-      try { this.save() } catch { this.healthy = false }
+      // 结果落盘失败不回滚条目：operation 已经跑过，回滚等于把一次可能已生效的
+      // 上游调用从表里除名。下次投递若写成功，会把整表（含本条目）一起写回去。
+      this.persist()
       // 刚跑完的那一次：operation 的结果原样带出，不标 replayed。
       return codec.resultOf({ kind: 'ran', entry, result: ran }, id)
     })()

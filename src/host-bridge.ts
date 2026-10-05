@@ -123,26 +123,33 @@ export class HostBridge {
     deliveryJournalPath?: string,
     scheduleJournalPath?: string,
     forkJournalPath?: string,
+    /** 三个 journal 的落盘失败诊断输出；缺省即静默。不打任何消息体。 */
+    private readonly log?: (message: string) => void,
   ) {
     // 三个实例是同一个 module 的三次配置：条目方言由 codec 决定（prompt 回执 /
     // schedule 结果 / fork 结果带持久化 value），落盘路径各自独立、互不影响。
+    // log 必须在**首次**构造时就带上：openDispatchJournal 是按 path+codec 身份
+    // 缓存的单例，事后补传不会生效。
     this.promptDeliveries = openDispatchJournal({
       path: deliveryJournalPath,
       codec: promptDeliveryCodec,
       joinInFlight: true,
       maxFileBytes: 8 * 1024 * 1024,
+      log: this.log,
     })
     this.scheduleMutations = openDispatchJournal({
       path: scheduleJournalPath,
       codec: scheduleMutationCodec(false),
       joinInFlight: false,
       maxFileBytes: 4 * 1024 * 1024,
+      log: this.log,
     })
     this.forkMutations = openDispatchJournal({
       path: forkJournalPath,
       codec: scheduleMutationCodec(true),
       joinInFlight: false,
       maxFileBytes: 4 * 1024 * 1024,
+      log: this.log,
     })
   }
 

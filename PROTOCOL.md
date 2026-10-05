@@ -782,6 +782,13 @@ deeppilot/setDeviceName(deviceId, customName) -> customName | null
 | E_UNSUPPORTED | 协议版本或能力不支持 |
 | E_INTERNAL | 服务端内部错误 |
 
+`message` 是人类可读的诊断文本，客户端可原样展示，也可按自身需要本地化。两个约定：
+
+- 落到 `E_INTERNAL` 时，`message` 形如 `<可读信息> (<上游错误码>): <真实原因>`。上游把大量内部失败统一包成少数几个码（prompt 准入会包成 `session/agent-busy`），真实原因只存在于其 `details.reason`；括号里的原码与冒号后的原因仅供诊断，**不改变**该码的重试语义——`E_INTERNAL` 依旧不可自动重试。
+- 其余码的 `message` 原样取自上游，不做加工。
+
+Bridge 侧 Host code 到 wire 码的映射是 `src/wire-errors.ts` 的单一属主，逐码有测试冻结。命名空间码（`session/agent-busy`）与旧 host 的扁平写法（`agent-busy`）必须映到同一个 wire 码：只认一套会让另一半落进 `E_INTERNAL`，`E_BUSY` 于是永不出现，客户端的重试判断随之失真。
+
 ## 10. 能力协商与版本策略
 
 - welcome.capabilities 中为 false 的能力，客户端不得调用对应 c2s 帧（服务端将回 E_UNSUPPORTED）。

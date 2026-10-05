@@ -38,12 +38,36 @@ export const WIRE_ERROR_FALLBACK: WireErrorCode = 'E_INTERNAL'
  * 表的取值与迁移前的行为逐码一致（见 tests/wire-errors.test.ts 的对等部分），
  * 即此前各映射链的并集——包括 models 域把 `model-unavailable` 映到
  * `E_NOT_FOUND` 的现行取值。
+ *
+ * 键写的是 DSH 实际抛出的**带命名空间**的码（旧 host 的扁平写法作为兼容别名
+ * 逐条保留，它们同时充当「命名空间换了但尾部没换」时的兜底——查表会先原样命中，
+ * 再剥前缀命中，见 lookupCode）。
+ *
+ * schedule 域例外：定时任务服务（`@deepseek-ai/dsh-schedule`）至今仍抛扁平
+ * snake_case（`schedule_not_found`），不要给它加命名空间。
  */
 export type ErrorDomain = 'session' | 'model' | 'schedule'
 
 const DOMAIN_TABLES: Record<ErrorDomain, Readonly<Record<string, WireErrorCode>>> = {
   // 会话/工作区/目录管理域的 Host 错误码。
   session: {
+    'session/not-found': 'E_NOT_FOUND',
+    'workspace/not-found': 'E_NOT_FOUND',
+    'session/agent-busy': 'E_BUSY',
+    // writer-held 与 agent-busy 同类：会话正被别人占着写，稍后重试有意义。
+    'session/writer-held': 'E_BUSY',
+    'session/conflict': 'E_BUSY',
+    'workspace/session-active': 'E_BUSY',
+    'gateway/bad-request': 'E_PROTOCOL',
+    'session/title-invalid': 'E_PROTOCOL',
+    'session/attachment-invalid': 'E_PROTOCOL',
+    'session/invalid-time-zone': 'E_PROTOCOL',
+    'workspace/invalid-path': 'E_PROTOCOL',
+    'workspace/name-conflict': 'E_PROTOCOL',
+    'workspace/move-invalid': 'E_PROTOCOL',
+    'workspace-file/not-found': 'E_NOT_FOUND',
+    'directory-picker/unavailable': 'E_UNSUPPORTED',
+    // 旧 host 的扁平写法：保留是为了兼容仍在跑的老 DSH。
     'session-not-found': 'E_NOT_FOUND',
     'workspace-not-found': 'E_NOT_FOUND',
     'agent-busy': 'E_BUSY',
@@ -58,12 +82,18 @@ const DOMAIN_TABLES: Record<ErrorDomain, Readonly<Record<string, WireErrorCode>>
   },
   // 模型目录与切换域的 Host 错误码。
   model: {
+    'session/not-found': 'E_NOT_FOUND',
+    'session/agent-busy': 'E_BUSY',
+    'session/writer-held': 'E_BUSY',
+    'session/conflict': 'E_BUSY',
+    'session/model-unavailable': 'E_NOT_FOUND',
+    // 旧 host 的扁平写法。
     'session-not-found': 'E_NOT_FOUND',
     'agent-busy': 'E_BUSY',
     'session-conflict': 'E_BUSY',
     'model-unavailable': 'E_NOT_FOUND',
   },
-  // 定时任务域的 Host 错误码（snake_case 是 Host Schedule 服务的词表）。
+  // 定时任务域的 Host 错误码（snake_case 是 Host Schedule 服务的词表，至今未变）。
   schedule: {
     'schedule_not_found': 'E_NOT_FOUND',
     'delivery_cursor_not_found': 'E_NOT_FOUND',
@@ -84,22 +114,75 @@ const DOMAIN_TABLES: Record<ErrorDomain, Readonly<Record<string, WireErrorCode>>
   },
 }
 
+/**
+ * 一个 Host 失败在 Bridge 侧的形状。
+ *
+ * `details` 是 DSH 的 `RemoteError` 附带的结构化载荷（dsh-typert-protocol 的
+ * `remote-error.d.ts`），键由错误码决定；prompt 准入那一路的 `reason` 装的就是
+ * 被包装掉的真实原因。窄化成只读 `reason` 是因为**只有**这一路会用到它。
+ */
+export interface HostFailure {
+  code: string
+  message?: string
+  readonly details?: { readonly reason?: unknown } | undefined
+}
+
+/**
+ * 剥掉 `namespace/` 前缀：`session/agent-busy` -> `agent-busy`。
+ *
+ * DSH 的 API 层现在抛的是带命名空间的码（`session/agent-busy`、
+ * `workspace/not-found`、`gateway/internal`……），而下面的表一开始只有扁平写法。
+ * 两边对不上时整表失配、一律落进 `E_INTERNAL`，于是 `E_BUSY` 永远出不来——
+ * 而 `E_BUSY` 正是客户端决定「该不该重试」的那个码（issue #26）。
+ */
+export function canonicalHostCode(code: string): string {
+  const slash = code.lastIndexOf('/')
+  return slash === -1 ? code : code.slice(slash + 1)
+}
+
+/** 查表顺序：原样命中优先，其次剥掉命名空间后命中，最后才是兜底。 */
+function lookupCode(domain: ErrorDomain, code: string): WireErrorCode {
+  const table = DOMAIN_TABLES[domain]
+  return table[code] ?? table[canonicalHostCode(code)] ?? WIRE_ERROR_FALLBACK
+}
+
 /** 一个 Host 失败翻译成 Bridge 的失败结果：直接携带 wire 错误码。 */
 export function wireErrorOf(
   domain: ErrorDomain,
-  error: { code: string; message?: string },
+  error: HostFailure,
 ): { ok: false; code: WireErrorCode; message: string } {
+  const code = lookupCode(domain, error.code)
   return {
     ok: false,
-    code: DOMAIN_TABLES[domain][error.code] ?? WIRE_ERROR_FALLBACK,
-    message: error.message ?? error.code,
+    code,
+    message: describeFailure(error, code),
   }
+}
+
+/**
+ * 组装给手机看的那句话。
+ *
+ * DSH 把 prompt 准入的**任意**内部失败包成 `session/agent-busy`，真实原因只留在
+ * `details.reason`（`@deepseek-ai/dsh-api-session-controller` 的 `types/commands.js`
+ * 里那一句 `throw new RemoteError('session/agent-busy', 'prompt rejected', { reason: … })`）。
+ * 插件原先只取 `message`，于是手机端永远只显示笼统的「发送未确认」。
+ *
+ * 只在落到 `E_INTERNAL` 时追加 reason：这类码按定义对客户端没有可执行含义，
+ * 多这一句不改变「该不该重试」的判断，却能让用户和排查者看到真正的原因。已映射
+ * 的码本身已经可执行，保持原样不动。
+ */
+function describeFailure(error: HostFailure, wireCode: WireErrorCode): string {
+  const base = error.message ?? error.code
+  if (wireCode !== WIRE_ERROR_FALLBACK) return base
+  const reason = error.details?.reason
+  if (typeof reason !== 'string' || reason.length === 0) return base
+  return `${base} (${error.code}): ${reason}`
 }
 
 /** 只有一个 Host code（没有附带 message）时取它的 wire 码。 */
 export function wireCodeFor(domain: ErrorDomain, hostCode: string | undefined): WireErrorCode {
   if (hostCode === undefined) return WIRE_ERROR_FALLBACK
-  return DOMAIN_TABLES[domain][hostCode] ?? WIRE_ERROR_FALLBACK
+  return lookupCode(domain, hostCode)
 }
 
 /**
