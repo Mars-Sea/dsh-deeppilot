@@ -29,16 +29,32 @@
 - **Protocol verdict:** no required DeepPilot phone-protocol break. Protocol v2,
   pairing state, and device records are unchanged; already-paired phones need no
   action.
-- **Release verdict (`0.9.2`, shipped 2026-10-04):** `scripts/smoke-live.mts`
-  was run against a live **`dsh-v0.2.1-alpha.1`** web profile and passed with
-  **0 failures**. This is the first live-host verification since the 0.9.1
-  entry, and it retires the gate that entry left open ("pending separate
-  authorization before the `0.9.1` release ships") — on a newer host than the
+- **Release verdict (`0.9.2`, published 2026-10-05, tag `v0.9.2` @ `4b43671`):**
+  shipped to `latest`. Verified on the registry: version present, `dist-tags.latest`
+  moved off `0.9.1`, `gitHead` `4b436715` matches the tag and HEAD, 65 files,
+  and a clean DSH profile install of `dsh-deeppilot@0.9.2` composes with the
+  plugin's three `cordis.patch.yml` entries present and no missing-module error.
+  `scripts/smoke-live.mts` passed with **0 failures** against a live
+  **`dsh-v0.2.1-alpha.1`** web profile — the first live-host verification since
+  the 0.9.1 entry, retiring the gate it left open ("pending separate
+  authorization before the `0.9.1` release ships"), on a newer host than the
   rc.2 that entry contemplated, which is strictly stronger evidence: the
   `0.2.1-alpha.1` source-diff above found zero changed `src/` files across all
   12 peer packages, and the live run agrees. The plugin's own build and type
-  baselines stay pinned to `0.2.0-rc.2`; nothing about the pin changed for this
-  release.
+  baselines stay pinned to `0.2.0-rc.2`; nothing about the pin changed.
+  - **Install caveat users will hit — DSH's release-age policy.** On a clean
+    profile, `dsh plugin add dsh-deeppilot` installed **`0.9.1`**, not the just
+    published `0.9.2`, even though `latest` already pointed at `0.9.2`. DSH
+    deliberately prefers a slightly older release and offers an exact-version
+    path instead; `dsh plugin add dsh-deeppilot@0.9.2` installs the new one.
+    This is expected DSH behaviour, not a publishing failure — do not read the
+    older version in the installer as a broken release.
+  - **Peer-range note for future audits.** `evaluatePluginCompatibility` checks
+    each peer against the *running DSH version*, but `cordis` and `schemastery`
+    are host-vendored third parties and `react` comes from the Web app. Judging
+    those three against a DSH version number reports false mismatches. They are
+    also `optional` in `peerDependenciesMeta`. Confirm installability by
+    composing a real profile, not by iterating the peer table.
 - **Two tracked follow-ups:**
   1. **Schedule documentation is now stale.** Automation tasks became a
      built-in Web capability and `@deepseek-ai/dsh-experimental-schedule-bundle`
@@ -200,6 +216,31 @@ target that can never be satisfied, so a phone retry is pointless — which puts
 in the same class as the other input-shaped Schedule refusals. Without the
 mapping `wireErrorOf` falls through to `WIRE_ERROR_FALLBACK` (`E_INTERNAL`), which
 would tell the client the failure was worth retrying.
+
+### Cross-platform trap found while shipping 0.9.2
+
+CI's `plugin` job hung on `npm test` four times while shipping 0.9.2. Worth
+recording because macOS could never reproduce it and the fix is one line each.
+
+`tests/journal-parity.test.ts` used `join('/proc/definitely/not/writable', …)`
+as its "unwritable path" probe, in two places. `/proc` is a Linux-only pseudo
+filesystem: on macOS the path simply does not exist, so the branch had only ever
+been exercised on macOS and had never run on Linux at all. On Linux, writing
+under `/proc` does not return an error — and because `dispatch-journal`'s
+`save()` is entirely synchronous `fs` calls (`mkdirSync`/`openSync`/
+`writeFileSync`/`fsyncSync`/`renameSync`), a single write blocks the whole event
+loop. Even `setTimeout` stops firing, and node's `--test-timeout` can only report
+a file-level timeout. Both sites now build the unwritable target inside the
+scratch directory (a file-with-a-child shape that yields `ENOTDIR` identically on
+every platform); recorded values are unchanged because all three candidate paths
+returned the same status on macOS.
+
+Two lessons for future audits: the workflow sets no `timeout-minutes`, so a hang
+costs the full 6-hour default before failing — cancel and re-run rather than
+waiting; and reproduce Linux-only behaviour in a container instead of inferring
+it. `docker run --rm --cpus=2 -v $PWD:/app -w /app node:22` matches the runner
+closely enough (2 cores, and the same `v22.23.x` that `node-version: 22` floats
+to).
 
 ### Re-audit procedure used
 
