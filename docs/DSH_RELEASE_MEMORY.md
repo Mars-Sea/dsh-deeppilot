@@ -43,9 +43,9 @@
 
 ### Plugin release verdicts
 
-- **Release verdict (`0.9.4`, prepared 2026-10-10, NOT published):** carries the
-  `projections` adapter fix and the Automation tasks documentation correction
-  described in the 2026-10-09 entry below. `package.json`, both root
+- **Release verdict (`0.9.4`, published 2026-10-10, tag `v0.9.4` @ `e2f77af`):**
+  carries the `projections` adapter fix and the Automation tasks documentation
+  correction described in the 2026-10-09 entry below. `package.json`, both root
   `package-lock.json` version entries, and `tests/apply-baseline.snapshot.json`
   are on `0.9.4`, and `lib/` is regenerated. The full checklist passed locally:
   `npm ci`, 538 unit tests, typecheck, build, the config-schema check against a
@@ -53,9 +53,24 @@
   `npm pack --dry-run` (65 files, 50,916,470 bytes packed). The fix was also
   verified on a live `0.2.1-alpha.2` host against the published `0.9.3` as an
   A/B control (25 pass / 0 fail either way, with the `sessions.projections
-  failed: internal` diagnostic present only on `0.9.3`). Nothing was
-  published, tagged, or pushed; npm `latest` still points at `0.9.3`, so users on
-  `0.2.1-alpha.2` keep hitting the projections defect until this ships.
+  failed: internal` diagnostic present only on `0.9.3`).
+  - **Registry verification after publishing.** `dist-tags.latest` moved off
+    `0.9.3`; `dist.shasum` `85b3c71a802e45e42f5fb1b23444ed2e396d39dc` is
+    byte-identical to the local `npm pack` output at the tag; 65 files,
+    `dist.unpackedSize` 130,789,604. **`gitHead` is `e2f77af`, the tag commit** —
+    the 0.9.3 ordering deviation did not repeat, because the release notes and
+    every other documentation change were committed before the pack. The publish
+    itself needed the maintainer's one-time password, as in 0.9.3; everything up
+    to and after it was done here.
+  - **Clean-profile verification.** A fresh isolated home, built from the shipped
+    Web template and installed with the published `0.2.1-alpha.2` CLI
+    (`dsh plugin --profile verify add dsh-deeppilot@0.9.4`), composed a real
+    profile: `--dump-config` printed the plugin's three rows
+    (`deeppilot-directory-picker-browse`, `…-browse-client`, `deeppilot`) with no
+    missing-module or load error, the installed package's six helper checksums
+    verified, every helper binary embedded `go1.26.9`, and the installed
+    `lib/index.js` carried the projections fix. Only then was the GitHub Release
+    taken out of draft and marked Latest.
   - **The release also had to fix the helper's toolchain and its refresh
     workflow.** CI's `govulncheck` job reported 11 reachable Go standard-library
     vulnerabilities for the pinned `go 1.26.6`; this is time-triggered, not
@@ -316,12 +331,12 @@ the mirror's `signal` is required, so the compiler keeps it that way.
 own, so a dedicated long-lived controller is not warranted; following the
 existing convention in the same file is enough. `lib/index.js` was regenerated.
 
-The fix ships in `0.9.4`, which is prepared but not published (see "Plugin release
-verdicts"); until it is published, a host on `0.2.1-alpha.2` running the
-published `0.9.3` still loses the on-open projection baseline. That was observed
-directly: on a live `0.2.1-alpha.2` host running published `0.9.3` the diagnostic
-appeared, and on the same host version running this build it did not (see "Live
-run on a real `0.2.1-alpha.2` host" under Validation evidence).
+The fix ships in `0.9.4`, published 2026-10-10 (see "Plugin release verdicts").
+A host on `0.2.1-alpha.2` left on the published `0.9.3` still loses the on-open
+projection baseline. That was observed directly: on a live `0.2.1-alpha.2` host
+running published `0.9.3` the diagnostic appeared, and on the same host version
+running this build it did not (see "Live run on a real `0.2.1-alpha.2` host"
+under Validation evidence).
 
 `tests/dsh-api-proxy.test.ts` adds "projection baseline reads pass the
 AbortSignal the Host now requires": a controller stub that calls
