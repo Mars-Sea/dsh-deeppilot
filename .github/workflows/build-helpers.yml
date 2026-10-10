@@ -39,8 +39,16 @@ jobs:
         include:
           - os: ubuntu-latest
             targets: 'linux-amd64 linux-arm64 windows-amd64 windows-arm64'
+            artifacts: |
+              bin/linux-amd64/**
+              bin/linux-arm64/**
+              bin/windows-amd64/**
+              bin/windows-arm64/**
           - os: macos-latest
             targets: 'darwin-arm64 darwin-amd64'
+            artifacts: |
+              bin/darwin-arm64/**
+              bin/darwin-amd64/**
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -52,13 +60,14 @@ jobs:
         env:
           HELPER_TARGETS: ${{ matrix.targets }}
         run: sh scripts/build-all-helpers.sh
+      # Upload only the targets this runner built. Uploading all of bin/ would
+      # ship the checked-out copies of every other target, and merge-multiple
+      # would then let one runner's stale files overwrite another's fresh build.
       - name: Upload binaries
         uses: actions/upload-artifact@v7
         with:
           name: helper-binaries-${{ matrix.os }}
-          path: |
-            bin/
-            !bin/SHA256SUMS
+          path: ${{ matrix.artifacts }}
           if-no-files-found: error
 
   merge:
