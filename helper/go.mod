@@ -1,6 +1,6 @@
 module github.com/Mars-Sea/dsh-deeppilot/helper
 
-go 1.26.6
+go 1.26.9
 
 require tailscale.com v1.102.3
 
