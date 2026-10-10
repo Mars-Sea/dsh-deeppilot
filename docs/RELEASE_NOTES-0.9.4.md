@@ -40,21 +40,30 @@ service through `ctx.get('schedule')`, never declares `schedule` in `inject`,
 and still reports `welcome.capabilities.schedules = false` with `E_UNSUPPORTED`
 when a profile does not mount it.
 
+### Maintenance: the embedded tunnel helper is rebuilt with a patched Go toolchain
+
+CI's `govulncheck` job reported 11 reachable vulnerabilities from the Go
+standard library for the pinned `go 1.26.6` toolchain, which is a toolchain
+patch-level problem rather than a helper defect. `helper/go.mod` now pins
+`go 1.26.9`, and all six platform binaries under `bin/` were rebuilt with it and
+their `bin/SHA256SUMS` refreshed. The helper source is unchanged.
+
 ### Not changed
 
-Protocol v2 is unchanged and already-paired phones need no action. The Funnel
-helpers, relay client, push, widgets, live activities, workspace and schedule
-RPCs, and the resident approval/question client are untouched, as is the
-directory-picker patch layer.
+Protocol v2 is unchanged and already-paired phones need no action. The helper's
+command-line interface, the relay client, push, widgets, live activities,
+workspace and schedule RPCs, and the resident approval/question client are
+untouched, as is the directory-picker patch layer.
 
 ### Verified before publishing
 
 `npm ci`, unit tests (538 passing, including the new regression test), TypeScript
 typecheck, production build, the config-schema check against a real
-`0.2.0-rc.2` CLI, Go helper tests, and the helper binary checksums all pass
-locally; the helper binaries themselves are unchanged. `npm pack --dry-run`
-reports 65 files at `0.9.4`, and `lib/` regenerates with no further diff after
-the build.
+`0.2.0-rc.2` CLI, Go helper tests, and the six helper binary checksums all pass
+locally, and the CI jobs (`plugin`, `helper`, `config-schema`) are green on the
+released commit. `npm pack --dry-run` reports 65 files at `0.9.4`
+(50,916,470 bytes packed), and `lib/` regenerates with no further diff after the
+build.
 
 The fix was confirmed on a real host as well. An isolated profile booted by the
 published `0.2.1-alpha.2` CLI ran the phone-protocol checklist end to end: 25
@@ -101,18 +110,25 @@ DSH 0.2.0 曾把自动化移入可选 bundle
 `ctx.get('schedule')` 惰性解析服务、仍然不把 `schedule` 放进 `inject`，profile 未
 挂载时依旧返回 `welcome.capabilities.schedules = false` 与 `E_UNSUPPORTED`。
 
+### 维护：内嵌隧道 helper 改用打过补丁的 Go 工具链重建
+
+CI 的 `govulncheck` 作业针对钉住的 `go 1.26.6` 报出 11 个可达的 Go 标准库漏洞——这是
+工具链补丁级别的问题，不是 helper 的缺陷。`helper/go.mod` 现在钉 `go 1.26.9`，
+`bin/` 下六个平台二进制都用它重建，并刷新了 `bin/SHA256SUMS`。helper 源码未改动。
+
 ### 未变更
 
-协议 v2 没有变化，已配对的手机无需任何操作。Funnel helper、relay 客户端、推送、
-桌面小组件、实时活动、工作区与定时任务 RPC、常驻审批/提问客户端均未改动，目录选择
-器的补丁层也未改动。
+协议 v2 没有变化，已配对的手机无需任何操作。helper 的命令行接口、relay 客户端、
+推送、桌面小组件、实时活动、工作区与定时任务 RPC、常驻审批/提问客户端均未改动，
+目录选择器的补丁层也未改动。
 
 ### 发布前已验证
 
 `npm ci`、单元测试（538 例通过，含新增回归测试）、TypeScript 类型检查、生产构建、
-针对真实 `0.2.0-rc.2` CLI 的 config schema 检查、Go helper 测试与 helper 二进制
-校验和，均已本地通过；helper 二进制本身没有改动。`npm pack --dry-run` 在 `0.9.4`
-下报告 65 个文件，构建后 `lib/` 重新生成无进一步差异。
+针对真实 `0.2.0-rc.2` CLI 的 config schema 检查、Go helper 测试与六个 helper 二进制
+校验和，均已本地通过；发布提交上的 CI（`plugin`、`helper`、`config-schema`）全绿。
+`npm pack --dry-run` 在 `0.9.4` 下报告 65 个文件（打包 50,916,470 字节），构建后
+`lib/` 重新生成无进一步差异。
 
 修复也在真实宿主上确认过：一个隔离 profile 由发布的 `0.2.1-alpha.2` CLI 启动，跑完
 整套手机协议清单——25 通过 / 0 失败 / 3 跳过（健康检查、TLS SPKI、无效配对码拒绝、

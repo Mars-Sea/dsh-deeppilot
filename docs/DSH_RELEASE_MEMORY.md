@@ -50,12 +50,25 @@
   are on `0.9.4`, and `lib/` is regenerated. The full checklist passed locally:
   `npm ci`, 538 unit tests, typecheck, build, the config-schema check against a
   real `0.2.0-rc.2` CLI, Go helper tests, helper checksums, and
-  `npm pack --dry-run` (65 files, 50,877,415 bytes packed). The fix was also
+  `npm pack --dry-run` (65 files, 50,916,470 bytes packed). The fix was also
   verified on a live `0.2.1-alpha.2` host against the published `0.9.3` as an
   A/B control (25 pass / 0 fail either way, with the `sessions.projections
   failed: internal` diagnostic present only on `0.9.3`). Nothing was
   published, tagged, or pushed; npm `latest` still points at `0.9.3`, so users on
   `0.2.1-alpha.2` keep hitting the projections defect until this ships.
+  - **The release also had to fix the helper's toolchain and its refresh
+    workflow.** CI's `govulncheck` job reported 11 reachable Go standard-library
+    vulnerabilities for the pinned `go 1.26.6`; this is time-triggered, not
+    caused by the release — `0.9.3`'s CI was green on 2026-10-05 with the same
+    helper source. `helper/go.mod` now pins `go 1.26.9`, and the six `bin/`
+    binaries were rebuilt with it. That rebuild only became correct after fixing
+    `.github/workflows/build-helpers.yml`: each build job uploaded the whole
+    `bin/` tree, so every artifact also carried the checked-out copies of the
+    targets its runner never rebuilt, and `merge-multiple` let those stale files
+    overwrite the fresh ones (the first refresh PR mixed two toolchains — only
+    darwin-arm64 embedded `go1.26.9`). The workflow now uploads only the
+    per-matrix target globs; PR #19 then carried all six at `go1.26.9` and was
+    merged as `f0f243b`.
   - **Checklist environment notes for the next release.**
     (a) `~/.npm/_cacache` contains root-owned files on this machine, so `npm view`
     and `npm pack` fail with `EPERM` unless `npm_config_cache` points at a
@@ -63,7 +76,9 @@
     (b) Go's default build cache lives outside the workspace and the file sandbox
     blocks it (`open .../Library/Caches/go-build/...: operation not permitted`,
     reported as `[setup failed]`); point `GOCACHE` at a workspace directory.
-    Neither is a repository defect.
+    (c) `gh` writes its run-log cache under `~/.cache/gh` and fails the same way;
+    point `XDG_CACHE_HOME` at a workspace directory.
+    None of the three is a repository defect.
 - **Release verdict (`0.9.3`, published 2026-10-05, tag `v0.9.3` @ `b85869b`):**
   shipped to `latest`. Verified on the registry: version present, `dist-tags.latest`
   moved off `0.9.2`, 65 files, `dist.shasum` `90f0c665c395a7043eb3689a291cf28c88bc39ab`
