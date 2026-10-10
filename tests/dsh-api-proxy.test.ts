@@ -97,6 +97,32 @@ test('rc.2 history adapter preserves sequence pagination while wrapping events',
   })
 })
 
+test('projection baseline reads pass the AbortSignal the Host now requires', async () => {
+  // DSH 0.2.1-alpha.2 aborts projections before it reads anything, so an omitted
+  // signal loses the entire baseline instead of returning values.
+  const signals: Array<AbortSignal | undefined> = []
+  const ctx = {
+    get: (key: string) => key === 'sessionController'
+      ? {
+        projections: async (_request: unknown, signal: AbortSignal) => {
+          signals.push(signal)
+          signal.throwIfAborted()
+          return { asOfSeq: 7, values: { title: '投影基线' } }
+        },
+      }
+      : undefined,
+  }
+  const proxy = new DshApiProxy(ctx as never)
+
+  const response = await proxy.sessions.projections({ payload: { sessionId: 'session-1' } })
+
+  assert.deepEqual(response, {
+    result: { ok: true, value: { asOfSeq: 7, values: { title: '投影基线' } } },
+  })
+  assert.equal(signals.length, 1)
+  assert.ok(signals[0] instanceof AbortSignal)
+})
+
 test('rc.2 history adapter skips raw pages with no phone message projection', async () => {
   const rawEvents = [
     {

@@ -41,8 +41,15 @@ interface SessionControllerLike {
   prompt(request: Record<string, unknown>, signal: AbortSignal): Promise<{ accepted: true }>
   attachment(request: { sessionId: string; attachmentId: string }): Promise<{ attachment: { mediaType?: string }; data: string }>
   cancel(request: { sessionId: string }): { accepted: true }
-  /** Non-activating projection baseline for one session. */
-  projections(request: { sessionId: string }, signal?: AbortSignal):
+  /**
+   * Non-activating projection baseline for one session.
+   *
+   * The signal is mandatory: DSH 0.2.1-alpha.2 aborts before it reads anything,
+   * so a caller that omits it gets no baseline at all. The bridge's refresh is
+   * fire-and-forget and has no lifetime of its own, so callers pass a signal
+   * that never aborts.
+   */
+  projections(request: { sessionId: string }, signal: AbortSignal):
     Promise<{ asOfSeq: number; values: Record<string, unknown> } | null>
 }
 
@@ -111,12 +118,12 @@ export class DshApiProxy implements ApiProxyLike {
    * Resolve the optional Schedule service lazily, on every read.
    *
    * The bridge is built from a `ctx.inject` on sessionController / connection
-   * / typertGateway, and `schedule` is deliberately NOT in that list: it only
-   * exists when the user enables the optional Automation tasks bundle. On a
-   * DSH 0.2.0 host those three services become ready well before
-   * ScheduleService finishes its own async init, so a value captured here in
-   * the constructor stayed `undefined` for the bridge's whole lifetime and
-   * welcome advertised `schedules=false` even with the bundle mounted.
+   * / typertGateway, and `schedule` is deliberately NOT in that list: it is a
+   * capability the host composition may or may not mount. On a DSH 0.2.0 host
+   * those three services become ready well before ScheduleService finishes its
+   * own async init, so a value captured in the constructor stayed `undefined`
+   * for the bridge's whole lifetime and welcome advertised `schedules=false`
+   * even with the service mounted.
    *
    * Once resolved the controller is kept: services are not torn down and
    * rebuilt underneath a live bridge, so re-resolving per call would be pure
@@ -232,7 +239,7 @@ export class DshApiProxy implements ApiProxyLike {
     rename: async (request) => this.call(() => this.session.rename(request.payload!)),
     cancel: async (request) => this.call(() => this.session.cancel(request.payload!)),
     attachment: async (request) => this.call(() => this.session.attachment(request.payload!)),
-    projections: async (request) => this.call(() => this.session.projections(request.payload!)),
+    projections: async (request) => this.call(() => this.session.projections(request.payload!, new AbortController().signal)),
   }
 
   readonly workspace: ApiProxyLike['workspace'] = {

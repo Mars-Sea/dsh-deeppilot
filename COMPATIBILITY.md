@@ -12,7 +12,7 @@ range before the plugin will install there.
 | Component | Current contract | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | Package engine and CI |
-| DSH CLI and Host API | `>=0.2.0-rc.2 <0.3.0-0` (audited against `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI |
+| DSH CLI and Host API | `>=0.2.0-rc.2 <0.3.0-0` (dev pins `0.2.0-rc.2`; source audits through `0.2.1-alpha.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus an isolated compose with the published 0.2.1-alpha.2 CLI |
 | iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
 
@@ -21,7 +21,7 @@ range before the plugin will install there.
 - The Host adapter uses Session and Workspace controllers, Gateway Remote Events, and `typertGateway.wireStream.open(endpoint, payload, uplink, peer, signal)`. Its in-process carrier passes `undefined` for `uplink` and `peer` and the cancellation signal in argument five.
 - The resident Client sends relative RPC paths such as `api/$events/result`. The in-process transport resolves those paths to a local URL before constructing a Node `Request`; the shared Fetch handler dispatches it without a network request. This is required for iOS approval and question answers to settle at the Gateway.
 - The client settings page binds `configForms.get('deeppilot')` when the service becomes available. The Host reads volatile config references from its profile entry and reconciles transports on `loader/volatile-update`.
-- Typert strict codecs publish `create()` factories. Session opening reads `session.projections` for a complete baseline.
+- Typert strict codecs publish `create()` factories. Session opening reads `session.projections` for a complete baseline; that controller requires a cancellation signal from `0.2.1-alpha.2` on, so the adapter always passes one.
 - The Host adapter retains a stable bridge-facing API so the phone protocol does not depend directly on DSH controller shapes. This adapter is an internal design boundary, not support for an older DSH Host.
 
 ## Separate protocol and data boundaries
@@ -31,28 +31,30 @@ range before the plugin will install there.
 - The plugin's persisted device and Funnel state migration remains separate from DSH API version support. Session logs written by earlier DSH builds are readable only when the current Host's own history reader accepts them; this plugin does not rewrite those logs.
 - An unavailable optional OS facility, transport, or controller disables its dependent capability without crashing the Host.
 
-## Schedules require an optional DSH bundle
+## Schedules ship with the Web composition
 
-DSH 0.2.0 moved automation out of the shipped Web composition. The shipped
-`packages/bundle/web-app/cordis.patch.yml` no longer carries the `time-context`,
-`schedule`, or `ui-schedule` rows; they are supplied by the optional
-`@deepseek-ai/dsh-experimental-schedule-bundle`, which ships switched off and is
-enabled by the user through **Automation tasks** in the plugin manager.
+Reminders need no user action on a current host. DSH 0.2.0 briefly moved
+automation out of the shipped Web composition into the optional
+`@deepseek-ai/dsh-experimental-schedule-bundle`, and the following release
+removed that bundle again: it is listed in `RETIRED_BUNDLES`,
+`@deepseek-ai/dsh-web-app` mounts `schedule` and `ui-schedule` in every Web
+profile, and loading a profile strips the retired entry from
+`dsh.profile.bundles`. The plugin manager no longer shows an **Automation
+tasks** switch, so no profile is expected to enable anything for reminders.
 
-The plugin needs no change for this. It still resolves the service through
+The plugin needed no change for either step. It resolves the service through
 `ctx.get('schedule')`, never declares `schedule` in `inject`, and reports
 `welcome.capabilities.schedules = false` with a stable `E_UNSUPPORTED` for every
-schedule frame when the service is absent. What changes is that a stock 0.2.0
-Host now always takes that degraded path, so the phone tells the user to enable
-Automation tasks instead of reporting a generic capability gap.
+schedule frame when the service is absent. On a Web host the service is mounted,
+so the capability bit is `true` by default; a profile that drops the rows still
+reports `false` and still degrades cleanly.
 
 The capability is resolved lazily rather than captured when the bridge is
 built. The bridge mounts on `sessionController` / `connection` /
-`typertGateway`, all of which become ready before the optional Schedule service
-finishes its own initialization, so a probe taken at that moment would report
-`false` for the bridge's whole lifetime. With the bundle enabled, a live
-0.2.0-rc.1 host advertises `schedules=true` and the schedule
-list/create/history/delete flow passes.
+`typertGateway`, all of which become ready before the Schedule service finishes
+its own initialization, so a probe taken at that moment would report `false` for
+the bridge's whole lifetime. On a live host with the service mounted the bit is
+`true` and the schedule list/create/history/delete flow passes.
 
 ## Configuration migration
 
@@ -61,6 +63,30 @@ The verbose-diagnostics field moved from the top-level `debug` to
 carries the old top-level `debug: true` is accepted but that value is ignored:
 verbose logging must be turned on again from the settings page. No other config
 field changed shape, and the old key is not read anywhere in this version.
+
+## 0.2.1-alpha.2 audit outcome
+
+The source-level audit of `dsh-v0.2.1-alpha.2` against `dsh-v0.2.1-alpha.1`
+(669 commits, 3226 changed files) found the peer set almost untouched — 10 of
+the 12 peer packages have zero changed source files — but one real break
+outside it: `SessionController.projections` now aborts before it reads
+anything, so the adapter's signal-less call lost the entire projection baseline.
+That is fixed here: `src/dsh-api-proxy.ts` passes a signal, its controller
+mirror declares one required, and a regression test fails against the previous
+call form. Install and phone-protocol risk are unchanged — the peer range admits
+`0.2.1-alpha.2`, and protocol v2, pairing state, and device records are
+untouched.
+
+A live `0.2.1-alpha.2` host has now exercised the bridge. An isolated profile
+built from the shipped Web template, booted by the published CLI, passed the
+phone-protocol checklist over the LAN TLS listener — health, SPKI, pairing
+rejection, WSS upgrade, challenge/prove with all six scopes, session and
+workspace RPCs, archive/unarchive, the schedule create/history/delete flow, and
+reconnect replay (25 pass, 0 fail, 3 skipped). Running the published `0.9.3` on
+the same host version instead logged
+`[deeppilot] sessions.projections failed: internal` while still passing every
+step, which is the silent degradation this release fixes. A real model turn, the
+Funnel transport, and a real iPhone are still unverified.
 
 ## 0.2.0-rc.2 audit outcome
 

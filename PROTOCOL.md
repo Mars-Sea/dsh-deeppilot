@@ -902,10 +902,12 @@ updates work through relay mode. System delivery and refresh budgets still apply
 ## Schedule 定时任务扩展（可选 v2 能力）
 
 `welcome.capabilities.schedules=true` 表示 Host 挂载了 DSH Schedule service。
-注意：DSH 0.2.0 起出厂 Web composition 不再内置 Schedule，该 service 由可选
-bundle `@deepseek-ai/dsh-experimental-schedule-bundle` 提供，默认关闭，需用户在
-插件管理中启用「Automation tasks」后 `ctx.get('schedule')` 才可用。因此本能力位
-反映的是实际挂载结果，而非宿主版本——未启用时为 `false`。
+注意：该 service 由宿主组合决定，手机端无需用户先做任何开关操作。DSH 0.2.0 曾把
+它从出厂 Web composition 移出、改由可选 bundle
+`@deepseek-ai/dsh-experimental-schedule-bundle` 提供（默认关闭），但紧接着的版本
+又把该 bundle 退役：`@deepseek-ai/dsh-web-app` 现在在每个 Web profile 中挂载
+`schedule` 与 `ui-schedule`，加载 profile 时会从 `dsh.profile.bundles` 中删除该
+退役条目。因此本能力位反映的是实际挂载结果，而非宿主版本——未挂载时为 `false`。
 所有 Schedule 请求都要求设备 scope `schedule.manage`；旧客户端忽略未知 capability
 和未知帧。没有该能力时请求返回 `E_UNSUPPORTED`。
 

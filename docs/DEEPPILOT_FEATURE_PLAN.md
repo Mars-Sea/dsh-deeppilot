@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | M0 | DSH 依赖、lockfile、兼容性测试和配置 schema 升级 | 真实 DSH CLI/schema 检查、typecheck、build 通过 |
 | M1 | 协议和 Host adapter 设计落地 | `PROTOCOL.md`、TypeScript mirror、授权矩阵、幂等 journal 设计完成 |
-| M2 | 手机端定时任务/提醒 MVP | 创建、列表、更新、删除、历史记录在真实 iPhone + 已启用「自动化任务」的 DSH 上通过 |
+| M2 | 手机端定时任务/提醒 MVP | 创建、列表、更新、删除、历史记录在真实 iPhone + 已挂载 Schedule 的 DSH 上通过 |
 | M3 | 手机端会话分支 MVP | 从消息/轮次创建新会话、旧会话不变、重连和重复请求通过 |
 | M4 | 稳定性与发布 | 安全审计、回归测试、npm pack、真实 DSH web profile 验证完成 |
 
@@ -40,11 +40,12 @@
 
 DSH 负责持久化、定时触发、Session 恢复和 delivery history；DeepPilot 只负责安全的手机控制面和状态展示。
 
-> **前提：DSH 0.2.0 起定时任务不再内置。** 出厂 Web composition 不再挂载
-> `time-context` / `schedule` / `ui-schedule`，该 service 由可选 bundle
-> `@deepseek-ai/dsh-experimental-schedule-bundle` 提供，默认关闭。真实宿主验证
-> 定时任务前，必须先在插件管理中启用「Automation tasks」，否则
-> `ctx.get('schedule')` 为 undefined，只会得到 `E_UNSUPPORTED`。
+> **前提：定时任务由宿主组合决定，手机端不需要开关。** DSH 0.2.0 曾把
+> `time-context` / `schedule` / `ui-schedule` 移出出厂 Web composition，改由可选
+> bundle `@deepseek-ai/dsh-experimental-schedule-bundle` 提供（默认关闭）；紧接着
+> 的版本又把该 bundle 退役，`@deepseek-ai/dsh-web-app` 现在在每个 Web profile 中
+> 挂载 `schedule` 与 `ui-schedule`。宿主未挂载时 `ctx.get('schedule')` 为
+> undefined，只会得到 `E_UNSUPPORTED`。
 
 ### 1.2 Host 适配
 
@@ -257,6 +258,6 @@ Bridge 在成功后：
 2. 先实现 Schedule 的 Host facade、协议、幂等 journal 和服务端测试；
 3. 再实现 Fork 的 Host facade、协议和幂等 journal；
 4. 两个能力都完成后，再修改私有 iOS UI；
-5. 最后做真实 DSH web profile + iPhone 的端到端验证（定时任务需先启用「自动化任务」）。
+5. 最后做真实 DSH web profile + iPhone 的端到端验证。
 
 不建议先做手机 UI 再补 Host 协议，因为 DSH 的 fork 边界和 schedule update conflict 规则会直接影响协议字段和错误处理。
