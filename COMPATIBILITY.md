@@ -135,4 +135,4 @@ The complete audit evidence and re-audit procedure remain in [`docs/DSH_RELEASE_
 
 ## Evidence limits
 
-Unit tests and config schema projection do not prove every network, Mac, Linux, Windows, or iPhone combination. In particular, physical-device performance, signed helper distribution, and production APNs delivery need their own checks. Include the exact DSH version, plugin commit, Node version, OS, connection mode, and sanitized status output when reporting a compatibility issue; never include credentials or message content.
+Unit tests and config schema projection do not prove every network, macOS, Linux, Windows, or iPhone combination. In particular, physical-device performance, signed helper distribution, and production APNs delivery need their own checks. Include the exact DSH version, plugin commit, Node version, OS, connection mode, and sanitized status output when reporting a compatibility issue; never include credentials or message content.

@@ -1,5 +1,5 @@
 # dsh-deeppilot bundle layer.
-# Phone clients cannot interact with a native picker rendered on the Host Mac.
+# Phone clients cannot interact with a native picker rendered on the host computer.
 # Replace dsh-web-app's adaptive picker with the official browse pair while
 # this bundle is composed, so host.listDirectory is available remotely.
 # Removing this bundle restores the lower web-app auto row unchanged.

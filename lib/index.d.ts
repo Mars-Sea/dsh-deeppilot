@@ -1048,7 +1048,7 @@ interface Config {
     maxConnectionsPerSource?: number;
   };
   /**
-   * Offline push (F-9). `apns` sends directly from the Mac with the user's
+   * Offline push (F-9). `apns` sends directly from the computer with the user's
    * Apple credentials. `relay` sends notify projections to an operator-run
    * relay for distributed builds. The device reports its own APNs environment,
    * so development and TestFlight/App Store devices may coexist.

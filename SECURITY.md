@@ -12,7 +12,7 @@ Do not open a public issue containing pairing codes, APNs device tokens, provide
 
 - `/phone/pair` accepts only a short-lived, single-use pairing code and a P-256 public key. The code expires after five minutes and is invalidated after one successful registration.
 - `/phone` upgrades anonymously, then sends a fresh 30-second challenge bound to the stable Host audience. The client proves possession of its registered P-256 private key with ECDSA/SHA-256.
-- The iOS app uses a non-exportable Secure Enclave key on physical devices. The Mac stores only public keys and metadata.
+- The iOS app uses a non-exportable Secure Enclave key on physical devices. The computer stores only public keys and metadata.
 - `GET /phone/health` is intentionally unauthenticated and returns only minimal readiness/version facts.
 - Protocol v1, shared Bearer tokens, query credentials, and `c2s.hello.auth` are not accepted. There is no remote downgrade switch.
 - The server enforces explicit protocol scopes, while the normal settings UI grants the default scope set and exposes only the global connection switch plus per-device deletion. Deleting a device disconnects it immediately.

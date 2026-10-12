@@ -2,7 +2,7 @@
 
 DeepPilot connects directly to the DSH Host controlled by the user. The plugin does not upload complete conversations to a DeepPilot application server.
 
-## Data stored on the Mac
+## Data stored on your computer
 
 By default, runtime state is stored under `$DSH_HOME/deeppilot/`:
 
@@ -10,7 +10,7 @@ By default, runtime state is stored under `$DSH_HOME/deeppilot/`:
 - `devices-v2.json`: paired public keys, fingerprints, scopes, device metadata, revocation/last-seen timestamps, notification preferences, APNs alert registrations, WidgetKit push registrations (a separate token per device used only for content-free widget refresh invalidations), and at most one Live Activity registration per device (activity identifier, session identifier, APNs Live Activity update token, environment, and expiry);
 - `tailscale/`: local state for the optional embedded tsnet node.
 
-The directory is owner-only mode `0700`. The Mac never receives or stores iPhone private signing keys. Pairing codes exist only in plugin memory for up to five minutes and are not written to disk.
+The directory is owner-only mode `0700`. The computer never receives or stores iPhone private signing keys. Pairing codes exist only in plugin memory for up to five minutes and are not written to disk.
 
 The settings report exposes public-key fingerprints, scopes, revocation state, and masked notification diagnostics. It does not expose full APNs tokens, pairing codes, or message bodies.
 

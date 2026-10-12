@@ -420,7 +420,7 @@ tool.end / turn.start / turn.end；其余 kind 为兼容 Host 后续事件投影
 } }
 ```
 
-DeepPilot 的标准 bundle 固定组合 Host 官方 `directory-picker-browse` 双面包，使远程 iPhone 能调用 `directory.list`。Host 不提供该能力时请求返回 `E_UNSUPPORTED`；客户端可在用户明确点击后请求 Mac 系统选择器。取消时 `path=null`：
+DeepPilot 的标准 bundle 固定组合 Host 官方 `directory-picker-browse` 双面包，使远程 iPhone 能调用 `directory.list`。Host 不提供该能力时请求返回 `E_UNSUPPORTED`；客户端可在用户明确点击后请求电脑上的系统选择器。取消时 `path=null`：
 
 ```json
 { "type": "c2s.directory.pick", "id": "d-2", "payload": {} }

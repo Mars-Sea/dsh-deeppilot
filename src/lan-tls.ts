@@ -122,7 +122,7 @@ function inspectCertificate(certPem: string, keyPem: string, now: number): numbe
 }
 
 async function issueCertificate(existingKey: string | undefined, now: number): Promise<{ key: string; cert: string }> {
-  // Back-date slightly so a phone whose clock trails the Mac still accepts a
+  // Back-date slightly so a phone whose clock trails the computer still accepts a
   // certificate issued moments ago.
   const notBeforeDate = new Date(now - 5 * 60_000)
   const notAfterDate = new Date(now + CERT_VALIDITY_MS)
