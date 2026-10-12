@@ -14,11 +14,16 @@
 - 最小化匿名探活响应，不接受 Bearer 或 URL 凭据；
 - 隐私化审计标识、全局连接开关和逐设备删除入口；scope 继续由协议层强制执行。
 
+- TypeScript 与 Swift 测试共用的固定规范化编码/签名向量（`tests/fixtures/auth-vectors.json`），签名分别来自 Node 与 CryptoKit；
+- 畸形请求、连接抖动、重放、挑战过期/被篡改和多来源压力的滥用测试（`tests/auth-hardening.test.ts`）；
+- `devices-v2.json` 丢失后的本机恢复流程（[DEVICE_REGISTRY_RECOVERY.zh-CN.md](./DEVICE_REGISTRY_RECOVERY.zh-CN.md)）。
+
+## 已决定
+
+- 高影响审批响应**不**要求新的本地生物识别/用户在场确认（2026-10-12 决定）。如威胁模型变化（例如手机多人共用）再重新评估。
+
 ## 发布前剩余验证
 
-- 在 TypeScript 与 Swift 测试间共享固定的规范化编码/签名向量；
 - 通过真实 LAN 与 Funnel 验证配对、重连/恢复和逐设备删除；
-- 补充畸形请求、连接抖动、重放和多来源压力测试；
-- 记录 `devices-v2.json` 丢失后的本机恢复流程；
-- 决定高影响审批是否要求新的本地生物识别/用户在场确认；
+- 已认证的 socket 仍会接受第二次 `c2s.auth.prove`，并再回一次 welcome 与重放；门应改为回 `E_PROTOCOL`（以 `todo` 测试跟踪）；
 - 保持依赖扫描与 CodeQL 通过，并在宣称生产可用前签名、公证所有分发 helper。

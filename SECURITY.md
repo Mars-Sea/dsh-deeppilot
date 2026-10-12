@@ -17,6 +17,7 @@ Do not open a public issue containing pairing codes, APNs device tokens, provide
 - Protocol v1, shared Bearer tokens, query credentials, and `c2s.hello.auth` are not accepted. There is no remote downgrade switch.
 - The server enforces explicit protocol scopes, while the normal settings UI grants the default scope set and exposes only the global connection switch plus per-device deletion. Deleting a device disconnects it immediately.
 - The canonical `$DSH_HOME/deeppilot` directory is repaired to mode `0700`. `host-id` and `devices-v2.json` are owner-only.
+- Losing `devices-v2.json`, `host-id` or `lan-tls/` makes every affected phone pair again; see [docs/DEVICE_REGISTRY_RECOVERY.md](./docs/DEVICE_REGISTRY_RECOVERY.md) for what to back up and how to recover.
 - The independent LAN listener (default port `3098`) is TLS-only: the plugin serves a self-signed EC P-256 certificate, and the app pins its SPKI fingerprint delivered inside the pairing QR. There is no trust-on-first-use; a regenerated key forces re-pairing. The private key lives owner-only under `$DSH_HOME/deeppilot/lan-tls/`. Never forward the LAN port to the public Internet; public access should use Funnel HTTPS/WSS.
 - The LAN listener and Funnel helper publish only `/phone`, `/phone/pair`, and `/phone/health`, never the complete DSH Web UI.
 - Logs must never include pairing codes, key material, APNs tokens, or message bodies.
