@@ -146,12 +146,19 @@ jobs:
           const file = join(process.env.RUNNER_TEMP, 'npm-release', `dsh-deeppilot-${version}.tgz`)
           const integrity = `sha512-${createHash('sha512').update(readFileSync(file)).digest('base64')}`
           const get = async (path) => {
-            const response = await fetch(`https://registry.npmjs.org/${path}`, { signal: AbortSignal.timeout(15_000) })
-            assert.ok(response.ok, `读取 npm 发布信息失败（HTTP ${response.status}）`)
+            // 刚发布的版本可能命中发布前缓存的 404；独立查询参数绕过该缓存，
+            // 同时要求重新校验元数据，避免把上传成功误判为发布失败。
+            const url = new URL(path, 'https://registry.npmjs.org/')
+            url.searchParams.set('verify', String(Date.now()))
+            const response = await fetch(url, {
+              signal: AbortSignal.timeout(15_000),
+              headers: { 'cache-control': 'no-cache' },
+            })
+            assert.ok(response.ok, `读取 npm 发布信息失败（${path}，HTTP ${response.status}）`)
             return response.json()
           }
           // 注册表可能短暂延迟可见，重试只读取元数据，不重复上传包。
-          for (let attempt = 1; attempt <= 5; attempt++) {
+          for (let attempt = 1; attempt <= 12; attempt++) {
             try {
               const [pkg, tags] = await Promise.all([
                 get(`dsh-deeppilot/${encodeURIComponent(version)}`),
@@ -165,7 +172,7 @@ jobs:
               console.log(`发布核对通过：dsh-deeppilot@${version}（${tag}），来源证明：${pkg.dist.attestations.url}`)
               break
             } catch (error) {
-              if (attempt === 5) throw error
+              if (attempt === 12) throw error
               console.log(`发布元数据尚未同步，准备第 ${attempt + 1} 次核对`)
               await setTimeout(5_000)
             }

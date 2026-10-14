@@ -115,17 +115,36 @@
 
 ### Plugin release verdicts
 
-- **Release candidate (`0.9.5`, 2026-10-15):** carries the alpha.3 Peer/client
-  compatibility repair, the exact two-host peer policy, cross-language auth
-  vectors and recovery guidance, and the manual OIDC/provenance workflow.
-  The package and both lockfile version entries are `0.9.5`; the apply baseline
-  records that version. Clean install, 562 passing unit tests (zero failures,
-  one existing TODO), typecheck, build, the real pinned-host schema loader,
-  Go tests, all six helper checksums, and package inspection pass locally.
-  The altered-challenge test now mutates the challenge from its own socket,
-  eliminating the timestamp collision, and passes 20 consecutive focused runs.
-  Registry/provenance and clean published-profile checks remain release gates;
-  no physical-iPhone validation is claimed. Notes: `docs/RELEASE_NOTES-0.9.5.md`.
+- **发布结论（`0.9.5`，2026-10-15，`v0.9.5` @ `6517ad7`）：** 包含 alpha.3
+  对端（Peer）与客户端兼容修复、两个宿主精确列举策略、跨语言认证向量与恢复说明，
+  以及手动 OIDC 身份认证与来源证明发布。包与锁文件两处根版本、基线快照一致。
+  - **发布前验证：** 干净依赖安装；562 项单元测试通过、零失败、一项既有待办；
+    类型检查、构建、固定宿主的真实配置模型加载、Go 测试、六个辅助程序校验和与
+    包内容检查通过。挑战篡改测试基于当前连接生成变更值，消除了时间碰撞，连续
+    20 次重点回归通过。发布提交的持续集成（CI）和 CodeQL 代码安全扫描通过。
+  - **注册表与来源证明：** npm 于 `2026-10-14T23:29:29.605Z` 发布该版本，
+    `latest`（稳定分发标签）指向 `0.9.5`。下载压缩包共 50,934,088 字节，
+    SHA1 `6a2f356efa1e48849d9bf713f88cd0fd67c7999c` 与工作流上传记录一致；
+    SHA512 与注册表及来源证明中的包摘要一致。来源证明精确对应 `v0.9.5`、
+    `6517ad7b6d7022afc9b3d81d6779b434282c9c56` 和 `.github/workflows/publish.yml`。
+    `npm audit signatures`（npm 签名审计）通过，包含本插件的注册表签名和来源证明；
+    npm 可信发布者绑定显示 `Valid`（有效）。压缩包发布不依赖可选的 `gitHead`
+    字段来确认源码，使用已验证签名的来源证明提交。
+  - **已发布包安装：** 两个独立的新 DSH 主目录分别使用 `0.2.0-rc.2` 与
+    `0.2.1-alpha.3`，从注册表执行 `dsh plugin --profile verify add dsh-deeppilot@0.9.5`。
+    三条插件配置组合成功，版本为 `0.9.5`，安装路径未引用源码工作区，六个辅助程序
+    校验和全部一致；实际配置模型导入未出现本插件相关错误。两个 Web 模板仍各有
+    四项宿主配置模型错误，与未安装插件的基线完全一致；不把整个模板核对说成全绿。
+  - **真实宿主边界：** 隔离的 alpha.3 冒烟检查为 24 项通过、1 项失败、3 项跳过。
+    失败项是未配置模型账号的全新主目录中，模型目录非空的断言；模型目录 RPC 正常
+    且可路由。模型切换、真实提问和模型触发的审批问答未验证，iPhone 真机未验证。
+    已认证连接重复提交认证证明的既有待办保留。
+  - **发布后缓存核对修正：** [首次发布运行](https://github.com/Mars-Sea/dsh-deeppilot/actions/runs/38653869533)
+    上传成功，末尾核对短暂命中缓存的 404 而失败。独立注册表、摘要、签名及安装
+    核验通过后才公开 [GitHub 发布页](https://github.com/Mars-Sea/dsh-deeppilot/releases/tag/v0.9.5)。
+    后续仓库修正为刷新查询、要求元数据重新校验并最多读取重试 12 次；修正后的
+    只读核对步骤已对真实注册表执行通过。未重跑上传、未修改已发布包或移动版本标签。
+    发布说明：`docs/RELEASE_NOTES-0.9.5.md`。
 
 - **Release verdict (`0.9.4`, published 2026-10-10, tag `v0.9.4` @ `e2f77af`):**
   carries the `projections` adapter fix and the Automation tasks documentation
