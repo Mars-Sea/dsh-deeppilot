@@ -30,13 +30,15 @@
 
 ## 从 npm 安装
 
-当前源码面向 Node.js 22+ 与带 `web` profile 的 **DSH `0.2.x` 系列（`0.2.0-rc.2`
-及以上，低于 `0.3.0`）**。npm 包内置 macOS、Linux、Windows
+当前源码面向 Node.js 22+ 与带 `web` profile 的**两个已审计 DSH 版本**：
+`0.2.0-rc.2`（`latest`/`next` 通道）与 `0.2.1-alpha.3`（`alpha` 通道）。
+DSH 在组合 profile 前会校验插件声明的 peer 范围，且**每次启动都会校验**（不只是
+安装时），因此其他宿主版本会拒绝激活本插件。npm 包内置 macOS、Linux、Windows
 的 amd64/arm64 Funnel helper；可信局域网模式不依赖 helper。
 
-当前工作树接受 `>=0.2.0-rc.2 <0.3.0-0` 范围内的任意 DSH 版本，构建与类型检查针对
-`0.2.0-rc.2`。从此工作树发布新版本前，已发布的旧插件包仍可能带有各自旧的精确
-版本兼容声明。
+当前工作树的 `peerDependencies` 精确列出这两个版本，构建与类型检查针对
+`0.2.0-rc.2`。从此工作树发布新版本前，已发布的旧插件包仍可能带有各自旧的
+兼容声明。
 
 ```sh
 dsh plugin --profile web add dsh-deeppilot

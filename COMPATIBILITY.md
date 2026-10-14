@@ -1,24 +1,30 @@
 # Compatibility
 
-This branch targets the **DSH `0.2.x` line, from `0.2.0-rc.2` onward**. The DSH
-peer dependencies accept `>=0.2.0-rc.2 <0.3.0-0`: any later `0.2.x` host,
-including future release candidates and the eventual `0.2.0` GA, installs
-without a plugin update. The development packages this branch builds and
-typechecks against are pinned to the exact audited release, currently
-`0.2.0-rc.2`. Every `0.1.x` build and any `0.3.0` or later release are outside
-this branch's support scope; a `0.3.x` line requires its own audit and its own
-range before the plugin will install there.
+This branch targets exactly **two DSH releases**: `0.2.0-rc.2`, which the npm
+`latest`/`next` channels point at, and `0.2.1-alpha.3`, which the `alpha` channel
+points at. Both are named in `peerDependencies`; no other version is accepted.
+DSH evaluates that range before composing a profile — on every start, not only on
+install — so a newly published DSH release deactivates this plugin until the
+range is widened deliberately. That is the intended trade: a plugin that cannot
+run on an unaudited host fails visibly instead of misbehaving quietly. The
+decision and the reversal it represents are recorded in
+[`docs/决策记录.md`](./docs/决策记录.md) (章节一), with the supporting audit in
+[`docs/DSH_RELEASE_MEMORY.md`](./docs/DSH_RELEASE_MEMORY.md).
+
+The development packages this branch builds and typechecks against stay pinned
+to the exact release-candidate baseline, currently `0.2.0-rc.2`; the alpha host
+is covered by the isolated compose and live-runs recorded in the release memory.
 
 | Component | Current contract | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | Package engine and CI |
-| DSH CLI and Host API | `>=0.2.0-rc.2 <0.3.0-0` (dev pins `0.2.0-rc.2`; source audits through `0.2.1-alpha.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus an isolated compose with the published 0.2.1-alpha.2 CLI |
+| DSH CLI and Host API | `0.2.0-rc.2 \|\| 0.2.1-alpha.3` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2 and 0.2.1-alpha.3 CLIs |
 | iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
 
 ## DSH interfaces used here
 
-- The Host adapter uses Session and Workspace controllers, Gateway Remote Events, and `typertGateway.wireStream.open(endpoint, payload, uplink, peer, signal)`. Its in-process carrier passes `undefined` for `uplink` and `peer` and the cancellation signal in argument five.
+- The Host adapter uses Session and Workspace controllers, Gateway Remote Events, and `typertGateway.wireStream.open(endpoint, payload, uplink, peer, signal)`. Its in-process carrier passes `undefined` for `uplink`, a live owner/answer Peer for `peer`, and the cancellation signal in argument five. That Peer comes from `connection.createPeer({ principal: { kind: 'owner' }, interactions: 'answer' })` where the Host exposes it, and from the `connection.operator` instance otherwise. The same Peer is named on `fetchHandler.fetch(request, peer)` and the Connection install goes through `installConnection(ctx, { transport, interactions: 'answer' })` when the Client face offers it. alpha.3 requires all three; alpha.2 ignores the extra `fetch` argument, defaults an absent `open` peer to its operator, and ignores the participation.
 - The resident Client sends relative RPC paths such as `api/$events/result`. The in-process transport resolves those paths to a local URL before constructing a Node `Request`; the shared Fetch handler dispatches it without a network request. This is required for iOS approval and question answers to settle at the Gateway.
 - The client settings page binds `configForms.get('deeppilot')` when the service becomes available. The Host reads volatile config references from its profile entry and reconciles transports on `loader/volatile-update`.
 - Typert strict codecs publish `create()` factories. Session opening reads `session.projections` for a complete baseline; that controller requires a cancellation signal from `0.2.1-alpha.2` on, so the adapter always passes one.
@@ -64,6 +70,36 @@ carries the old top-level `debug: true` is accepted but that value is ignored:
 verbose logging must be turned on again from the settings page. No other config
 field changed shape, and the old key is not read anywhere in this version.
 
+## 0.2.1-alpha.3 audit outcome
+
+The source-level audit of `dsh-v0.2.1-alpha.3` against `dsh-v0.2.1-alpha.2`
+(852 commits, 3311 changed files) found the first release on this line that
+breaks the plugin at runtime. One root cause — alpha.3 makes every in-process
+carrier name a `PeerScope` with a `principal`, a `signal`, and an `interactions`
+participation — landed in four places: `wireStream.open`'s `peer` argument became
+required, the `$events` endpoint began requiring `interactions: 'answer'`,
+`ConnectionFetchHandler.fetch` gained a required Peer, and the `node` export
+condition started resolving the Client faces to bundles that export them as ESM
+instead of registering the browser module banner the resident Client's loader
+reads. The failure mode was silent: the resident interaction client did not
+start, so the phone lost approval and question delivery while every other
+capability kept working.
+
+All four are fixed in one call form both hosts accept (see "DSH interfaces used
+here"). The peer range was narrowed to name `0.2.0-rc.2` and `0.2.1-alpha.3`
+explicitly, and protocol v2, pairing state, and device records are untouched, so
+no paired phone needs to re-pair. The live runs behind this verdict are recorded
+in [`docs/DSH_RELEASE_MEMORY.md`](./docs/DSH_RELEASE_MEMORY.md): alpha.3 with the
+unfixed build logs `DSH Remote interaction client unavailable`, alpha.3 with this
+build does not, and alpha.2 still scores the checklist result it did before the
+change.
+
+Two host-side migrations in this release belong to the operator rather than to
+the plugin: a residual `models` key on an `llm-deepseek-account` entry now fails
+that plugin's load, **including an empty array**, and `--from-default-profile`
+now replaces an existing profile directory — its `node_modules` and the user's
+own `cordis.patch.yml` included — instead of leaving it in place.
+
 ## 0.2.1-alpha.2 audit outcome
 
 The source-level audit of `dsh-v0.2.1-alpha.2` against `dsh-v0.2.1-alpha.1`
@@ -105,6 +141,11 @@ history instead of requiring its own `package.json` update before it can
 install the plugin. A source diff is still expected for each new DSH release
 and recorded in `docs/DSH_RELEASE_MEMORY.md`, but a clean result now only
 needs a documentation update, not a peer-range widening.
+
+> **Superseded 2026-10-14.** That open-ended range was narrowed back to the two
+> versions actually audited, `0.2.0-rc.2` and `0.2.1-alpha.3`; see the
+> 0.2.1-alpha.3 outcome above and `docs/决策记录.md` (章节一). The paragraphs in
+> this historical entry describe the policy as it stood on 2026-09-29.
 
 ## 0.2.0-rc.1 audit outcome
 

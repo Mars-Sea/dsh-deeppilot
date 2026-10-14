@@ -40,14 +40,16 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
 - For any DSH release audit or compatibility decision, read and update
   `docs/DSH_RELEASE_MEMORY.md`; keep install, runtime, and phone-protocol risk
   classified separately.
-- The DSH peer range (`package.json` `peerDependencies`) trusts the whole
-  audited 0.2.x line: `>=0.2.0-rc.2 <0.3.0-0` installs on any later 0.2.x host,
-  including future rc's and the eventual 0.2.0 GA, without a manual version
-  bump. This does not remove the audit obligation above — still source-diff
-  and record each new DSH release — it only means a passing audit no longer
-  has to be followed by a `package.json` edit before users can install. Widen
-  the range past `0.3.0-0` only after auditing that release, since a 0.x minor
-  bump is allowed to contain breaking changes under semver.
+- The DSH peer range (`package.json` `peerDependencies`) names exactly the two
+  releases this branch supports: `0.2.0-rc.2` (the npm `latest`/`next` channels)
+  and `0.2.1-alpha.3` (the `alpha` channel). DSH evaluates that range before
+  composing a profile on every start, not only on install, so any other host
+  version refuses to activate the plugin. Widening the list is therefore part of
+  shipping support for a new DSH release: source-diff it, record it in
+  `docs/DSH_RELEASE_MEMORY.md`, then add the version here, in
+  `tests/compatibility-metadata.test.ts`, in `package-lock.json`, and in both
+  READMEs. The policy and the reversal it represents are recorded in
+  `docs/决策记录.md` (章节一).
 
 ### Authorization and completion
 

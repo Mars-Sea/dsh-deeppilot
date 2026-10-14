@@ -11,13 +11,15 @@ const packageJson = JSON.parse(
   devDependencies?: Record<string, string>
 }
 
-// The floor of the audited 0.2.x line: the lowest host version DeepPilot has
-// been source-diffed and smoke-tested against. DSH_PEER_RANGE (below) trusts
-// every later 0.2.x host up to, but excluding, 0.3.0 without a further audit;
-// DSH_BASELINE is only the fixed version this package builds and typechecks
-// against, so it must stay an exact release, never a range.
+// DeepPilot supports exactly the two DSH releases it has been audited against:
+// the current release-candidate channel (`latest`/`next`) and the current alpha
+// channel. DSH runs `evaluatePluginCompatibility` before composing a profile —
+// on every start, not only on install — so every other host version refuses to
+// activate this plugin by design, and a newly published DSH release needs this
+// list widened deliberately. DSH_BASELINE is the fixed version this package
+// builds and typechecks against, so it must stay an exact release, never a range.
 const DSH_BASELINE = '0.2.0-rc.2'
-const DSH_PEER_RANGE = '>=0.2.0-rc.2 <0.3.0-0'
+const DSH_PEER_RANGE = '0.2.0-rc.2 || 0.2.1-alpha.3'
 const DSH_PEERS = [
   '@deepseek-ai/dsh',
   '@deepseek-ai/dsh-api-gateway',
@@ -37,7 +39,7 @@ const HOST_RUNTIME_PEERS = [
   'react',
 ]
 
-test('package metadata declares the audited 0.2.x peer range', () => {
+test('package metadata declares exactly the audited host releases', () => {
   for (const name of DSH_PEERS) {
     assert.equal(packageJson.peerDependencies?.[name], DSH_PEER_RANGE, name)
   }
@@ -46,40 +48,56 @@ test('package metadata declares the audited 0.2.x peer range', () => {
   }
 })
 
-test('the DSH peer range admits the audited 0.2.x line and rejects everything outside it', () => {
+test('the DSH peer range admits both audited hosts and rejects every other version', () => {
   const range = packageJson.peerDependencies?.['@deepseek-ai/dsh']
   assert.ok(range, '@deepseek-ai/dsh peer range present')
   assert.equal(range, DSH_PEER_RANGE)
-  // The floor (DSH_BASELINE) and every later 0.2.x host — future rc's and the
-  // eventual 0.2.0 GA — install without a further audit or a manual version
-  // bump; a real source diff is still expected per DSH release (see
-  // docs/DSH_RELEASE_MEMORY.md), but it no longer gates installability.
-  for (const version of [
-    DSH_BASELINE,
-    '0.2.0-rc.3',
-    '0.2.0-rc.20',
-    '0.2.0',
-    '0.2.1',
-    '0.2.1-rc.1',
-  ]) {
+  // Exactly the two releases this plugin has been source-diffed and smoke-tested
+  // against: the current rc channel and the current alpha channel.
+  for (const version of [DSH_BASELINE, '0.2.1-alpha.3']) {
     assert.equal(semver.satisfies(version, range, { includePrerelease: true }), true, `peer range must admit ${version}`)
   }
-  // 0.1.7-rc.2 (the previous plugin baseline) and every earlier 0.1.x are
-  // outside the audited line. 0.3.0 and its prereleases are the next
-  // audit boundary: minor bumps below 1.0.0 may contain breaking changes,
-  // so they must not install without a deliberate range widening.
+  // Everything else, including versions that merely look close: an earlier or
+  // later alpha of the same line, the eventual GA, the next rc, and every
+  // 0.1.x/0.3.x/1.x release. Widening this list is a deliberate act that
+  // follows an audit, never an automatic consequence of a new DSH tag.
   for (const version of [
     '0.1.6',
     '0.1.7-alpha.2',
-    '0.1.7',
-    '0.1.7-rc.1',
     '0.1.7-rc.2',
     '0.2.0-rc.1',
+    '0.2.0-rc.3',
+    '0.2.0-rc.20',
+    '0.2.0',
+    '0.2.1-alpha.1',
+    '0.2.1-alpha.2',
+    '0.2.1-alpha.4',
+    '0.2.1-rc.1',
+    '0.2.1',
     '0.3.0-rc.1',
     '0.3.0',
     '1.0.0',
   ]) {
     assert.equal(semver.satisfies(version, range, { includePrerelease: true }), false, `peer range must exclude ${version}`)
+  }
+})
+
+test('vendor peers admit the release each audited host vendors', () => {
+  // cordis and schemastery are host-vendored third parties, so DSH's own peer
+  // check ignores them; only npm's install-time peer resolution reads these, and
+  // it runs without `includePrerelease`. Each audited host vendors a different
+  // prerelease, so both are named explicitly.
+  const pinned: [string, string[]][] = [
+    ['@deepseek-ai/cordis', ['4.0.4', '4.0.5-alpha.2']],
+    ['@deepseek-ai/schemastery', ['3.18.4', '3.18.5-alpha.2']],
+  ]
+  for (const [name, versions] of pinned) {
+    const range = packageJson.peerDependencies?.[name]
+    assert.ok(range, `${name} peer range present`)
+    for (const version of versions) {
+      assert.equal(semver.satisfies(version, range, { includePrerelease: true }), true, `${name} peer must admit ${version}`)
+    }
+    assert.equal(semver.satisfies('9.9.9', range, { includePrerelease: true }), false, `${name} peer must reject an unaudited major`)
   }
 })
 

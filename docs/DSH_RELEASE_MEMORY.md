@@ -5,6 +5,78 @@
 
 ## Current decision
 
+- **Audited release:** `dsh-v0.2.1-alpha.3` (official release page:
+  <https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-alpha.3>),
+  published to npm 2026-10-14T13:32:15Z on the `alpha` dist-tag. It is **not**
+  `latest`; `latest`/`next` still point at `0.2.0-rc.2`. Baseline commit
+  `2fbf4359b82fb94c03dcce0b831660d87f12ea5c`, compared against alpha.2's
+  `d743267388641bc76f17c45ce8b4c231aed1d32c` (**852 commits, 3311 changed files,
+  120,978 insertions, 16,632 deletions**).
+- **Comparison baseline:** `dsh-v0.2.1-alpha.2` (the previous audited tag).
+- **Plugin runtime verdict: four confirmed breaks with one root cause — the
+  alpha.3 Peer model — and the resident interaction client does not start.**
+  **Fixed in this audit; see "The fix" below.**
+  This release makes every in-process carrier name a `PeerScope`
+  (`principal` / `signal` / `interactions`) explicitly; nothing defaults to the
+  operator any more. The four landing points, each with its own evidence:
+
+  | # | Upstream change | Plugin seam | Evidence |
+  | --- | --- | --- | --- |
+  | 1 | `TypertGatewayWireStream.open`'s 4th parameter `peer` is required; `assertPeerLive()` reads `peer.signal.aborted` before anything else | `src/dsh-remote-interactions.ts:180` passes `undefined, undefined` | Reproduced against the published bundles: alpha.2 returns normally, alpha.3 throws `TypeError: Cannot read properties of undefined (reading 'signal')` |
+  | 2 | `$events` additionally requires `peer.interactions === 'answer'` (`requireInteractions`) | same call | Reproduced: a peer with `interactions: 'none'` gets `gateway/interactions-forbidden`; a full owner/answer peer passes on **both** versions |
+  | 3 | `ConnectionFetchHandler.fetch(request, peer)` now takes a required Peer | `src/dsh-remote-interactions.ts:204` calls `fetchHandler.fetch(request)` | `lib/types/rpc.d.ts` declares `peer: PeerScope` required, "never defaulted" |
+  | 4 | `./client` gained `node`/`browser` conditions; Node now resolves `lib/client.node.js`, which carries **no** `window.__ModuleLoader__.load` banner | `loadClientFaces()` (`src/dsh-remote-interactions.ts:117`) builds its module table from that banner | `grep -c __ModuleLoader__` is 0 in `client.node.js`, 1 in `client.browser.js` and 1 in alpha.2's `client.js` |
+
+  A fifth, latent one: `installConnection` derives
+  `interactions ?? (location === undefined ? 'none' : 'answer')`, and the
+  plugin's Node context has no `location`, so `apply(ctx)` alone always selects
+  `'none'`. Passing an explicit Peer is not enough by itself — the install call
+  must name `interactions: 'answer'` too.
+- **Failure mode is degradation, not a crash — but only partly contained.**
+  `src/dsh-api-proxy.ts:316` wraps `startDshRemoteInteractions` in `try/catch`
+  and logs `[deeppilot] DSH Remote interaction client unavailable`. Breaks 3 and
+  4 surface while the resident client is being assembled, so they land in that
+  catch. Whether break 1/2 (the Gateway opens its Remote Events generation
+  asynchronously) also lands there is **not confirmed** — an uncaught rejection
+  there would be fatal under Node's default `--unhandled-rejections=throw`.
+  The phone loses approval/question delivery either way.
+- **Fix direction (verified compatible with both hosted versions):** build one
+  owner/answer Peer (`new Peer(ownerCtx, { principal: { kind: 'owner' },
+  interactions: 'answer' })`, falling back to `connection.operator` on alpha.2)
+  and name it in every carrier call — alpha.2 ignores a second `fetch` argument
+  and defaults an absent `open` peer to the operator, so one call form serves
+  both. `loadClientFaces` additionally has to accept the Node bundle's named
+  exports when the banner did not fire; both shapes export `apply`/`inject`
+  (`installConnection`/`transportError` are extra on Node).
+- **Install verdict: the peer range now names this release explicitly.** It moved
+  from the open-ended `>=0.2.0-rc.2 <0.3.0-0` to `0.2.0-rc.2 || 0.2.1-alpha.3`
+  across all ten `@deepseek-ai/dsh*` peers, and the two vendor peers widened to
+  `~4.0.4 || ~4.0.5-alpha.1` and `~3.18.4 || ~3.18.5-alpha.1`. Because DSH
+  evaluates that range on every start, the next DSH release deactivates this
+  plugin until the list is widened deliberately — see `docs/决策记录.md`
+  (章节一, 条目2), which records this as a reversal of the 2026-09-29 policy.
+  The published CLI composed the plugin's patch cleanly before the change (see
+  the 2026-10-14 entry). The plugin's own `lib/client.js` shape was not
+  re-verified against the alpha.3 client-modules scanner.
+- **Protocol verdict: no phone-protocol change.** Protocol v2, pairing state,
+  and device records are untouched by this release; no phone needs to re-pair.
+- **Two host-side migrations this machine must apply** (independent of the
+  plugin): `~/.dsh/profiles/web/cordis.patch.yml` carries
+  `llm-deepseek-account.config.models: []`, and alpha.3 throws on any residual
+  `models` key — **including an empty array** (`resolveAccountOptions`). Also
+  `dsh --profile <name> --from-default-profile <template>` now *replaces* an
+  existing profile directory (it deletes the old `node_modules` and
+  `cordis.patch.yml`); the audit procedure recorded below used that flag.
+- **Capability gaps, not regressions:** the `contextBreakdown` projection was
+  reshaped (`nodes[]` → `systems[]` + `surfaceTokens` + `claim`, stateVersion
+  5→6) and the plugin forwards it by key, so the phone may render empty values;
+  the model catalog shrank (account routes return only the version-gated
+  `offered` subset, pi-ai routes without a resolvable key return `[]`); and
+  `CLIENT_UPGRADE_REQUIRED` / `MODEL_UNSUPPORTED` are new codes with no mapping
+  in `src/wire-errors.ts` yet.
+
+### Previous decision — `dsh-v0.2.1-alpha.2`
+
 - **Audited release:** `dsh-v0.2.1-alpha.2` (official release page:
   <https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-alpha.2>),
   published to npm 2026-10-09T08:18:00Z on the `alpha` dist-tag. It is **not**
@@ -221,6 +293,224 @@
   out of the shipped Web composition. See "Automation is now an optional
   bundle" below. The plugin needs no code change; the phone's copy now points
   at the bundle.
+
+## 2026-10-14 — audit of `dsh-v0.2.1-alpha.3`
+
+### Scope and method
+
+Compared `dsh-v0.2.1-alpha.2...dsh-v0.2.1-alpha.3` (**852 commits, 3311 changed
+files, 120,978 insertions, 16,632 deletions**) by fetching the new tag into the
+existing blobless clone (`.audit-dsh-alpha2`, whose HEAD was already the alpha.2
+audit's target SHA `d7432673`), then `git diff --name-status` and per-path
+content diffs into `.audit-alpha3/diffs/`. Four parallel read-only passes
+covered `packages/api` + `apps/cli` + `packages/typert` + `packages/settings` +
+`vendor`, `packages/client/{connection,locale,ui-settings,ui-slots}` +
+`packages/boot` + `packages/bundle`, `packages/{credentials,subagent,session,
+schedule}`, and `packages/{core,host,skill,llm}`. All **14** upgrade guides
+added by this release (under `docs/upgrade-guide/v0.2.0-rc.2/`,
+`v0.2.1-alpha.1/`, `v0.2.1-alpha.2/`) were read in Chinese in full.
+
+The alpha.2 audit's lesson — judge the seams reached through `ctx.get`, not just
+the peer list — is what caught this one: the peer list is *not* where the breaks
+are. `@deepseek-ai/dsh-api-remote-access` is new, `packages/schedule/schedule`
+has **zero** changed source files, and the peer packages' own exported surfaces
+moved far less than the carrier contracts around them.
+
+### The four confirmed breaks
+
+Every one is the same root cause: alpha.3 makes the Peer explicit. `PeerScope`
+(`@deepseek-ai/dsh-typert-protocol`) gained required `principal`, `signal`, and
+`interactions`; `client/connection` added a `Peer` class and deleted
+`OperatorPeer`; the Gateway deleted `operatorPeer()` and its
+`request.peer ?? this.operatorPeer()` fallback.
+
+Reproduction used the **published** bundles, the same technique as the alpha.2
+`projections` break, with the plugin's exact argument list
+(`open('$events', payload, undefined, peer, signal)`):
+
+```sh
+# .audit-alpha3/repro-peer-contract.mjs, against
+#   alpha.2: ~/.npm/_npx/b5c6312874079fe8/node_modules/@deepseek-ai/dsh-api-gateway/lib/index.js
+#   alpha.3: .audit-alpha3/cli-install/node_modules/@deepseek-ai/dsh-api-gateway/lib/index.js
+# A. peer = undefined                       (what the plugin sends today)
+alpha.2: 未抛错
+alpha.3: 抛错 TypeError: Cannot read properties of undefined (reading 'signal')
+# B. peer = { principal: owner, signal, interactions: 'none' }
+alpha.2: 未抛错
+alpha.3: 抛错 TypertGatewayError: $events: forwarded Remote events require interactions=answer
+# C. peer = { principal: owner, signal, interactions: 'answer' }
+alpha.2: 未抛错
+alpha.3: 未抛错
+```
+
+Break 4 was settled by reading the shipped artifacts rather than by inference:
+`@deepseek-ai/dsh-client-connection`'s `./client` now maps `node` →
+`lib/client.node.js`, and that file contains **zero** `__ModuleLoader__`
+occurrences while `client.browser.js` and alpha.2's `client.js` each contain
+one. `loadClientFaces` builds its module table *only* from that banner, so on
+Node the table stays empty. Both shapes export `apply` and `inject`, which is
+what makes a banner-optional fallback possible.
+
+### The fix
+
+One call form serves both audited hosts, because alpha.2 ignores a second
+`fetch` argument and defaults an absent `open` peer to the operator Peer it
+holds:
+
+- `src/dsh-remote-interactions.ts` mints one Peer through
+  `connection.createPeer({ principal: { kind: 'owner' }, interactions: 'answer' })`
+  and falls back to `connection.operator` on a Host without that entry point.
+  The same Peer is named on `fetch` and on `wireStream.open`.
+- The Connection install prefers the explicit
+  `installConnection(ctx, { transport, interactions: 'answer' })`, because
+  `apply(ctx)` cannot name the participation and therefore always selects
+  `'none'` for this caller; `apply` remains the fallback for a host that predates
+  the installer.
+- `loadClientFaces` accepts a Node bundle's named exports when the browser
+  banner did not register them. A banner registration still wins, because the
+  bundle's own internal `require()` resolves against it.
+
+Six regression tests in `tests/dsh-wire-stream-contract.test.ts` pin the
+contract: the operator fallback, the alpha.3 `createPeer` request shape and the
+Peer reaching `wireStream.open`, both installer branches, and both module-table
+branches. The file fails against the previous call form — verified by restoring
+the source and re-running (1 failure) — and passes after the fix.
+
+### Peer range narrowed to the two audited hosts
+
+By explicit user direction the DSH peer range stopped being open-ended:
+`>=0.2.0-rc.2 <0.3.0-0` became `0.2.0-rc.2 || 0.2.1-alpha.3` across all ten
+`@deepseek-ai/dsh*` peers, with `@deepseek-ai/cordis` widened to
+`~4.0.4 || ~4.0.5-alpha.1` and `@deepseek-ai/schemastery` to
+`~3.18.4 || ~3.18.5-alpha.1`. The two vendor peers are outside DSH's own peer
+check — it reads only `@deepseek-ai/dsh` and `@deepseek-ai/dsh-*` — so their
+ranges matter only to npm's install-time resolution, which runs without
+`includePrerelease`; naming both vendored prereleases keeps a clean install on
+either host. `devDependencies` stay pinned to `0.2.0-rc.2`.
+
+The consequence is deliberate: `evaluatePluginCompatibility` runs before a
+profile is composed on every start, so the next DSH release will refuse to
+activate this plugin until the list is widened by an audit. That reversal of the
+2026-09-29 policy is recorded in `docs/决策记录.md` (章节一, 条目2).
+`tests/compatibility-metadata.test.ts` now asserts both admissions, fifteen
+rejections, and the two vendor ranges.
+
+### Host-side changes with no plugin impact
+
+`packages/schedule/schedule/**` has no changed source; the schedule error-code
+table is identical, so `src/wire-errors.ts`'s twelve mappings (including
+`subagent_session → E_PROTOCOL`) stay correct. No session-log format migration
+exists — `session-format*`, `v0-to-v1`…`v3-to-v4`, `session-persistence`,
+`session-projection*`, `session-log-deepseek` changed only their version and
+locale files — so phone history rendering is unaffected. The subagent descriptor
+is still version 3. `host/webserver`'s `port` widening, the macOS directory
+picker, the PTC call registry, and the new `job/registered` / `job/settled`
+events are all unreachable or safely skipped by this plugin (`projectEvent`'s
+`default: return null`). Settings surfaces are unchanged at the contract level:
+`ui-settings`'s `settings.section` slot has the same SHA as alpha.2, and
+`configForms.get()` kept its name. The Web composition still mounts
+`schedule`/`ui-schedule`, and `directory-picker` is still disabled in place, so
+the plugin's three `cordis.patch.yml` rows still land.
+
+### Validation evidence
+
+- **Config schema on the published CLI:** isolated `DSH_HOME`, `dsh
+  --profile deeppilot-audit --from-default-profile sdk-minimal
+  --dump-config-schema --patch cordis.patch.yml` against
+  `@deepseek-ai/dsh@0.2.1-alpha.3` → exit 0, 179,851 bytes, the plugin entry at
+  `/37` reports `status: 'schema'` with `configRef: #/$defs/config24`, all seven
+  volatile assertions pass, no `deeppilot`-attributed diagnostic, and the only
+  warning is the `sdk-minimal` template's own missing `directory-picker` row.
+- **Web composition:** the same CLI composed a real Web profile with the plugin
+  patch → **1225 rows versus 1214 without it**, the plugin's three rows present
+  at `deeppilot-directory-picker-browse` / `…-browse-client` / `deeppilot`, and
+  zero `unrecognized Loader tree carrier` entries on either side.
+- **Plugin unit tests:** `npx tsx --test tests/*.test.ts` → **562 tests, 561
+  pass, 0 fail, 1 todo**, including the six new contract tests. `npm run
+  typecheck`, `npm run build`, and `npm run check:config-schema` (against the
+  pinned `0.2.0-rc.2` CLI) all pass with regenerated `lib/`.
+- **Live A/B on a real `0.2.1-alpha.3` host — the evidence that matters.** An
+  isolated `DSH_HOME` profile built from the shipped Web template and linked to
+  this working tree booted under the published alpha.3 CLI (`--port 3180`; the
+  default 3080 was already held by this machine's own Host). The **unfixed**
+  `0.9.4` build printed
+  `[deeppilot] DSH Remote interaction client unavailable:
+  @deepseek-ai/dsh-typert-registry/client Client bundle returned no exports`
+  and the fixed build printed no such line. The checklist itself scored
+  **23 pass / 1 fail / 4 skipped in both runs** — see the blind spot below.
+- **The regression checklist does not cover this seam.** `scripts/smoke-live.mts`
+  scored identically before and after the fix, because the resident Client it
+  exercises is only reachable through the approval/question waterfall, and step
+  10 is skipped without `--interactions`. The observable difference is the Host
+  log line and the phone's approval/question delivery, not a checklist step. A
+  future revision should assert on that diagnostic directly.
+- **Backward compatibility, same working tree:** the same profile booted under
+  the published `0.2.1-alpha.2` CLI (`--port 3181`) scored **25 pass / 0 fail /
+  0 warn / 3 skipped** with no interaction-client diagnostic — the same result
+  the alpha.2 audit recorded, so the fix does not regress the host users run
+  today.
+- **One checklist difference between the two host versions is real.**
+  `模型目录可读` passes on alpha.2 and fails on alpha.3 in the same isolated
+  home (`0 provider / 0 model, routable=true`): this release stops listing a
+  pi-ai route before its credential resolves and returns only the version-gated
+  subset for the account route. The home has no model credential, so the phone's
+  model list is empty there. That is the documented behavior change, not a
+  plugin defect.
+- **Artifact inspection:** the `node`/`browser` conditional exports and the
+  banner counts above were read from the installed alpha.3 packages, not from
+  the diff.
+
+### Host-side migrations this machine must apply
+
+Neither is a plugin defect, and neither is fixed by the plugin change:
+
+1. **`llm-deepseek-account`'s retired `models` key.**
+   `~/.dsh/profiles/web/cordis.patch.yml:77-79` sets `models: []`.
+   `resolveAccountOptions` throws for *any* own `models` key
+   (`llm-deepseek-account: models is no longer configurable…`), and the
+   upstream test pins `[{ models: [] }, /models is no longer configurable/]`.
+   The empty array is not exempt. The `desktop` profile's row carries no
+   `config` and is unaffected. Whether the throw takes the whole Host down or
+   only retires that route was **not** measured — the guide says the account
+   models stop appearing either way.
+2. **`--from-default-profile` now replaces.** It stages a fresh copy over the
+   target and deletes the previous directory, including `node_modules` and the
+   user's own `cordis.patch.yml`. The re-audit procedure below and the alpha.2
+   entry's schema command both use that flag; from now on it must be pointed at
+   a scratch name.
+
+Checked and **not** required: Azure provider rename (no `azure` /
+`azure-openai-responses` key exists under `~/.dsh/profiles`), credential-file
+extra keys (the file's top level is already `version`/`refs`/`records`), and
+the stored-credential precedence flip (no `refs` name is exported in the shell,
+and the stored value won precedence over `.env` on both sides of the change).
+
+### Still unverified
+
+- Whether breaks 1 and 2 surface inside `dsh-api-proxy.ts`'s catch or escape it
+  as an unhandled rejection — the Gateway opens its Remote Events generation
+  asynchronously, after `startDshRemoteInteractions` has already returned.
+- Whether an old profile that predates `@deepseek-ai/dsh-api-remote-access`
+  still gets the row (the shipped Web template does; `dsh-base` carries it).
+- How the reshaped `contextBreakdown` renders on iOS, and what the phone shows
+  for the unmapped `CLIENT_UPGRADE_REQUIRED` / `MODEL_UNSUPPORTED` codes.
+- Whether the plugin's own `lib/client.js` (banner shape, `dsh.client.inject`,
+  `platform: web`) is still accepted by alpha.3's client-modules scanner; that
+  scanner lives in `packages/client/modules` and `packages/client/web`, which
+  were not read in full.
+
+### Re-audit procedure used
+
+Fetch the new tag into the existing blobless clone at `.audit-dsh-alpha2`
+(`git fetch --filter=blob:none --no-tags origin
+'+refs/tags/<tag>:refs/tags/<tag>'`, ~3 s), slice
+`git diff --name-status` per package, and write each slice's content diff to a
+file before parallel reading — blobless clones fetch blobs on demand, so one
+`git diff` per region is far cheaper than many small reads. Reproduce a
+suspected carrier break against the **published** `lib/` bundles with a stub
+`this`, as above, rather than trusting either the diff or the release notes.
+`npm --cache <workspace dir>` is still required; `~/.npm/_cacache` holds
+root-owned files and fails `npm view` with `EPERM`.
 
 ## 2026-10-09 — audit of `dsh-v0.2.1-alpha.2`
 

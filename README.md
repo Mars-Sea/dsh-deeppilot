@@ -32,15 +32,18 @@ Host on your own computer and does not replace or modify the DSH Web UI.
 
 ## Install from npm
 
-This source checkout targets Node.js 22+ and the **DSH `0.2.x` line, `0.2.0-rc.2`
-or later** (up to, but excluding, `0.3.0`), with a `web` profile. The package
-includes Funnel helpers for macOS, Linux, and Windows on amd64/arm64;
-trusted-LAN mode does not require the helper.
+This source checkout targets Node.js 22+ and the two DSH releases it has been
+audited against — `0.2.0-rc.2` (the `latest`/`next` channels) and `0.2.1-alpha.3`
+(the `alpha` channel) — with a `web` profile. DSH checks a plugin's declared peer
+range before composing a profile, on every start rather than only on install, so
+any other host version refuses to activate this plugin. The package includes
+Funnel helpers for macOS, Linux, and Windows on amd64/arm64; trusted-LAN mode
+does not require the helper.
 
-The current working tree accepts any DSH release in `>=0.2.0-rc.2 <0.3.0-0`
-and is built/typechecked against `0.2.0-rc.2`. A previously published plugin
-package may still carry its own older, exact-pinned compatibility declaration
-until a release is made from this tree.
+The current working tree names exactly those two versions in
+`peerDependencies` and is built/typechecked against `0.2.0-rc.2`. A previously
+published plugin package may still carry its own older compatibility
+declaration until a release is made from this tree.
 
 ```sh
 dsh plugin --profile web add dsh-deeppilot
