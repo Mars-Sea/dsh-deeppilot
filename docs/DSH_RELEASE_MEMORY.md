@@ -115,6 +115,18 @@
 
 ### Plugin release verdicts
 
+- **Release candidate (`0.9.5`, 2026-10-15):** carries the alpha.3 Peer/client
+  compatibility repair, the exact two-host peer policy, cross-language auth
+  vectors and recovery guidance, and the manual OIDC/provenance workflow.
+  The package and both lockfile version entries are `0.9.5`; the apply baseline
+  records that version. Clean install, 562 passing unit tests (zero failures,
+  one existing TODO), typecheck, build, the real pinned-host schema loader,
+  Go tests, all six helper checksums, and package inspection pass locally.
+  The altered-challenge test now mutates the challenge from its own socket,
+  eliminating the timestamp collision, and passes 20 consecutive focused runs.
+  Registry/provenance and clean published-profile checks remain release gates;
+  no physical-iPhone validation is claimed. Notes: `docs/RELEASE_NOTES-0.9.5.md`.
+
 - **Release verdict (`0.9.4`, published 2026-10-10, tag `v0.9.4` @ `e2f77af`):**
   carries the `projections` adapter fix and the Automation tasks documentation
   correction described in the 2026-10-09 entry below. `package.json`, both root

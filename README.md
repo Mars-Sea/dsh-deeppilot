@@ -86,30 +86,20 @@ DeepPilot state under `$DSH_HOME/deeppilot/`.
 
 ## Publishing (maintainers)
 
-Release from this branch only after validating against DSH `0.2.0-rc.2`:
+采用可信发布（Trusted Publishing）：GitHub Actions（GitHub 工作流）通过 OIDC
+身份认证发布，并生成来源证明（Provenance），无需长期 npm 发布令牌。
 
-1. Bump `version` in `package.json` and in the root `""` entry of
-   `package-lock.json`, then run `npm test && npm run typecheck && npm run build`
-   and inspect `npm pack --dry-run --json`. The compatibility metadata test
-   enforces the audited DSH peer range and the exact development dependency
-   version.
-2. Commit the release and push it. `npm publish` runs `prepack` (build) and
-   `prepublishOnly` (test + typecheck) automatically.
-3. Publish pre-releases without touching `latest`:
+1. 同步包版本与锁文件版本，按 `AGENTS.md` 完成发布验证；提交、推送并等待
+   持续集成（CI）通过。
+2. 从已合入 `main` 的发布提交创建附注标签 `v<版本>`，准备英文与简体中文的
+   GitHub Release（发布页）草稿。
+3. 经用户授权后，在该版本标签上手动运行 `publish.yml`。稳定版使用
+   `latest`（稳定分发标签），预发布版使用 `alpha`（预发布分发标签）。
+4. 核对 npm 版本、分发标签、包完整性与来源证明，并在全新 DSH 配置中安装验证，
+   然后公开 GitHub 发布草稿。
 
-   ```sh
-   npm publish --tag alpha
-   ```
-
-   After a successful publish, verify the dist tag and install the package in
-   a DSH `0.2.0-rc.2` profile before pointing users at it.
-4. Tag the release commit `vX.Y.Z` and prepare a GitHub Release
-   (English + 简体中文 notes) that links this README section.
-5. Publish stable releases with `npm publish --tag latest`, which moves
-   `latest` to the new version. Stable releases must never be published
-   with `--tag alpha`.
-
-Never run `npm publish` from a copy that still has an older version.
+工作流不会因推送标签自动发布。npm 网站绑定、手动命令及首次发布的验证边界见
+[npm 可信发布说明](./docs/NPM_PUBLISHING.md)。
 
 
 ## Connection and privacy

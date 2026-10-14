@@ -1,6 +1,6 @@
 {
   "name": "dsh-deeppilot",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "DeepPilot companion plugin for DeepSeek Harness: use DSH from a native iPhone app over an authenticated, direct connection to your own computer.",
   "repository": {
     "type": "git",
@@ -61,6 +61,7 @@
     "SKILL.md",
     "SECURITY.md",
     "docs/DSH_RELEASE_MEMORY.md",
+    "docs/NPM_PUBLISHING.md",
     "docs/SECURITY_ROADMAP.md",
     "docs/SECURITY_ROADMAP.zh-CN.md",
     "docs/DEVICE_REGISTRY_RECOVERY.md",

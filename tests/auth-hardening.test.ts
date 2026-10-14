@@ -123,16 +123,22 @@ test('an expired challenge is refused even with a valid signature', async (t) =>
 test('a challenge field altered by the client fails even when re-signed over the altered value', async () => {
   const host = await makeConnection()
   try {
-    const challenge = challengeOf(host.ws)
-    const alterations: Array<[string, Partial<AuthProofFields>]> = [
-      ['nonce', { nonce: 'x'.repeat(challenge.nonce.length) }],
-      ['audience', { audience: 'deeppilot:somebody-else' }],
-      ['issuedAt', { issuedAt: challenge.issuedAt + 1 }],
-      ['expiresAt', { expiresAt: challenge.expiresAt + 60_000 }],
+    const alterations: Array<[
+      keyof ReturnType<typeof challengeOf>,
+      (challenge: ReturnType<typeof challengeOf>) => Partial<AuthProofFields>,
+    ]> = [
+      ['nonce', (challenge) => ({ nonce: `${challenge.nonce}-altered` })],
+      ['audience', (challenge) => ({ audience: `${challenge.audience}:altered` })],
+      ['issuedAt', (challenge) => ({ issuedAt: challenge.issuedAt + 1 })],
+      ['expiresAt', (challenge) => ({ expiresAt: challenge.expiresAt + 60_000 })],
     ]
-    for (const [label, change] of alterations) {
+    for (const [label, alter] of alterations) {
       const ws = openSibling(host)
       const own = challengeOf(ws)
+      // 每个连接独立签发挑战；沿用首个连接的时间加 1 毫秒，可能恰好等于
+      // 后续连接的原始时间，导致所谓篡改输入实际上仍然合法。
+      const change = alter(own)
+      assert.notEqual(change[label], own[label], `${label}: 测试必须确实篡改当前连接的挑战`)
       // The signature is genuine for the altered tuple: only the server-side
       // comparison against the challenge it issued can reject this.
       ws.receive(proveFrame(host.identity, proofFields(host.identity, own, change)))

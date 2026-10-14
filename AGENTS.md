@@ -93,8 +93,12 @@ release commit, npm package, Git tag, and GitHub Release must all agree.
    annotated `vX.Y.Z` tag from that exact commit.
 3. Prepare the GitHub Release as a draft. Its notes must contain an English
    section and a Simplified Chinese section describing the same changes.
-4. Run `npm publish` when authorized. If the user has reserved publication for
-   themselves, provide the verified package and command for that manual step.
+4. 获授权后，在匹配的版本标签上手动运行 `.github/workflows/publish.yml`，
+   通过 OIDC 身份认证完成 npm 可信发布并生成来源证明（Provenance）。
+   稳定版使用 `latest`（稳定分发标签），预发布版使用 `alpha`（预发布分发标签）；
+   npm 绑定与操作步骤见 `docs/NPM_PUBLISHING.md`，决策见 `docs/决策记录.md` 三之2。
+   不在 `main` 上运行后另行检出标签，以免来源证明的提交与实际源码不同。
+   若用户保留自行发布，提供该文档中的已核对手动命令。
 5. Verify the registry version, dist-tag, package metadata, and a clean DSH
    profile install. Publish the prepared GitHub Release only after npm is
    installable, so the in-app update link never leads users to an unavailable

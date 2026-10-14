@@ -1,0 +1,173 @@
+name: npm 可信发布
+run-name: npm 发布 ${{ inputs.version }}（${{ inputs.dist_tag }}）
+
+# 手动运行版本标签本身，保证来源证明中的提交与实际打包源码一致。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '待发布版本，必须与运行标签 v<版本> 一致，例如 0.9.5'
+        required: true
+        type: string
+      dist_tag:
+        description: '分发标签：稳定版用 latest，预发布版用 alpha'
+        required: true
+        default: latest
+        type: choice
+        options:
+          - latest
+          - alpha
+
+permissions:
+  contents: read
+
+# 同一个包的发布串行执行，避免并发更新分发标签，也不取消正在上传的版本。
+concurrency:
+  group: npm-publish-dsh-deeppilot
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'Mars-Sea/dsh-deeppilot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      NPM_DIST_TAG: ${{ inputs.dist_tag }}
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+    steps:
+      - name: 校验手动运行的版本标签
+        run: |
+          if [[ "$GITHUB_REF_TYPE" != tag || "$GITHUB_REF" != "refs/tags/v$RELEASE_VERSION" ]]; then
+            echo '请在对应的 v<版本> 标签上手动运行，版本输入必须与标签一致。' >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: 安装支持 OIDC 身份认证的 npm
+        run: npm install --global npm@11.21.0
+
+      - name: 安装锁定的依赖
+        run: npm ci
+
+      - name: 校验版本、仓库与源码提交
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { execFileSync } from 'node:child_process'
+          import { readFileSync } from 'node:fs'
+          import semver from 'semver'
+
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
+          const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'))
+          const version = process.env.RELEASE_VERSION
+          const tag = process.env.NPM_DIST_TAG
+          assert.equal(semver.valid(version), version, '版本必须为规范的语义化版本')
+          assert.equal(semver.parse(version).build.length, 0, '发布版本不能含构建元数据')
+          assert.equal(pkg.name, 'dsh-deeppilot', '待发布包名称不一致')
+          assert.equal(pkg.version, version, '包版本与输入版本不一致')
+          assert.equal(lock.name, pkg.name, '锁文件包名称不一致')
+          assert.equal(lock.version, version, '锁文件版本不一致')
+          assert.equal(lock.packages[''].name, pkg.name, '锁文件根包名称不一致')
+          assert.equal(lock.packages[''].version, version, '锁文件根包版本不一致')
+          assert.equal(pkg.repository.url, 'git+https://github.com/Mars-Sea/dsh-deeppilot.git', '包仓库与可信发布仓库不一致')
+          assert.equal(pkg.publishConfig.access, 'public', '来源证明要求公开发布包')
+          assert.equal(tag, semver.prerelease(version) ? 'alpha' : 'latest', '稳定版必须使用 latest，预发布版必须使用 alpha')
+          const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim()
+          assert.equal(git('rev-parse', 'HEAD'), process.env.GITHUB_SHA, '源码提交与工作流提交不一致')
+          assert.equal(git('rev-parse', `${process.env.GITHUB_REF}^{commit}`), process.env.GITHUB_SHA, '版本标签与源码提交不一致')
+          assert.equal(git('cat-file', '-t', process.env.GITHUB_REF), 'tag', '发布必须使用附注标签')
+          git('merge-base', '--is-ancestor', 'HEAD', 'refs/remotes/origin/main')
+          console.log(`版本与源码校验通过：${version}，分发标签：${tag}`)
+          NODE
+
+      - name: 检查生产依赖安全性
+        run: npm audit --omit=dev --audit-level=high
+      - name: 运行插件测试
+        run: npm test
+      - name: 检查类型
+        run: npm run typecheck
+      - name: 构建插件
+        run: npm run build
+      - name: 校验已提交的构建产物
+        run: git diff --exit-code -- lib
+      - name: 校验 DSH 配置加载
+        run: npm run check:config-schema
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: helper/go.mod
+          cache: false
+      - name: 运行辅助程序测试
+        working-directory: helper
+        run: go test ./...
+      - name: 校验内置辅助程序校验和
+        working-directory: bin
+        run: sha256sum -c SHA256SUMS
+
+      - name: 检查待发布包内容
+        run: npm pack --dry-run --json
+      - name: 生成待发布压缩包
+        run: |
+          mkdir -p "$RUNNER_TEMP/npm-release"
+          npm pack --pack-destination "$RUNNER_TEMP/npm-release"
+          git diff --exit-code -- lib package.json package-lock.json
+
+      # 来源证明在此工作流生成；发布已检查的压缩包，避免再次执行构建脚本。
+      - name: 使用 OIDC 身份认证与来源证明发布
+        run: |
+          npm publish "$RUNNER_TEMP/npm-release/dsh-deeppilot-$RELEASE_VERSION.tgz" \
+            --ignore-scripts --provenance --access public --tag "$NPM_DIST_TAG" \
+            --registry https://registry.npmjs.org
+
+      - name: 核对发布版本、包完整性与来源证明
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { createHash } from 'node:crypto'
+          import { readFileSync } from 'node:fs'
+          import { join } from 'node:path'
+          import { setTimeout } from 'node:timers/promises'
+
+          const version = process.env.RELEASE_VERSION
+          const tag = process.env.NPM_DIST_TAG
+          const file = join(process.env.RUNNER_TEMP, 'npm-release', `dsh-deeppilot-${version}.tgz`)
+          const integrity = `sha512-${createHash('sha512').update(readFileSync(file)).digest('base64')}`
+          const get = async (path) => {
+            const response = await fetch(`https://registry.npmjs.org/${path}`, { signal: AbortSignal.timeout(15_000) })
+            assert.ok(response.ok, `读取 npm 发布信息失败（HTTP ${response.status}）`)
+            return response.json()
+          }
+          // 注册表可能短暂延迟可见，重试只读取元数据，不重复上传包。
+          for (let attempt = 1; attempt <= 5; attempt++) {
+            try {
+              const [pkg, tags] = await Promise.all([
+                get(`dsh-deeppilot/${encodeURIComponent(version)}`),
+                get('-/package/dsh-deeppilot/dist-tags'),
+              ])
+              assert.equal(pkg.version, version, '注册表中的版本不一致')
+              assert.equal(tags[tag], version, '分发标签未指向本次发布版本')
+              assert.equal(pkg.dist.integrity, integrity, '注册表中的压缩包完整性不一致')
+              assert.ok(pkg.dist.attestations?.url, '注册表未返回来源证明地址')
+              assert.equal(pkg.dist.attestations?.provenance?.predicateType, 'https://slsa.dev/provenance/v1', '注册表未返回预期的来源证明类型')
+              console.log(`发布核对通过：dsh-deeppilot@${version}（${tag}），来源证明：${pkg.dist.attestations.url}`)
+              break
+            } catch (error) {
+              if (attempt === 5) throw error
+              console.log(`发布元数据尚未同步，准备第 ${attempt + 1} 次核对`)
+              await setTimeout(5_000)
+            }
+          }
+          NODE

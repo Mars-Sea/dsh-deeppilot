@@ -30,6 +30,13 @@ model is `src/protocol.ts`. The private iOS client mirrors that contract.
 Protocol changes require an explicit versioning and compatibility review; do
 not change wire fields as an incidental refactor.
 
+## npm 可信发布
+
+发布工作流使用 OIDC 身份认证与来源证明（Provenance），仅手动运行。
+从已经合入 `main` 的发布提交创建附注版本标签后，在该标签上运行工作流；
+不要在默认分支上运行后另行检出标签。完整验证、npm 网站绑定与调度命令见
+[npm 可信发布说明](./docs/NPM_PUBLISHING.md)。发布前仍需用户授权具体版本。
+
 ## Source layout
 
 The project is one npm package with internal modules grouped by responsibility:
