@@ -10,16 +10,40 @@
 import { Context } from '@deepseek-ai/cordis'
 import * as Cordis from '@deepseek-ai/cordis'
 
+/**
+ * One Peer admitted to the Host. DSH names it on every in-process carrier call
+ * from 0.2.1-alpha.3 on; the Host's own operator Peer stands in before that.
+ */
+export interface HostPeerLike {
+  readonly principal: { readonly kind: string }
+  readonly signal: AbortSignal
+  readonly interactions: 'answer' | 'none'
+}
+
 interface FetchHandlerLike {
-  fetch(request: Request): Promise<Response>
+  /** `peer` is required from alpha.3 on and ignored by earlier hosts. */
+  fetch(request: Request, peer: HostPeerLike | undefined): Promise<Response>
 }
 
 interface HostConnectionLike {
   createSharedFetchHandler(channel: '/api'): FetchHandlerLike
+  /**
+   * alpha.3's only entry point that can name both the principal and the
+   * forwarded-event participation. Absent before it, where the service instead
+   * holds the operator Peer every call speaks for.
+   */
+  createPeer?(options: { principal: { kind: 'owner' }; interactions: 'answer' | 'none' }): HostPeerLike
+  operator?: HostPeerLike
 }
 
 interface HostWireStreamLike {
-  open(endpoint: string, payload: unknown, uplink: undefined, peer: undefined, signal: AbortSignal): Promise<AsyncIterable<unknown>>
+  open(
+    endpoint: string,
+    payload: unknown,
+    uplink: undefined,
+    peer: HostPeerLike | undefined,
+    signal: AbortSignal,
+  ): Promise<AsyncIterable<unknown>>
 }
 
 interface HostGatewayLike {
@@ -52,8 +76,41 @@ interface ClientTypertLike {
   }
 }
 
+/** Carrier inputs the explicit Connection installer accepts on both audited hosts. */
+interface ClientConnectionInstallOptionsLike {
+  transport: ClientTransportHooksLike
+  interactions: 'answer' | 'none'
+}
+
 interface ClientPluginModule {
   apply(ctx: Context): void
+  /**
+   * Explicit installer, present on both audited hosts. Without it the carrier
+   * can only arrive through the process global `apply()` reads, and the
+   * forwarded-event participation cannot be named at all.
+   */
+  installConnection?(ctx: Context, options: ClientConnectionInstallOptionsLike): void
+}
+
+/**
+ * Install the Connection service on the resident Client.
+ *
+ * alpha.3 selects `interactions: 'none'` for any caller that supplies no page
+ * location, and that mode forbids the forwarded-event stream this resident
+ * client exists to answer. Only the explicit installer can name the
+ * participation, so it takes precedence; `apply` stays for a host older than
+ * the installer, reading the carrier from the process global set around it.
+ */
+export function installResidentConnection(
+  connection: ClientPluginModule,
+  ctx: Context,
+  transport: ClientTransportHooksLike,
+): void {
+  if (typeof connection.installConnection === 'function') {
+    connection.installConnection(ctx, { transport, interactions: 'answer' })
+    return
+  }
+  connection.apply(ctx)
 }
 
 export interface RemoteApprovalRequest {
@@ -114,6 +171,24 @@ function pluginModule(value: unknown, specifier: string): ClientPluginModule {
   return value as unknown as ClientPluginModule
 }
 
+/**
+ * Register one loaded Client face when the browser banner did not.
+ *
+ * alpha.3 resolves these specifiers through the `node` export condition to a
+ * bundle that exports the face as ordinary ESM and never calls
+ * `window.__ModuleLoader__.load`, while earlier hosts only ship the banner
+ * shape. A banner registration wins, because it is what the bundle's own
+ * internal `require()` calls resolve against; the ESM namespace is the fallback.
+ */
+export function adoptClientModule(
+  modules: Map<string, unknown>,
+  specifier: string,
+  loaded: unknown,
+): void {
+  const id = specifier.replace(/\/client$/, '')
+  if (!modules.has(id)) modules.set(id, loaded)
+}
+
 async function loadClientFaces(): Promise<ClientFaces> {
   clientFaces ??= (async () => {
     const modules = new Map<string, unknown>([['@deepseek-ai/cordis', Cordis]])
@@ -137,7 +212,9 @@ async function loadClientFaces(): Promise<ClientFaces> {
         '@deepseek-ai/dsh-typert-registry/client',
         '@deepseek-ai/dsh-client-connection/client',
         '@deepseek-ai/dsh-api-gateway/client',
-      ]) await import(specifier)
+      ]) {
+        adoptClientModule(modules, specifier, await import(specifier))
+      }
     } finally {
       if (previousWindow === undefined) delete loaderGlobal.window
       else loaderGlobal.window = previousWindow
@@ -170,14 +247,33 @@ function createAgentScope(ctx: Context, identity: string): Context {
   })
 }
 
+/**
+ * Mint the Peer every in-process carrier call speaks for.
+ *
+ * alpha.3 requires a Peer on `fetch` and on `wireStream.open`, and refuses a
+ * forwarded-event stream unless that Peer declares `interactions: 'answer'`.
+ * Its connection service therefore grows `createPeer`, the only entry point
+ * that can name the principal and the participation together. Before that the
+ * service holds one operator Peer and defaults every absent Peer to it, so that
+ * instance is the drop-in answer. A host with neither yields undefined, which
+ * only the pre-alpha.3 carrier accepts.
+ */
+function createHostPeer(connection: HostConnectionLike): HostPeerLike | undefined {
+  if (typeof connection.createPeer === 'function') {
+    return connection.createPeer({ principal: { kind: 'owner' }, interactions: 'answer' })
+  }
+  return connection.operator
+}
+
 function inProcessStream(
   gateway: HostGatewayLike,
   endpoint: string,
   payload: unknown,
   signal: AbortSignal,
+  peer: HostPeerLike | undefined,
 ): AsyncIterable<unknown> {
   return (async function* () {
-    const source = await gateway.wireStream.open(endpoint, payload, undefined, undefined, signal)
+    const source = await gateway.wireStream.open(endpoint, payload, undefined, peer, signal)
     yield* source
   })()
 }
@@ -201,10 +297,11 @@ export async function startDshRemoteInteractions(
   const faces = await loadClientFaces()
 
   const client = new Context()
+  const peer = createHostPeer(connection)
   const fetchHandler = connection.createSharedFetchHandler('/api')
   const transport: ClientTransportHooksLike = {
-    fetch: (input, init) => fetchHandler.fetch(inProcessRemoteRequest(input, init)),
-    openStream: (endpoint, payload, signal) => inProcessStream(gateway, endpoint, payload, signal),
+    fetch: (input, init) => fetchHandler.fetch(inProcessRemoteRequest(input, init), peer),
+    openStream: (endpoint, payload, signal) => inProcessStream(gateway, endpoint, payload, signal, peer),
     ownsHost: true,
   }
 
@@ -218,7 +315,7 @@ export async function startDshRemoteInteractions(
     const previousTransport = transportGlobal.__DSH_TRANSPORT__
     transportGlobal.__DSH_TRANSPORT__ = transport
     try {
-      faces.connection.apply(client)
+      installResidentConnection(faces.connection, client, transport)
     } finally {
       if (previousTransport === undefined) delete transportGlobal.__DSH_TRANSPORT__
       else transportGlobal.__DSH_TRANSPORT__ = previousTransport
