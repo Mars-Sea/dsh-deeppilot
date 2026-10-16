@@ -32,15 +32,17 @@ Host on your own computer and does not replace or modify the DSH Web UI.
 
 ## Install from npm
 
-This source checkout targets Node.js 22+ and the two DSH releases it has been
-audited against — `0.2.0-rc.2` (the `latest`/`next` channels) and `0.2.1-alpha.3`
-(the `alpha` channel) — with a `web` profile. DSH checks a plugin's declared peer
-range before composing a profile, on every start rather than only on install, so
-any other host version refuses to activate this plugin. The package includes
-Funnel helpers for macOS, Linux, and Windows on amd64/arm64; trusted-LAN mode
-does not require the helper.
+This source checkout targets Node.js 22+ and the three DSH releases it has been
+audited against — `0.2.0-rc.2` (the `latest`/`next` channels) and the `alpha`
+channel releases `0.2.1-alpha.3` and `0.2.1-alpha.4` — with a `web` profile. DSH
+checks a plugin's declared requirements before composing a profile, on every
+start rather than only on install, so any other host version refuses to activate
+this plugin. From DSH `0.2.1-alpha.4` on, that check reads `engines.dsh` and
+ignores `peerDependencies`; older hosts know only the peer range, so both name
+the same three releases. The package includes Funnel helpers for macOS, Linux,
+and Windows on amd64/arm64; trusted-LAN mode does not require the helper.
 
-The current working tree names exactly those two versions in
+The current working tree names exactly those three versions in `engines.dsh` and
 `peerDependencies` and is built/typechecked against `0.2.0-rc.2`. A previously
 published plugin package may still carry its own older compatibility
 declaration until a release is made from this tree.

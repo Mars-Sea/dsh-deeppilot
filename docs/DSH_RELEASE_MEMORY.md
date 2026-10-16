@@ -3,7 +3,71 @@
 > This is the durable audit record for DeepPilot's public DSH plugin. Re-audit
 > the next DSH release instead of assuming that an rc upgrade is runtime-safe.
 
-## Current decision
+## Current decision — `dsh-v0.2.1-alpha.4`
+
+- **Audited release:** `dsh-v0.2.1-alpha.4` (official release page:
+  <https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-alpha.4>),
+  published to npm 2026-10-15T13:08:08Z on the `alpha` dist-tag. It is **not**
+  `latest`; `latest`/`next` still point at `0.2.0-rc.2`, exactly as at alpha.3.
+- **Comparison baseline:** `dsh-v0.2.1-alpha.3` (the previous audited tag).
+- **Plugin runtime verdict: no break, and no `src/` change was needed.** Eight of
+  the ten peer packages ship a byte-identical `lib/` tree; only their
+  `package.json` `version` fields moved. That set includes `dsh-api-gateway`,
+  where alpha.3's first two breaks lived, and all three Client faces the resident
+  interaction client loads (`dsh-typert-registry/client`,
+  `dsh-client-connection/client`, `dsh-api-gateway/client`). Every alpha.3 fix
+  therefore still holds unchanged.
+- **Only `dsh-api-remotes` changed in code, additively.** One new Remote Events
+  entry (`plugin-market/changed`) and the rename of `IncompatiblePlugin.peers` to
+  `requirements`. The plugin reads neither: it subscribes to no Remote Events
+  entry of that name, and its own phone-wire frame registry is a separate
+  vocabulary from DSH Remote Events. Its `lib/client.js` shows a 750-line diff
+  that normalises to zero contract changes — the bulk is `TYPERT_REMOTE$N`
+  renumbering plus `sourceLocation` line drift from the one inserted remote.
+- **Two packages exist for the first time** — `@deepseek-ai/dsh-plugin-market`
+  and `@deepseek-ai/dsh-experimental-plugin-market-bundle` — behind this
+  release's custom plugin index sources. Neither is a dependency of this plugin,
+  the plugin does not name either in `inject`, and the bundle is a purely
+  additive entry in `dsh-app-boot`'s default bundle list.
+- **Activation verdict: one break, and it is the release's own stated
+  migration.** alpha.4 changed the compatibility rule so that a plugin's own
+  `engines.dsh` range **decides alone and `peerDependencies` are ignored**
+  whenever that field is present; only a manifest without `engines.dsh` falls
+  back to the old peer evaluation. This plugin declared no `engines.dsh`, so it
+  kept the peer path, and its exact two-version peer list rejected
+  `0.2.1-alpha.4` — the plugin would not have activated on that host.
+- **Evidence: reproduced against the published bundles, not inferred.** The audit
+  ran each host's own published `evaluatePluginCompatibility` (alpha.3 and
+  alpha.4 installed into separate isolated directories) against this plugin's
+  real `package.json`, over one candidate list. Before any edit, both hosts
+  admitted `0.2.0-rc.2` and `0.2.1-alpha.3` and both refused `0.2.1-alpha.4`,
+  reporting all ten peers unmet. With the new `engines.dsh` range in place, both
+  hosts admit all three audited releases; alpha.4 reports a **single**
+  `engines.dsh` requirement instead of ten peers when it refuses; and
+  `0.2.1-alpha.2`, `0.2.1-alpha.5`, `0.2.1`, and `0.3.0` are still refused.
+  alpha.3 ignores `engines.dsh` entirely — the field did not exist yet — and
+  keeps deciding on `peerDependencies`, which is why both declarations must name
+  the same list.
+- **Install verdict: the two declarations now agree.** `engines.dsh` and all ten
+  `@deepseek-ai/dsh*` peers name `0.2.0-rc.2 || 0.2.1-alpha.3 || 0.2.1-alpha.4`,
+  mirrored in `tests/compatibility-metadata.test.ts`, `package-lock.json`, both
+  READMEs, `COMPATIBILITY.md`, `AGENTS.md`, and the local `docs/决策记录.md`
+  (章节一, 条目3). The dev pins and `DSH_BASELINE` stay at the exact
+  `0.2.0-rc.2` this branch builds and typechecks against.
+- **Vendor peers need no widening.** Both hosts still vendor `cordis
+  4.0.5-alpha.2` and `schemastery 3.18.5-alpha.2`; neither package published a
+  `dsh-0-2-1-alpha-4` dist-tag, and the existing `~4.0.5-alpha.1` /
+  `~3.18.5-alpha.1` ranges already admit them.
+- **Protocol verdict: no phone-protocol change.** Protocol v2, pairing state, and
+  device records are untouched by this release; no phone needs to re-pair.
+- **Unrelated to this plugin, recorded for completeness:** the release also
+  brought per-model reasoning levels for custom API models, discovery and
+  installation from custom plugin index sources, a command/argument input fix, an
+  Office file delivery change, a Developer Tools reload fix, lower Linux command
+  startup overhead, and failed-command status reporting. None of them touches a
+  surface this plugin calls.
+
+### Previous decision — `dsh-v0.2.1-alpha.3`
 
 - **Audited release:** `dsh-v0.2.1-alpha.3` (official release page:
   <https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-alpha.3>),
@@ -324,6 +388,137 @@
   out of the shipped Web composition. See "Automation is now an optional
   bundle" below. The plugin needs no code change; the phone's copy now points
   at the bundle.
+
+## 2026-10-15 — audit of `dsh-v0.2.1-alpha.4`
+
+`dsh-v0.2.1-alpha.4` reached npm on 2026-10-15T13:08:08Z, roughly 24 hours after
+alpha.3, with the GitHub release following at 13:40:02Z. It is a small release —
+two features, five fixes, and one compatibility-policy change — and
+`latest`/`next` still point at `0.2.0-rc.2`.
+
+### Method
+
+This audit established the change surface from **released artifacts before
+reading any source**, rather than from the release notes, because those notes are
+under 2 KB and all four of alpha.3's breaks had been invisible in its notes.
+Every `@deepseek-ai/dsh*` peer package was fetched from npm at both
+`0.2.1-alpha.3` and `0.2.1-alpha.4`, unpacked into a scratch tree, and compared
+file by file. The one large diff was then re-compared after normalising
+`TYPERT_REMOTE$N` renumbering and `sourceLocation` line/column drift, so that
+mechanical churn could not hide a contract change.
+
+### Change surface
+
+- **Eight of the ten peer packages carry a byte-identical `lib/` tree**:
+  `dsh-api-gateway`, `dsh-client-connection`, `dsh-client-locale`,
+  `dsh-client-ui-settings`, `dsh-client-ui-slots`, `dsh-settings`,
+  `dsh-typert-protocol`, `dsh-typert-registry`. Only their `package.json`
+  `version` fields moved. That set includes every module alpha.3 broke the
+  plugin through.
+- **`dsh-api-remotes`** gained one Remote Events entry (`plugin-market/changed`),
+  renamed `IncompatiblePlugin.peers` to `requirements`, and added a
+  `pluginMarket` remote. Its `lib/client.js` diff spans 750 lines but normalises
+  to zero contract changes — `TYPERT_REMOTE$N` renumbering, `sourceLocation`
+  drift, and one rewritten `productAnalytics/report` description.
+- **`dsh-app-boot`** rewrote the compatibility evaluator (below) and appended
+  `@deepseek-ai/dsh-experimental-plugin-market-bundle` to its default bundle
+  list, which is additive to `DEFAULT_BUNDLES`.
+- **`dsh-plugin-manager`** carried the same `peers` → `requirements` rename
+  through `IncompatiblePlugin` and its diagnostics.
+- **Two packages are new at this release**: `@deepseek-ai/dsh-plugin-market` and
+  `@deepseek-ai/dsh-experimental-plugin-market-bundle`. Neither resolves at
+  alpha.3. Neither is a dependency of this plugin, and neither appears in its
+  `inject`.
+- The `dsh` CLI's own ten `@deepseek-ai/dsh*` dependencies all moved to alpha.4;
+  the vendor pins did **not** move. Both hosts still vendor `cordis
+  4.0.5-alpha.2` and `schemastery 3.18.5-alpha.2`, and neither vendor published a
+  `dsh-0-2-1-alpha-4` dist-tag, so the existing `~4.0.5-alpha.1` /
+  `~3.18.5-alpha.1` ranges already admit what both hosts ship.
+
+### The one break: `engines.dsh` now decides alone
+
+`dsh-app-boot`'s evaluator grew a requirements path that short-circuits the old
+peer loop:
+
+```js
+function unmetRequirements(fields, runtimeVersion) {
+  const engines = Object.hasOwn(fields, "engines") ? objectOf$1(fields.engines, "Plugin manifest engines") : {};
+  if (Object.hasOwn(engines, "dsh")) {
+    const range = engines.dsh;
+    if (typeof range !== "string") throw new Error("Plugin manifest engines.dsh must be a string");
+    return satisfies(runtimeVersion, range) ? {} : { "engines.dsh": range };
+  }
+  if (!Object.hasOwn(fields, "peerDependencies")) return {};
+  // ...otherwise the previous per-peer loop, unchanged
+}
+```
+
+Three consequences matter here. A plugin that declares `engines.dsh` is judged
+**only** by it, and its `peerDependencies` are never read. A plugin that does not
+declare it keeps the previous behaviour — which is the state this plugin was in,
+so its exact two-version peer list refused `0.2.1-alpha.4`. And `engines.dsh` is
+taken verbatim, with none of the `workspace:^` / `workspace:~` / `workspace:*`
+substitution the peer path performs, so any `workspace:` range there is unmet.
+
+### Validation evidence
+
+- **Compatibility decision, reproduced against the published evaluators — before
+  any edit.** Each host's own `evaluatePluginCompatibility` (alpha.3 and alpha.4,
+  installed into separate isolated directories) judged this plugin's real
+  `package.json` over one candidate list. Unchanged, both hosts admitted
+  `0.2.0-rc.2` and `0.2.1-alpha.3` and refused `0.2.1-alpha.4`, listing all ten
+  peers as unmet. With the added `engines.dsh` range, both hosts admit all three
+  audited releases; alpha.4 reports a **single** `engines.dsh` requirement
+  instead of ten peers when it refuses; and `0.2.1-alpha.2`, `0.2.1-alpha.5`,
+  `0.2.1`, and `0.3.0` remain refused. alpha.3 ignores `engines.dsh` entirely
+  and keeps deciding on `peerDependencies`, which is why both declarations must
+  name the same list.
+- **Live A/B install on the published alpha.4 CLI — the evidence that matters.**
+  Under an isolated `DSH_HOME`, the **unchanged** package was rejected outright:
+  `dsh: installation rejected: Plugin dsh-deeppilot@0.9.5 is incompatible with
+  dsh 0.2.1-alpha.4: requirements {…ten peers…}`, `Exact-version exemption: not
+  active`, `dsh: nothing was installed`, exit 1. The **fixed** package installed
+  cleanly, exit 0, linked into the profile manifest's `dsh.profile.bundles`
+  alongside `@deepseek-ai/dsh-sdk-minimal`.
+- **Composed tree:** the same CLI's `--dump-config` produced **162 rows with the
+  plugin and 153 without it**, the plugin's three rows present at
+  `deeppilot-directory-picker-browse`, `deeppilot-directory-picker-browse-client`,
+  and `deeppilot`, with no `skipped`/`incompatible` diagnostic. The single
+  warning is the `sdk-minimal` template's own missing `directory-picker` entry,
+  which alpha.3 recorded as well.
+- **Live boot on a real alpha.4 Web host.** An isolated `DSH_HOME` profile built
+  from the shipped Web template and linked to this working tree booted under the
+  published alpha.4 CLI on `--port 3180` (the default 3080 is held by this
+  machine's own Host). The plugin started fully —
+  `[deeppilot] data plane active (mux + host streams)`,
+  `[deeppilot] LAN TLS identity created`,
+  `[deeppilot] local transport listening on https://0.0.0.0:3098` — and the
+  alpha.3 failure line `DSH Remote interaction client unavailable` **did not
+  appear**. A scan of the whole boot log for `incompatible`, `rejected`,
+  `requirements`, `unavailable`, or `error` returns nothing.
+- **Plugin unit tests:** `npm test` → **564 tests, 563 pass, 0 fail, 1 todo**,
+  including the new `engines.dsh names the same closed host list as the peer
+  range` and the updated peer-range boundary test. `npm run typecheck` passes.
+- **Build and schema:** `npm run build` passes and leaves `lib/` **byte-identical
+  to HEAD** — this fix changes no code, only declarations and documentation, so
+  no host's runtime behaviour can regress. `npm run check:config-schema` passes
+  against the pinned `0.2.0-rc.2` CLI (`/34 → $defs/config19`, volatile fields
+  pinned).
+- **Environment note, not a defect:** `check:config-schema` shells out to
+  `npx --yes @deepseek-ai/dsh@0.2.0-rc.2`, and this machine's `~/.npm/_cacache`
+  contains root-owned files, so the default npm cache fails with `EPERM`. Running
+  it with `npm_config_cache` pointed at a writable directory passes, and the
+  unchanged HEAD build fails identically under the default cache, which is what
+  attributes the failure to the machine rather than to this change.
+
+### Evidence limits
+
+Verified: install admission on alpha.4, profile composition, plugin startup, and
+the full unit/typecheck/build/schema suite. **Not** verified here: a real iPhone
+against this alpha.4 host, the Funnel transport, and a real model turn. The
+phone-side contract is unchanged by this release — protocol v2, pairing state,
+and device records are untouched, so no paired phone needs to re-pair — but that
+is a source-level verdict, not a device run.
 
 ## 2026-10-14 — audit of `dsh-v0.2.1-alpha.3`
 

@@ -6,20 +6,27 @@ import semver from 'semver'
 const packageJson = JSON.parse(
   await readFile(new URL('../package.json', import.meta.url), 'utf8'),
 ) as {
+  engines?: Record<string, string>
   peerDependencies?: Record<string, string>
   peerDependenciesMeta?: Record<string, { optional?: boolean }>
   devDependencies?: Record<string, string>
 }
 
-// DeepPilot supports exactly the two DSH releases it has been audited against:
-// the current release-candidate channel (`latest`/`next`) and the current alpha
-// channel. DSH runs `evaluatePluginCompatibility` before composing a profile —
-// on every start, not only on install — so every other host version refuses to
-// activate this plugin by design, and a newly published DSH release needs this
-// list widened deliberately. DSH_BASELINE is the fixed version this package
-// builds and typechecks against, so it must stay an exact release, never a range.
+// DeepPilot supports exactly the three DSH releases it has been audited against:
+// the current release-candidate channel (`latest`/`next`) and the two most recent
+// releases of the `alpha` channel. DSH runs `evaluatePluginCompatibility` before
+// composing a profile — on every start, not only on install — so every other host
+// version refuses to activate this plugin by design, and a newly published DSH
+// release needs this list widened deliberately. DSH_BASELINE is the fixed version
+// this package builds and typechecks against, so it must stay an exact release,
+// never a range.
 const DSH_BASELINE = '0.2.0-rc.2'
-const DSH_PEER_RANGE = '0.2.0-rc.2 || 0.2.1-alpha.3'
+const DSH_PEER_RANGE = '0.2.0-rc.2 || 0.2.1-alpha.3 || 0.2.1-alpha.4'
+// DSH 0.2.1-alpha.4 decides on `engines.dsh` alone and ignores peerDependencies
+// entirely; the same closed list must therefore appear in both places. Older
+// hosts do not read `engines.dsh` at all and keep using the peer range above.
+const DSH_ENGINES_RANGE = '0.2.0-rc.2 || 0.2.1-alpha.3 || 0.2.1-alpha.4'
+const DSH_ALPHA_HOSTS = ['0.2.1-alpha.3', '0.2.1-alpha.4']
 const DSH_PEERS = [
   '@deepseek-ai/dsh',
   '@deepseek-ai/dsh-api-gateway',
@@ -48,19 +55,35 @@ test('package metadata declares exactly the audited host releases', () => {
   }
 })
 
-test('the DSH peer range admits both audited hosts and rejects every other version', () => {
+test('engines.dsh names the same closed host list as the peer range', () => {
+  // DSH 0.2.1-alpha.4 evaluates `engines.dsh` alone and never falls through to
+  // peerDependencies, so a range that drifted from the peer list would silently
+  // change which hosts activate this plugin.
+  assert.equal(packageJson.engines?.node, '>=22', 'node engine unchanged')
+  const range = packageJson.engines?.dsh
+  assert.ok(range, 'engines.dsh present')
+  assert.equal(range, DSH_ENGINES_RANGE)
+  for (const version of [DSH_BASELINE, ...DSH_ALPHA_HOSTS]) {
+    assert.equal(semver.satisfies(version, range, { includePrerelease: true }), true, `engines.dsh must admit ${version}`)
+  }
+  for (const version of ['0.2.1-alpha.2', '0.2.1-alpha.5', '0.2.0', '0.2.1', '0.3.0', '1.0.0']) {
+    assert.equal(semver.satisfies(version, range, { includePrerelease: true }), false, `engines.dsh must exclude ${version}`)
+  }
+})
+
+test('the DSH peer range admits every audited host and rejects every other version', () => {
   const range = packageJson.peerDependencies?.['@deepseek-ai/dsh']
   assert.ok(range, '@deepseek-ai/dsh peer range present')
   assert.equal(range, DSH_PEER_RANGE)
   // Exactly the two releases this plugin has been source-diffed and smoke-tested
   // against: the current rc channel and the current alpha channel.
-  for (const version of [DSH_BASELINE, '0.2.1-alpha.3']) {
+  for (const version of [DSH_BASELINE, ...DSH_ALPHA_HOSTS]) {
     assert.equal(semver.satisfies(version, range, { includePrerelease: true }), true, `peer range must admit ${version}`)
   }
-  // Everything else, including versions that merely look close: an earlier or
-  // later alpha of the same line, the eventual GA, the next rc, and every
-  // 0.1.x/0.3.x/1.x release. Widening this list is a deliberate act that
-  // follows an audit, never an automatic consequence of a new DSH tag.
+  // Everything else, including versions that merely look close: an earlier alpha
+  // of the same line, the eventual GA, the next rc, and every 0.1.x/0.3.x/1.x
+  // release. Widening this list is a deliberate act that follows an audit, never
+  // an automatic consequence of a new DSH tag.
   for (const version of [
     '0.1.6',
     '0.1.7-alpha.2',
@@ -71,7 +94,7 @@ test('the DSH peer range admits both audited hosts and rejects every other versi
     '0.2.0',
     '0.2.1-alpha.1',
     '0.2.1-alpha.2',
-    '0.2.1-alpha.4',
+    '0.2.1-alpha.5',
     '0.2.1-rc.1',
     '0.2.1',
     '0.3.0-rc.1',

@@ -40,13 +40,16 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
 - For any DSH release audit or compatibility decision, read and update
   `docs/DSH_RELEASE_MEMORY.md`; keep install, runtime, and phone-protocol risk
   classified separately.
-- The DSH peer range (`package.json` `peerDependencies`) names exactly the two
-  releases this branch supports: `0.2.0-rc.2` (the npm `latest`/`next` channels)
-  and `0.2.1-alpha.3` (the `alpha` channel). DSH evaluates that range before
+- The DSH compatibility declaration names exactly the three releases this branch
+  supports: `0.2.0-rc.2` (the npm `latest`/`next` channels) and the `alpha`
+  channel releases `0.2.1-alpha.3` and `0.2.1-alpha.4`. It lives in two places
+  that must agree: `package.json` `engines.dsh`, which DSH `0.2.1-alpha.4` and
+  later evaluate alone, and `package.json` `peerDependencies`, which older hosts
+  still evaluate and npm reads at install time. DSH evaluates them before
   composing a profile on every start, not only on install, so any other host
   version refuses to activate the plugin. Widening the list is therefore part of
   shipping support for a new DSH release: source-diff it, record it in
-  `docs/DSH_RELEASE_MEMORY.md`, then add the version here, in
+  `docs/DSH_RELEASE_MEMORY.md`, then add the version in both declarations, in
   `tests/compatibility-metadata.test.ts`, in `package-lock.json`, and in both
   READMEs. The policy and the reversal it represents are recorded in
   `docs/决策记录.md` (章节一).

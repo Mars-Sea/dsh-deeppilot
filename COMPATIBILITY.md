@@ -1,11 +1,12 @@
 # Compatibility
 
-This branch targets exactly **two DSH releases**: `0.2.0-rc.2`, which the npm
-`latest`/`next` channels point at, and `0.2.1-alpha.3`, which the `alpha` channel
-points at. Both are named in `peerDependencies`; no other version is accepted.
-DSH evaluates that range before composing a profile — on every start, not only on
+This branch targets exactly **three DSH releases**: `0.2.0-rc.2`, which the npm
+`latest`/`next` channels point at, and `0.2.1-alpha.3` and `0.2.1-alpha.4`, which
+the `alpha` channel has pointed at in turn. All three are named in both
+`engines.dsh` and `peerDependencies`; no other version is accepted. DSH evaluates
+that declaration before composing a profile — on every start, not only on
 install — so a newly published DSH release deactivates this plugin until the
-range is widened deliberately. That is the intended trade: a plugin that cannot
+list is widened deliberately. That is the intended trade: a plugin that cannot
 run on an unaudited host fails visibly instead of misbehaving quietly. The
 decision and the reversal it represents are recorded in
 [`docs/决策记录.md`](./docs/决策记录.md) (章节一), with the supporting audit in
@@ -18,7 +19,7 @@ is covered by the isolated compose and live-runs recorded in the release memory.
 | Component | Current contract | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | Package engine and CI |
-| DSH CLI and Host API | `0.2.0-rc.2 \|\| 0.2.1-alpha.3` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2 and 0.2.1-alpha.3 CLIs |
+| DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name `0.2.0-rc.2 \|\| 0.2.1-alpha.3 \|\| 0.2.1-alpha.4` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2, 0.2.1-alpha.3, and 0.2.1-alpha.4 CLIs |
 | iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
 
@@ -69,6 +70,34 @@ The verbose-diagnostics field moved from the top-level `debug` to
 carries the old top-level `debug: true` is accepted but that value is ignored:
 verbose logging must be turned on again from the settings page. No other config
 field changed shape, and the old key is not read anywhere in this version.
+
+## 0.2.1-alpha.4 audit outcome
+
+The source-level audit of `dsh-v0.2.1-alpha.4` against `dsh-v0.2.1-alpha.3` found
+no runtime break and one deliberate activation break. Of the ten peer packages,
+**eight have byte-identical `lib/` trees** — including `dsh-api-gateway` and the
+three Client faces the resident interaction client loads — so every alpha.3 fix
+still holds unchanged. Only `dsh-api-remotes` changed in code: one additive
+Remote Events entry (`plugin-market/changed`) and the rename of
+`IncompatiblePlugin.peers` to `requirements`, a field this plugin never reads.
+Two packages appear for the first time — `dsh-plugin-market` and
+`dsh-experimental-plugin-market-bundle` — behind the release's custom plugin
+index sources; neither is a dependency of this plugin.
+
+The activation break is the release's own stated migration: DSH now evaluates a
+plugin's `engines.dsh` range **alone**, ignoring `peerDependencies` entirely
+whenever that field is present. A package that declares no `engines.dsh` — as
+this one did — keeps the older peer evaluation, so the previously exact peer
+list rejected `0.2.1-alpha.4` and the plugin would not have activated on it.
+Both declarations now name the same three releases. The audit reproduced that
+refusal against the published `evaluatePluginCompatibility` of both hosts before
+changing anything, and the same harness confirms the three audited hosts pass
+while `0.2.1-alpha.2`, `0.2.1-alpha.5`, `0.2.1`, and `0.3.0` still fail.
+
+Nothing else moved. Protocol v2, pairing state, and device records are untouched,
+so no paired phone needs to re-pair, and the vendor peers need no widening: both
+hosts still vendor `cordis 4.0.5-alpha.2` and `schemastery 3.18.5-alpha.2`, which
+the existing ranges already admit.
 
 ## 0.2.1-alpha.3 audit outcome
 
@@ -146,6 +175,8 @@ needs a documentation update, not a peer-range widening.
 > versions actually audited, `0.2.0-rc.2` and `0.2.1-alpha.3`; see the
 > 0.2.1-alpha.3 outcome above and `docs/决策记录.md` (章节一). The paragraphs in
 > this historical entry describe the policy as it stood on 2026-09-29.
+> `0.2.1-alpha.4` was added the next day by the same deliberate audit step, and
+> the list now lives in `engines.dsh` as well as in `peerDependencies`.
 
 ## 0.2.0-rc.1 audit outcome
 
