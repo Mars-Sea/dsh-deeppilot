@@ -3,7 +3,100 @@
 > This is the durable audit record for DeepPilot's public DSH plugin. Re-audit
 > the next DSH release instead of assuming that an rc upgrade is runtime-safe.
 
-## Current decision — `dsh-v0.2.1-alpha.4`
+## Current decision — `dsh-v0.2.1-alpha.5`
+
+- **Audited release:** `dsh-v0.2.1-alpha.5`, the newest `alpha` channel release.
+  It is **not** `latest`; `latest`/`next` still point at `0.2.0-rc.2`.
+- **Comparison baseline:** `dsh-v0.2.1-alpha.4` (the previous audited tag).
+- **Plugin runtime verdict: no break, and no `src/` change was needed.** Nine of
+  the ten peer packages ship a byte-identical `lib/` tree, including
+  `dsh-api-gateway` and the three Client faces the resident interaction client
+  loads, so every alpha.3 fix still holds unchanged.
+- **The one code difference is schema-only and additive.**
+  `@deepseek-ai/dsh-api-remotes/lib/client.js` is the only differing `lib/` file
+  among the ten peers: **three hunks, 36 changed lines** (14 insertions, 22
+  deletions), all inside the `account/getUnnotifiedBonuses` result schema. The
+  new `title` field is added as optional; `campaign`, `amount`, `currency`, and
+  `grantedAt` are relaxed to optional and the first three lose their validation
+  (`campaign` becomes "forwarded without validation", `amount` and `currency`
+  become unconstrained JSON); only the descriptions of `expiresAt` changed.
+  `orderId`, `expiresAt`, and `message` stay required. The module's **exported
+  symbols are identical** — both versions assign exactly `exports.apply` and
+  `exports.inject` — and this plugin does not consume that endpoint, so the
+  change cannot reach any call it makes.
+- **Activation verdict: the new release is admitted by both declarations.** This
+  is the third consecutive release on this line to trip the deliberate
+  closed-list policy: alpha.5 was refused before the widening. alpha.5 reads a
+  declared `engines.dsh` alone, so its refusal reported a **single**
+  `engines.dsh` requirement rather than ten peers, and `exempted: false` — the
+  list is the only thing that admits a host, and no exemption fallback exists on
+  this machine (no profile `compatibility.json`).
+- **Evidence: reproduced against the published evaluator, plus an isolated
+  host run.** The audit called alpha.5's own published
+  `evaluatePluginCompatibility` with empty exemptions against this plugin's real
+  `package.json`, over one candidate list. Raw output:
+  `.alpha5-verify/tmp-matrix-early.out.json` (13 candidates, `matrixAllPass:
+  true`) and `.alpha5-verify/stage1-baseline.out.json` (the pre-change baseline).
+  Accepted after the change: `0.2.1-alpha.5`, `0.2.1-alpha.3`,
+  `0.2.1-alpha.4`, and the stable `latest` host. Still refused:
+  `0.2.1-alpha.1`, `0.2.1-alpha.2`, `0.2.0-rc.1`, `0.2.0`, `0.2.1-rc.1`,
+  `0.2.1`, `0.3.0-rc.1`, `0.3.0`, `1.0.0`, and `0.1.7-rc.2`. The same file
+  confirms declaration sync: `engines.dsh` equals the `@deepseek-ai/dsh` peer
+  range, all ten peers share one range, and the token count is 4.
+  `.alpha5-verify/VERIFICATION.md` separately records the refusal on an isolated
+  alpha.5 host: `dsh: skipping profile bundle "dsh-deeppilot": … incompatible
+  with dsh 0.2.1-alpha.5: requirements {"engines.dsh":…}`, with the host itself
+  still booting (`/phone/health` → 404, so the plugin was genuinely not loaded).
+  `.alpha5-verify/stage1-dumpconfig-phaseA.stderr.txt`,
+  `stage1-dumpconfig-phaseA.stdout.txt`, and `stage1-host-phaseA.log` hold the
+  raw logs.
+- **Vendor pins promoted to GA, with no range change needed.** Both hosts'
+  vendored third parties moved from prerelease to GA — `cordis
+  4.0.5-alpha.2` → `4.0.5`, `schemastery 3.18.5-alpha.2` → `3.18.5`. Both GA
+  releases already satisfy the existing `~4.0.5-alpha.1` / `~3.18.5-alpha.1`
+  ranges, so the two vendor peers stay as they are.
+  `.alpha5-verify/stage1-semver-vendor.out.json` cross-checks that with four
+  independent solver paths (host `semver` and repo `semver`, each with and
+  without `includePrerelease`), all four agreeing.
+- **Install verdict: the two declarations now agree on four releases.**
+  `engines.dsh` and all ten `@deepseek-ai/dsh*` peers name `0.2.0-rc.2 ||
+  0.2.1-alpha.3 || 0.2.1-alpha.4 || 0.2.1-alpha.5`, mirrored in
+  `tests/compatibility-metadata.test.ts`, `package-lock.json` (root entry only),
+  both READMEs, `COMPATIBILITY.md`, `AGENTS.md`, and the local
+  `docs/决策记录.md` (章节一, 条目4). The dev pins and `DSH_BASELINE` stay at the
+  exact `0.2.0-rc.2` this branch builds and typechecks against.
+- **Protocol verdict: no phone-protocol change.** Protocol v2, pairing state, and
+  device records are untouched by this release; no phone needs to re-pair.
+- **Post-widening verification — completed for the 0.9.7 preparation.**
+  - **C7 — real load on an isolated alpha.5 host: passed.** With the widened
+    declaration in place, the profile that used to be refused now composes and
+    starts. `--dump-config` writes nothing to stderr and no longer emits
+    `skipping profile bundle` (the pre-change baseline emitted 21 such lines); the
+    composed tree contains `# == dsh-deeppilot` together with
+    `# == @deepseek-ai/dsh-web-app, patched by dsh-deeppilot`; the running host
+    logs four `[deeppilot]` lines (`device registry loaded`, `data plane active`,
+    `LAN TLS identity created`, `local transport listening on https://0.0.0.0:3098`);
+    and `https://127.0.0.1:3098/phone/health` answers `200` with
+    `{"ok":true,"enabled":true,"protocolVersion":2,"serverVersion":"0.9.6","dataPlane":true}`.
+  - **Probe note — use the plugin's own listener, not DSH's web port.** The
+    pre-change baseline cited `http://127.0.0.1:3281/phone/health = 404` as its
+    refusal evidence. That probe has no discriminating power: `/phone/health` is
+    served by this plugin's own narrow LAN listener (`src/phone-server.ts`), which
+    by design never inherits DSH's wider web/API route surface, so the DSH web
+    port answers 404 whether or not the plugin loaded. The valid refusal evidence
+    was the skip warning; the valid positive evidence is port 3098.
+  - **C5/C6 — the full check set: passed in the release tree.** Clean `npm ci`,
+    repo-wide `npm test` (564 tests, 563 pass, 0 fail, 1 pre-existing TODO),
+    `npm run typecheck`, `npm run build` (regenerated `lib/` byte-identical to the
+    committed tree), `npm run check:config-schema` against the pinned
+    `0.2.0-rc.2` CLI, `go test ./...` for the helper, and all six
+    `bin/SHA256SUMS` entries verified.
+- **Nothing has been published from this tree yet.** `package.json` reads `0.9.7`
+  on the release branch; no tag, registry version, or GitHub release corresponds
+  to it yet. This entry records an audit, a declaration sync, and the local
+  preparation of 0.9.7 — **not** a published release.
+
+### Previous decision — `dsh-v0.2.1-alpha.4`
 
 - **Audited release:** `dsh-v0.2.1-alpha.4` (official release page:
   <https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-alpha.4>),
@@ -45,15 +138,20 @@
   hosts admit all three audited releases; alpha.4 reports a **single**
   `engines.dsh` requirement instead of ten peers when it refuses; and
   `0.2.1-alpha.2`, `0.2.1-alpha.5`, `0.2.1`, and `0.3.0` are still refused.
+  *(Historical: `0.2.1-alpha.5` was admitted the next day by the audit above.)*
   alpha.3 ignores `engines.dsh` entirely — the field did not exist yet — and
   keeps deciding on `peerDependencies`, which is why both declarations must name
   the same list.
-- **Install verdict: the two declarations now agree.** `engines.dsh` and all ten
-  `@deepseek-ai/dsh*` peers name `0.2.0-rc.2 || 0.2.1-alpha.3 || 0.2.1-alpha.4`,
-  mirrored in `tests/compatibility-metadata.test.ts`, `package-lock.json`, both
+- **Install verdict: the two declarations agreed at that point (widened since).**
+  `engines.dsh` and all ten `@deepseek-ai/dsh*` peers named `0.2.0-rc.2 ||
+  0.2.1-alpha.3 || 0.2.1-alpha.4`, mirrored in
+  `tests/compatibility-metadata.test.ts`, `package-lock.json`, both
   READMEs, `COMPATIBILITY.md`, `AGENTS.md`, and the local `docs/决策记录.md`
   (章节一, 条目3). The dev pins and `DSH_BASELINE` stay at the exact
-  `0.2.0-rc.2` this branch builds and typechecks against.
+  `0.2.0-rc.2` this branch builds and typechecks against. **Historical note:**
+  `0.2.1-alpha.5` was appended to both lists on 2026-10-16 by the audit above,
+  which now owns the current list; the four documentation mirrors that still
+  said「三个版本」were corrected there.
 - **Vendor peers need no widening.** Both hosts still vendor `cordis
   4.0.5-alpha.2` and `schemastery 3.18.5-alpha.2`; neither package published a
   `dsh-0-2-1-alpha-4` dist-tag, and the existing `~4.0.5-alpha.1` /
@@ -389,6 +487,116 @@
   bundle" below. The plugin needs no code change; the phone's copy now points
   at the bundle.
 
+## 2026-10-16 — audit of `dsh-v0.2.1-alpha.5`
+
+The first release on this line whose entire plugin-facing change surface is
+additive. It is the third consecutive release to trip the closed-list policy: a
+new DSH tag refuses to activate this plugin until the list is widened by an
+audit, which is the behaviour the 2026-10-14 reversal chose on purpose.
+
+### Method
+
+The comparison used the **installed artifacts** of the alpha.4 and alpha.5 hosts
+already unpacked on this machine, not release notes and not the monorepo: every
+`@deepseek-ai/dsh*` peer package's `lib/` directory was compared file by file,
+and the single differing file was then read as a diff. `dsh-client-ui-slots` is
+not hoisted into either host's `node_modules` root (it resolves only inside a
+composed profile), so both of its published versions were pulled from npm
+(`0.2.1-alpha.4` and `0.2.1-alpha.5`, 31,973 bytes each) and compared in full to
+close that gap rather than assume it.
+
+### Change surface
+
+- **Nine of the ten peer packages carry a byte-identical `lib/` tree**:
+  `dsh`, `dsh-api-gateway`, `dsh-client-connection`, `dsh-client-locale`,
+  `dsh-client-ui-settings`, `dsh-client-ui-slots`, `dsh-settings`,
+  `dsh-typert-protocol`, `dsh-typert-registry`. The tenth is `dsh-api-remotes`.
+- **`dsh-api-remotes/lib/client.js` — three hunks, 36 changed lines.** Every
+  hunk is the `account/getUnnotifiedBonuses` result schema:
+  - `title` is added, optional, described as a server-localised plain-text title
+    that absent responses replace with the localised bonus title.
+  - `campaign`, `amount`, `currency`, and `grantedAt` become optional; `campaign`
+    becomes unvalidated pass-through JSON, `amount` and `currency` lose their
+    string / `CNY|USD` constraints, and `grantedAt` loses its description.
+  - The JSON Schema side mirrors that: `title` is added to `properties`, and
+    `campaign`, `amount`, `currency`, and `grantedAt` are dropped from
+    `required`. `orderId`, `expiresAt`, and `message` remain required.
+  - **The exported symbols are unchanged**: the module assigns exactly
+    `exports.apply` and `exports.inject` on both sides.
+  - This plugin does not call `account/getUnnotifiedBonuses`, so even the field
+    that did tighten (`expiresAt`'s documented semantics) cannot reach it.
+- **The vendor pins moved from prerelease to GA.** The `dsh` CLI's vendored
+  third parties went `cordis 4.0.5-alpha.2` → `4.0.5` and `schemastery
+  3.18.5-alpha.2` → `3.18.5`. Both GA releases already satisfy the plugin's
+  existing `~4.0.5-alpha.1` / `~3.18.5-alpha.1` ranges, so **no vendor widening
+  was needed**; the ranges were left untouched.
+- **The activation rule did not change again.** alpha.5 keeps alpha.4's
+  requirements path: a declared `engines.dsh` decides alone and short-circuits the
+  peer loop. That is why the refusal is reported as one requirement instead of
+  ten.
+
+### Validation evidence
+
+- **Compatibility matrix against the published evaluator.** alpha.5's own
+  published `evaluatePluginCompatibility`, called with empty exemptions against
+  this plugin's real `package.json` over 13 candidates →
+  `.alpha5-verify/tmp-matrix-early.out.json`, `matrixAllPass: true`. Accepted:
+  `0.2.1-alpha.5` (the target), `0.2.1-alpha.3`, `0.2.1-alpha.4`, and the stable
+  host. Refused, each with `exempted: false`: `0.2.1-alpha.1`,
+  `0.2.1-alpha.2`, `0.2.0-rc.1`, `0.2.0`, `0.2.1-rc.1`, `0.2.1`, `0.3.0-rc.1`,
+  `0.3.0`, `1.0.0`, `0.1.7-rc.2`. The same file's `declarationSync` block
+  reports `engines.dsh === @deepseek-ai/dsh peer range`, all ten peers on one
+  range, and four unique `engines.dsh` tokens.
+- **Pre-change baseline, the same evaluator.** `.alpha5-verify/stage1-baseline.out.json`
+  shows the unchanged declaration refusing `0.2.1-alpha.5` with
+  `requirements: { "engines.dsh": "0.2.0-rc.2 || 0.2.1-alpha.3 || 0.2.1-alpha.4" }`
+  and `exempted: false` — the failure this audit removes.
+- **Isolated alpha.5 host, pre-change.** `.alpha5-verify/VERIFICATION.md` and
+  `stage1-dumpconfig-phaseA.stderr.txt` record the real CLI refusing the plugin:
+  `dsh: skipping profile bundle "dsh-deeppilot": Error: Plugin
+  dsh-deeppilot@0.9.6 is incompatible with dsh 0.2.1-alpha.5: requirements
+  {"engines.dsh":…}`, `Exact-version exemption: not active`. The host still
+  booted (`stage1-host-phaseA.log`, `--port 3280`) and `/phone/health` returned
+  404, which is what shows the plugin really was not loaded rather than silently
+  active.
+- **Vendor semver, four independent paths.** `.alpha5-verify/stage1-semver-vendor.out.json`
+  resolves the two vendor ranges with the host tree's `semver` and the repo's
+  `semver`, each with and without `includePrerelease`; all four agree that
+  `4.0.5` and `3.18.5` (and the previously audited `4.0.4`, `4.0.5-alpha.2`,
+  `3.18.4`, `3.18.5-alpha.2`) satisfy, and that `9.9.9` does not.
+- **Targeted unit test.** `node --import tsx --test tests/compatibility-metadata.test.ts`
+  → 5 tests, 5 pass, 0 fail, after `DSH_PEER_RANGE`, `DSH_ENGINES_RANGE`,
+  `DSH_ALPHA_HOSTS`, the rejection lists, and the vendor pins were updated. The
+  test file's contrast set still refuses `0.2.1-alpha.1`, `0.2.1-alpha.2`,
+  `0.2.0`, `0.2.1-rc.1`, `0.2.1`, `0.3.0`, and `1.0.0`, so the widening did not
+  turn into an open range.
+
+### Verification status
+
+- **C7 — real load on an isolated alpha.5 host: passed.** The same isolated
+  profile that was refused before the widening now composes and starts: no
+  `skipping profile bundle` warning (0 bytes on stderr, was 21 lines), the tree
+  contains `# == dsh-deeppilot` and the web-app patch, the host logs four
+  `[deeppilot]` lines, and `https://127.0.0.1:3098/phone/health` answers `200`
+  with `serverVersion` matching the tree under test. The run happened before the
+  version bump, so that field read `0.9.6`; the release tree differs from the tree
+  under test only in the declaration documents and the version fields. Port 3098 —
+  not DSH's web port — is the probe with discriminating power; see the note under
+  Current decision.
+- **The full check set for this tree (C5/C6): passed.** Clean `npm ci`, repo-wide
+  `npm test` (564 tests, 563 pass, 0 fail, 1 pre-existing TODO),
+  `npm run typecheck`, `npm run build` with a byte-identical regenerated `lib/`,
+  `npm run check:config-schema` against the pinned `0.2.0-rc.2` CLI, the Go helper
+  tests, and the six `bin/SHA256SUMS` entries.
+- **No release action yet.** `package.json` reads `0.9.7` on the release branch;
+  nothing was published, tagged, or pushed. The widened list reaches users only
+  through that release.
+- **The declaration mirrors have drifted historically.** `README.md`,
+  `README.zh-CN.md`, `COMPATIBILITY.md`, and `AGENTS.md` all said "three
+  releases" while `package.json` already named four; that contradiction was
+  corrected in this pass. Any future widening must update all of them together —
+  the unit test only pins `package.json` and `package-lock.json`.
+
 ## 2026-10-15 — audit of `dsh-v0.2.1-alpha.4`
 
 `dsh-v0.2.1-alpha.4` reached npm on 2026-10-15T13:08:08Z, roughly 24 hours after
@@ -470,9 +678,10 @@ substitution the peer path performs, so any `workspace:` range there is unmet.
   peers as unmet. With the added `engines.dsh` range, both hosts admit all three
   audited releases; alpha.4 reports a **single** `engines.dsh` requirement
   instead of ten peers when it refuses; and `0.2.1-alpha.2`, `0.2.1-alpha.5`,
-  `0.2.1`, and `0.3.0` remain refused. alpha.3 ignores `engines.dsh` entirely
-  and keeps deciding on `peerDependencies`, which is why both declarations must
-  name the same list.
+  `0.2.1`, and `0.3.0` remain refused.
+  *(Historical: `0.2.1-alpha.5` was admitted the next day — see the audit of that
+  release above.)* alpha.3 ignores `engines.dsh` entirely and keeps deciding
+  on `peerDependencies`, which is why both declarations must name the same list.
 - **Live A/B install on the published alpha.4 CLI — the evidence that matters.**
   Under an isolated `DSH_HOME`, the **unchanged** package was rejected outright:
   `dsh: installation rejected: Plugin dsh-deeppilot@0.9.5 is incompatible with

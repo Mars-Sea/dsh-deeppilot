@@ -1,14 +1,14 @@
 # Compatibility
 
-This branch targets exactly **three DSH releases**: `0.2.0-rc.2`, which the npm
-`latest`/`next` channels point at, and `0.2.1-alpha.3` and `0.2.1-alpha.4`, which
-the `alpha` channel has pointed at in turn. All three are named in both
-`engines.dsh` and `peerDependencies`; no other version is accepted. DSH evaluates
-that declaration before composing a profile — on every start, not only on
-install — so a newly published DSH release deactivates this plugin until the
-list is widened deliberately. That is the intended trade: a plugin that cannot
-run on an unaudited host fails visibly instead of misbehaving quietly. The
-decision and the reversal it represents are recorded in
+This branch targets exactly **four DSH releases**: `0.2.0-rc.2`, which the npm
+`latest`/`next` channels point at, and `0.2.1-alpha.3`, `0.2.1-alpha.4`, and
+`0.2.1-alpha.5`, which the `alpha` channel has pointed at in turn. All four are
+named in both `engines.dsh` and `peerDependencies`; no other version is accepted.
+DSH evaluates that declaration before composing a profile — on every start, not
+only on install — so a newly published DSH release deactivates this plugin until
+the list is widened deliberately. That is the intended trade: a plugin that
+cannot run on an unaudited host fails visibly instead of misbehaving quietly.
+The decision and the reversal it represents are recorded in
 [`docs/决策记录.md`](./docs/决策记录.md) (章节一), with the supporting audit in
 [`docs/DSH_RELEASE_MEMORY.md`](./docs/DSH_RELEASE_MEMORY.md).
 
@@ -19,7 +19,7 @@ is covered by the isolated compose and live-runs recorded in the release memory.
 | Component | Current contract | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | Package engine and CI |
-| DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name `0.2.0-rc.2 \|\| 0.2.1-alpha.3 \|\| 0.2.1-alpha.4` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2, 0.2.1-alpha.3, and 0.2.1-alpha.4 CLIs |
+| DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name `0.2.0-rc.2 \|\| 0.2.1-alpha.3 \|\| 0.2.1-alpha.4 \|\| 0.2.1-alpha.5` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2, 0.2.1-alpha.3, and 0.2.1-alpha.4 CLIs, and an isolated 0.2.1-alpha.5 host where this plugin now composes, starts, and answers `/phone/health` with 200 on its own LAN listener (audit below) |
 | iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
 
@@ -71,6 +71,39 @@ carries the old top-level `debug: true` is accepted but that value is ignored:
 verbose logging must be turned on again from the settings page. No other config
 field changed shape, and the old key is not read anywhere in this version.
 
+## 0.2.1-alpha.5 audit outcome
+
+The source-level audit of `dsh-v0.2.1-alpha.5` against `dsh-v0.2.1-alpha.4` found
+no runtime break. Of the ten peer packages, **nine have byte-identical `lib/`
+trees** — including `dsh-api-gateway` and the three Client faces the resident
+interaction client loads — so every alpha.3 fix still holds unchanged. Only
+`dsh-api-remotes/lib/client.js` differs: three hunks / 36 lines, all inside the
+`account/getUnnotifiedBonuses` result schema, where the new optional `title`
+field arrives while `campaign`, `amount`, `currency`, and `grantedAt` become
+optional and are forwarded without validation. The file's exported symbols are
+identical, and this plugin does not consume that endpoint, so the change is
+additive from here.
+
+The vendor peers need no widening either: both hosts' vendor pins moved from
+prerelease to GA — `cordis 4.0.5-alpha.2` → `4.0.5` and `schemastery
+3.18.5-alpha.2` → `3.18.5` — and both GA releases already satisfy the existing
+`~4.0.5-alpha.1` / `~3.18.5-alpha.1` ranges.
+
+The activation verdict is the same shape as alpha.4, with one difference: alpha.5
+resolves the requirements path from a declared `engines.dsh` alone, so its
+refusal names that single requirement rather than the ten peers. Adding
+`0.2.1-alpha.5` to the closed list therefore makes it activate, and the four
+audited hosts pass while `0.2.1-alpha.1`, `0.2.1-alpha.2`, `0.2.0-rc.1`, `0.2.0`,
+`0.2.1-rc.1`, `0.2.1`, `0.3.0-rc.1`, `0.3.0`, `1.0.0`, and `0.1.7-rc.2` remain
+refused.
+
+**Audit limits, stated rather than implied.** Loading this plugin on a real
+isolated `0.2.1-alpha.5` host, and the full release check set (unit tests,
+typecheck, build, config-schema check, helper tests) against that host, had
+**not** been completed when this entry was written. Until they are, this release
+is recorded as audited at the declaration and source-diff level only; no plugin
+release has been made from this tree, and nothing here claims one.
+
 ## 0.2.1-alpha.4 audit outcome
 
 The source-level audit of `dsh-v0.2.1-alpha.4` against `dsh-v0.2.1-alpha.3` found
@@ -89,10 +122,11 @@ plugin's `engines.dsh` range **alone**, ignoring `peerDependencies` entirely
 whenever that field is present. A package that declares no `engines.dsh` — as
 this one did — keeps the older peer evaluation, so the previously exact peer
 list rejected `0.2.1-alpha.4` and the plugin would not have activated on it.
-Both declarations now name the same three releases. The audit reproduced that
-refusal against the published `evaluatePluginCompatibility` of both hosts before
-changing anything, and the same harness confirms the three audited hosts pass
-while `0.2.1-alpha.2`, `0.2.1-alpha.5`, `0.2.1`, and `0.3.0` still fail.
+Both declarations were widened from the previous three-release list to the same
+four releases. The audit reproduced that refusal against the published
+`evaluatePluginCompatibility` of both hosts before changing anything, and the
+same harness confirms the four audited hosts pass while `0.2.1-alpha.2`,
+`0.2.1`, and `0.3.0` still fail.
 
 Nothing else moved. Protocol v2, pairing state, and device records are untouched,
 so no paired phone needs to re-pair, and the vendor peers need no widening: both
@@ -175,8 +209,10 @@ needs a documentation update, not a peer-range widening.
 > versions actually audited, `0.2.0-rc.2` and `0.2.1-alpha.3`; see the
 > 0.2.1-alpha.3 outcome above and `docs/决策记录.md` (章节一). The paragraphs in
 > this historical entry describe the policy as it stood on 2026-09-29.
-> `0.2.1-alpha.4` was added the next day by the same deliberate audit step, and
-> the list now lives in `engines.dsh` as well as in `peerDependencies`.
+> **This note is in turn superseded:** `0.2.1-alpha.4` was added the next day by
+> the same deliberate audit step, `0.2.1-alpha.5` on 2026-10-16, and the closed
+> four-release list now lives in `engines.dsh` as well as in `peerDependencies`.
+> See the 0.2.1-alpha.5 outcome above.
 
 ## 0.2.0-rc.1 audit outcome
 
