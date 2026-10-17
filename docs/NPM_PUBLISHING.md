@@ -93,6 +93,18 @@
    `https://slsa.dev/provenance/v1`；在全新隔离 profile 中从 npm 安装该版本，并在
    真实 `0.2.1-alpha.5` 宿主上启动，`/phone/health` 返回 200 且 `serverVersion`
    为 `0.9.7`。公开 GitHub Release 之前先完成了这一步安装验证。
+7. `0.9.8` 的本地发布清单在**待发布工作树**上执行并通过（详细数字见
+   `docs/RELEASE_NOTES-0.9.8.md` 第三节）：`npm ci`、单元测试 581 项
+   （580 通过、0 失败、1 项既有待办）、类型检查、构建前后 `lib/` 逐文件
+   sha256 一致、`check:config-schema`（仍针对锁定的 `0.2.0-rc.2` CLI）、
+   helper 的 Go 测试、`bin/SHA256SUMS` 6/6。宿主侧本轮改用
+   **`0.2.1-rc.2`**：隔离 `DSH_HOME` 下改动前被拒绝激活（单键 `engines.dsh`
+   要求 + `Exact-version exemption: not active`），扩围后组合树含插件与
+   web-app 补丁、真实启动出现 4 条 `[deeppilot]`，插件自有端口 3098 的
+   `/phone/health` 返回 200 且 `serverVersion` 为 `0.9.8`。打包为 68 个条目。
+   本轮还确认了一个易漏点：升版本号必须同步重录
+   `tests/apply-baseline.snapshot.json`，否则 `npm test` 会失败——已写入
+   `AGENTS.md` 的发布流程第 1 步。
 
 ## 五、官方资料
 

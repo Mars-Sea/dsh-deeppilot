@@ -1,8 +1,9 @@
 # Compatibility
 
-This branch targets exactly **four DSH releases**: `0.2.0-rc.2`, which the npm
-`latest`/`next` channels point at, and `0.2.1-alpha.3`, `0.2.1-alpha.4`, and
-`0.2.1-alpha.5`, which the `alpha` channel has pointed at in turn. All four are
+This branch targets exactly **five DSH releases**: `0.2.0-rc.2`, which the npm
+`latest` channel points at; `0.2.1-alpha.3`, `0.2.1-alpha.4`, and
+`0.2.1-alpha.5`, which the `alpha` channel has pointed at in turn; and
+`0.2.1-rc.2`, which the `next` channel points at. All five are
 named in both `engines.dsh` and `peerDependencies`; no other version is accepted.
 DSH evaluates that declaration before composing a profile — on every start, not
 only on install — so a newly published DSH release deactivates this plugin until
@@ -13,13 +14,14 @@ The decision and the reversal it represents are recorded in
 [`docs/DSH_RELEASE_MEMORY.md`](./docs/DSH_RELEASE_MEMORY.md).
 
 The development packages this branch builds and typechecks against stay pinned
-to the exact release-candidate baseline, currently `0.2.0-rc.2`; the alpha host
-is covered by the isolated compose and live-runs recorded in the release memory.
+to the exact release-candidate baseline, currently `0.2.0-rc.2`; the audited
+`alpha` and `rc` hosts are covered by the isolated composes and live runs
+recorded in the release memory.
 
 | Component | Current contract | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | Package engine and CI |
-| DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name `0.2.0-rc.2 \|\| 0.2.1-alpha.3 \|\| 0.2.1-alpha.4 \|\| 0.2.1-alpha.5` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2, 0.2.1-alpha.3, and 0.2.1-alpha.4 CLIs, and an isolated 0.2.1-alpha.5 host where this plugin now composes, starts, and answers `/phone/health` with 200 on its own LAN listener (audit below) |
+| DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name `0.2.0-rc.2 \|\| 0.2.1-alpha.3 \|\| 0.2.1-alpha.4 \|\| 0.2.1-alpha.5 \|\| 0.2.1-rc.2` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2, 0.2.1-alpha.3, and 0.2.1-alpha.4 CLIs, an isolated 0.2.1-alpha.5 host where this plugin now composes, starts, and answers `/phone/health` with 200 on its own LAN listener, and a pre-widening 0.2.1-rc.2 host run where the unchanged declaration is refused at compose time (audits below) |
 | iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
 
@@ -70,6 +72,66 @@ The verbose-diagnostics field moved from the top-level `debug` to
 carries the old top-level `debug: true` is accepted but that value is ignored:
 verbose logging must be turned on again from the settings page. No other config
 field changed shape, and the old key is not read anywhere in this version.
+
+## 0.2.1-rc.2 audit outcome
+
+The artifact-level audit of `dsh-v0.2.1-rc.2` against `dsh-v0.2.1-alpha.5` found
+no change that reaches this plugin's call surface. Fifteen packages were compared
+as whole trees rather than by `lib/` alone: all ten peer packages carry
+**byte-identical `lib/` trees**, and across 137 modules **no export symbol is
+added or removed**. The 245 dependency differences are spec-value moves only,
+with zero structural difference: 78 `@deepseek-ai/dsh*` entries are pinned to
+`0.2.1-rc.2`, and five vendor ranges are promoted from prerelease to GA —
+`cordis ~4.0.5-alpha.2` → `~4.0.5`, `schemastery ~3.18.5-alpha.2` → `~3.18.5`,
+plus `cordis-plugin-include`, `cordis-plugin-loader`, and `cordis-plugin-timer`.
+No dependency package name is added or removed.
+
+**One file outside `package.json` differs, and it is additive.**
+`@deepseek-ai/dsh-web-app/cordis.patch.yml` gained one hunk / +3−0 that inserts
+the `ui-deepseek-model-label-1017` bundle (the DeepSeek-V4.1-Flash-1017
+adaptation named in the rc.2 release notes). It cannot reach this plugin: the
+patch anchor this plugin targets, `id: directory-picker`, is byte-identical at
+lines 113–114 on both sides, the new entry sits at lines 412–417, and the new
+package name appears zero times in this plugin's `cordis.patch.yml` and
+`package.json`.
+
+That file is also why the audit method changed: **comparing only `lib/` would
+have missed it**, and it is exactly the surface this plugin's own patch layer
+acts on. Whole-tree comparison is now a required step of every future audit, not
+a fallback.
+
+The vendor peers need no widening either. `0.2.1-rc.2` vendors the same GA pair
+as `0.2.1-alpha.5` — `cordis 4.0.5` and `schemastery 3.18.5` — and four
+independent solver paths (host-tree and repository `semver`, each with and
+without `includePrerelease`) agree that both already satisfy the existing
+`~4.0.4 || ~4.0.5-alpha.1` / `~3.18.4 || ~3.18.5-alpha.1` ranges.
+
+The activation verdict is the same shape as alpha.5: rc.2 resolves the
+requirements path from a declared `engines.dsh` alone, so its refusal names that
+single requirement rather than the ten peers, and `exempted` is false because no
+profile exemption file exists on the audit machine. Before the widening, a real
+rc.2 CLI refused the unchanged declaration —
+
+```text
+dsh: skipping profile bundle "dsh-deeppilot": … Plugin dsh-deeppilot@0.9.7 is incompatible with dsh 0.2.1-rc.2: requirements {"engines.dsh":"0.2.0-rc.2 || 0.2.1-alpha.3 || 0.2.1-alpha.4 || 0.2.1-alpha.5"}. … Exact-version exemption: not active.
+```
+
+— while the host itself still booted and served its web port. Three published
+evaluators agree on all 14 candidates, and the widened declaration admits
+`0.2.1-rc.2` while adding no other acceptance. **`0.2.1-rc.1` is deliberately not
+added and remains refused**: the rc line reached this plugin one release later, so
+admitting the earlier rc would extend support to a host that was never audited as
+its own. `0.2.1-alpha.1`, `0.2.1-alpha.2`, `0.2.0-rc.1`, `0.2.0`, `0.2.1`,
+`0.2.1-rc.3`, `0.3.0-rc.1`, `0.3.0`, `1.0.0`, and `0.1.7-rc.2` remain refused.
+
+**Audit limits, stated rather than implied.** Loading this plugin on a real
+isolated `0.2.1-rc.2` host — the positive half of the rc.2 verification — had
+**not** been completed when this entry was written; the rc.2 evidence here is the
+pre-widening refusal log plus the published evaluators' verdict on the widened
+declaration. Until the positive load and the full release check set run against
+that host, this release is recorded as audited at the declaration and
+artifact-diff level only; no plugin release has been made from this tree, and
+nothing here claims one.
 
 ## 0.2.1-alpha.5 audit outcome
 
@@ -210,9 +272,12 @@ needs a documentation update, not a peer-range widening.
 > 0.2.1-alpha.3 outcome above and `docs/决策记录.md` (章节一). The paragraphs in
 > this historical entry describe the policy as it stood on 2026-09-29.
 > **This note is in turn superseded:** `0.2.1-alpha.4` was added the next day by
-> the same deliberate audit step, `0.2.1-alpha.5` on 2026-10-16, and the closed
-> four-release list now lives in `engines.dsh` as well as in `peerDependencies`.
-> See the 0.2.1-alpha.5 outcome above.
+> the same deliberate audit step, `0.2.1-alpha.5` on 2026-10-16, and
+> `0.2.1-rc.2` on 2026-10-17 — each one its own audit, never an automatic
+> consequence of a new DSH tag. The closed five-release list now lives in
+> `engines.dsh` as well as in `peerDependencies`. `0.2.1-rc.1` shows zero code
+> delta on this plugin's call surface but is deliberately left out, because it
+> was never audited as its own host. See the 0.2.1-rc.2 outcome above.
 
 ## 0.2.0-rc.1 audit outcome
 

@@ -3,10 +3,104 @@
 > This is the durable audit record for DeepPilot's public DSH plugin. Re-audit
 > the next DSH release instead of assuming that an rc upgrade is runtime-safe.
 
-## Current decision — `dsh-v0.2.1-alpha.5`
+## Current decision — `dsh-v0.2.1-rc.2`
+
+- **Audited release:** `dsh-v0.2.1-rc.2`, published 2026-10-17T08:36:31.655Z. It is
+  **not** `latest`: `latest` still points at `0.2.0-rc.2`, and `alpha` still points
+  at `0.2.1-alpha.5`. It **is** the npm **`next`** channel release — this is the
+  first release on the rc line to enter the supported list.
+- **Comparison baseline:** `dsh-v0.2.1-alpha.5` (the previous audited tag).
+- **Plugin runtime verdict: no break, and no `src/` change was needed.** Fifteen
+  packages were compared **as whole trees, not by `lib/` alone**: all ten peer
+  packages ship a byte-identical `lib/` tree, and across 137 modules **no export
+  symbol is added or removed**, so every earlier fix still holds unchanged.
+- **The one file outside `package.json` that differs is additive.**
+  `@deepseek-ai/dsh-web-app/cordis.patch.yml` gained one hunk / +3−0 inserting the
+  `ui-deepseek-model-label-1017` bundle (the DeepSeek-V4.1-Flash-1017 adaptation
+  named in the release notes). The patch anchor this plugin targets,
+  `id: directory-picker`, is byte-identical at lines 113–114 on both sides, the new
+  entry sits at lines 412–417, and the new package name appears zero times in this
+  plugin's `cordis.patch.yml` and `package.json`, so the change cannot reach any
+  patch this plugin applies.
+- **Methodology change, now mandatory.** Comparing only `lib/` would have missed
+  exactly that file — and it is the surface this plugin's own patch layer acts on.
+  Whole-tree comparison is a required step of every future audit; do not fall back
+  to a `lib/`-only diff. See "Re-audit rule" below.
+- **Activation verdict: the new release is admitted by both declarations, and the
+  earlier rc on the same line is deliberately left out.** This is the fourth
+  consecutive release on this line to trip the closed-list policy: rc.2 was refused
+  before the widening. rc.2 reads a declared `engines.dsh` alone, so its refusal
+  reported a **single** `engines.dsh` requirement rather than ten peers, and
+  `exempted: false` — the list is the only thing that admits a host, and no
+  exemption fallback exists on this machine (no profile `compatibility.json` under
+  `DSH_HOME`). Widening admits `0.2.1-rc.2` and nothing else. `0.2.1-rc.1` stays
+  refused even though it shows **zero code delta on this plugin's call surface**:
+  it was never audited as its own host, and the rc line reached this plugin one
+  release later.
+- **Evidence: the published artifacts, the published evaluators, and a real rc.2
+  CLI run — all taken before any declaration changed.**
+  - **Change surface:** `.rc2-verify/CHANGE_SURFACE.md`. Raw logs:
+    `.rc2-verify/logs/lib-hash-compare.txt` and `lib-diff-exitcodes.txt` (10 of 10
+    peer `lib/` trees byte-identical), `whole-tree-compare.txt` (the 15-package
+    whole-tree fallback, which is what surfaced the `dsh-web-app` patch file),
+    `export-symbol-diff.out.json` (137 modules, zero symbol changes),
+    `pkg-manifest-delta.out.json` (245 spec-value differences, zero structural
+    differences), `webapp-cordis-patch-diff.txt` and `patch-anchor-verification.txt`
+    (the one differing file and its anchor), `rc1-delta.txt` (`0.2.1-rc.1` has zero
+    code delta on this plugin's call surface), and `evaluator-repro.out.json`
+    (three published evaluators × 14 candidates, all agreeing).
+  - **Activation decision, reproduced against rc.2's own published evaluator
+    before any edit:** `.rc2-verify/ACTIVATION.md` and `rc2-matrix.out.json`.
+    Unchanged, rc.2 was refused with a single `engines.dsh` requirement and
+    `exempted: false`; deleting `engines.dsh` from a copy of the manifest fell back
+    to all ten peers, confirming the short-circuit is unchanged. Projecting the
+    widening in memory admitted exactly `0.2.1-rc.2` with zero new refusals, while
+    `0.2.1-rc.3`, `0.2.1-rc.20`, `0.2.1-rc.2.1`, `0.2.1-RC.2`, and `0.2.1-rc.10`
+    stayed refused (`rc2-matrix-projected.out.json`).
+  - **Real CLI refusal, captured while the declaration was still unchanged:**
+    `.rc2-verify/PRECHANGE-BOOT.md`. Under an isolated `DSH_HOME` the real rc.2 CLI
+    printed `dsh: skipping profile bundle "dsh-deeppilot": … incompatible with dsh
+    0.2.1-rc.2: requirements {"engines.dsh":…}` plus `Exact-version exemption: not
+    active.`, `--dump-config` exited 0 with no plugin row in the composed tree, and
+    the host itself still booted (web port answered, while the plugin's own port
+    3098 had no listener). Raw logs: `PRECHANGE-dumpconfig.stderr.txt`,
+    `PRECHANGE-dumpconfig.stdout.txt`, `PRECHANGE-host.log`, `PRECHANGE-probes.txt`.
+    A control run of the same profile under the `0.2.1-alpha.5` CLI — which admits
+    `0.9.7` — loaded the plugin and answered `200` on port 3098
+    (`PRECHANGE-control-alpha5-host.log`, `PRECHANGE-control-alpha5-probes.txt`),
+    showing the negative probe has discriminating power.
+- **Vendor pins: no range change needed.** rc.2 vendors the same GA pair as
+  alpha.5 — `cordis 4.0.5` and `schemastery 3.18.5` — and four independent solver
+  paths (host-tree and repository `semver`, each with and without
+  `includePrerelease`) agree both already satisfy the existing `~4.0.4 ||
+  ~4.0.5-alpha.1` / `~3.18.4 || ~3.18.5-alpha.1` ranges
+  (`.rc2-verify/rc2-vendor.out.json`). Neither vendor published a new
+  per-DSH-release dist-tag for rc.2; their `latest` is already `4.0.5` / `3.18.5`.
+- **Install verdict: the two declarations now agree on five releases.**
+  `engines.dsh` and all ten `@deepseek-ai/dsh*` peers name `0.2.0-rc.2 ||
+  0.2.1-alpha.3 || 0.2.1-alpha.4 || 0.2.1-alpha.5 || 0.2.1-rc.2`, mirrored in
+  `tests/compatibility-metadata.test.ts`, `package-lock.json` (root entry only),
+  both READMEs, `COMPATIBILITY.md`, `AGENTS.md`, and the local
+  `docs/决策记录.md` (章节一, 条目5). The tests now also pin `0.2.1-rc.1` and
+  `0.2.1-rc.3` as negative probes, so neither the skipped rc nor the next rc can be
+  admitted by accident. The dev pins and `DSH_BASELINE` stay at the exact
+  `0.2.0-rc.2` this branch builds and typechecks against.
+- **Protocol verdict: no phone-protocol change.** Protocol v2, pairing state, and
+  device records are untouched by this release; no phone needs to re-pair.
+- **Audit limits, stated rather than implied.** The positive half of the rc.2
+  verification — loading this plugin on a real isolated `0.2.1-rc.2` host after the
+  widening — had **not** been completed when this entry was written, and neither had
+  the full release check set against that host. Until they run, rc.2 is recorded as
+  audited at the artifact-diff and declaration level only; no plugin release has
+  been made from this tree.
+
+### Previous decision — `dsh-v0.2.1-alpha.5`
 
 - **Audited release:** `dsh-v0.2.1-alpha.5`, the newest `alpha` channel release.
   It is **not** `latest`; `latest`/`next` still point at `0.2.0-rc.2`.
+  *(Superseded 2026-10-17 by `dsh-v0.2.1-rc.2`: `next` now points at
+  `0.2.1-rc.2`. `alpha` still points at `0.2.1-alpha.5` and `latest` still points
+  at `0.2.0-rc.2`. See the current decision above.)*
 - **Comparison baseline:** `dsh-v0.2.1-alpha.4` (the previous audited tag).
 - **Plugin runtime verdict: no break, and no `src/` change was needed.** Nine of
   the ten peer packages ship a byte-identical `lib/` tree, including
@@ -1650,6 +1744,15 @@ For every future DSH release, compare the new tag against the last audited tag,
 inspect the package/service surfaces actually imported by this repository,
 classify install/runtime/protocol risk separately, and append a dated decision
 here. Do not treat a release-note summary as proof of compatibility.
+
+Compare **whole package trees**, not just `lib/`. The rc.2 audit found its only
+non-`package.json` difference in `@deepseek-ai/dsh-web-app/cordis.patch.yml`, a
+file outside every `lib/` directory and the exact surface this plugin's own patch
+layer acts on; a `lib/`-only diff would have reported "no difference" and missed
+it. Take the published registry tarballs as the source of truth, enumerate the
+package set explicitly (peers, plus every package raw `dsh` dependencies add or
+remove, plus any peer that is not hoisted into the host tree), and only then read
+release notes.
 
 ## 2026-10-15 — 移动端技能发现扩展
 

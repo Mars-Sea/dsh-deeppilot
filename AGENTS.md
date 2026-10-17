@@ -40,9 +40,10 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
 - For any DSH release audit or compatibility decision, read and update
   `docs/DSH_RELEASE_MEMORY.md`; keep install, runtime, and phone-protocol risk
   classified separately.
-- The DSH compatibility declaration names exactly the four releases this branch
-  supports: `0.2.0-rc.2` (the npm `latest`/`next` channels) and the `alpha`
-  channel releases `0.2.1-alpha.3`, `0.2.1-alpha.4`, and `0.2.1-alpha.5`. It lives
+- The DSH compatibility declaration names exactly the five releases this branch
+  supports: `0.2.0-rc.2` (the npm `latest` channel), the `alpha` channel releases
+  `0.2.1-alpha.3`, `0.2.1-alpha.4`, and `0.2.1-alpha.5`, and `0.2.1-rc.2` (the
+  npm `next` channel). It lives
   in two places that must agree: `package.json` `engines.dsh`, which DSH
   `0.2.1-alpha.4` and later evaluate alone, and `package.json`
   `peerDependencies`, which older hosts still evaluate and npm reads at install
@@ -89,7 +90,11 @@ version, respecting any stated exclusions or manual testing gates. The
 release version in `package.json`, the root entries in `package-lock.json`, the
 release commit, npm package, Git tag, and GitHub Release must all agree.
 
-1. Update both manifests, regenerate `lib/`, run every required check, inspect
+1. Update both manifests **and `tests/apply-baseline.snapshot.json`** — regenerate
+   that snapshot with `RECORD=1 npx tsx --test tests/apply-baseline.test.ts` and
+   confirm its diff holds nothing but the `version` fields, because it carries
+   `serverVersion`/`pluginVersion` and `npm test` fails without it — then
+   regenerate `lib/`, run every required check, inspect
    `npm pack --dry-run --json`, and isolate the intended release changes
    from unrelated worktree edits before committing.
 2. Commit the release, push it, wait for CI, then create and push the matching
