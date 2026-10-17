@@ -1,5 +1,9 @@
 import z from "@deepseek-ai/schemastery";
 import { Context } from "@deepseek-ai/cordis";
+//#region src/device-auth.d.ts
+declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage'];
+type DeviceScope = (typeof DEVICE_SCOPES)[number];
+//#endregion
 //#region src/wire-errors.d.ts
 /**
  * 错误词表（error vocabulary）的唯一属主。
@@ -198,12 +202,50 @@ type MutationDispatchResult<T> = {
   replayed?: boolean;
 };
 //#endregion
-//#region src/device-auth.d.ts
-declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage'];
-type DeviceScope = (typeof DEVICE_SCOPES)[number];
+//#region src/command-api.d.ts
+interface CommandSummary {
+  name: string;
+  description: string;
+  definitionId?: string;
+  input?: {
+    hint: string;
+    attachments?: boolean;
+  };
+}
+interface CommandCatalog {
+  commands: CommandSummary[];
+  permissions: boolean;
+  export: boolean;
+}
+interface CommandExecution {
+  commandId: string;
+  result: {
+    kind: 'success' | 'error';
+    text?: string;
+    sourceEventSeq?: number;
+  };
+}
+interface CommandAttachment {
+  type: 'image' | 'document';
+  name: string;
+  mediaType: string;
+  data: string;
+}
+interface PermissionOption {
+  value: string;
+  name: string;
+  description?: string;
+  confirmation: boolean;
+}
+interface PermissionCatalog {
+  options: PermissionOption[];
+  currentValue?: string;
+}
 //#endregion
 //#region src/protocol.d.ts
 interface WelcomeCapabilities {
+  /** 会话命令目录、执行、权限与原生日志导出入口。缺省不支持。 */
+  commands?: boolean;
   historyPaging: boolean;
   replay: boolean;
   approvals: boolean;
@@ -214,6 +256,8 @@ interface WelcomeCapabilities {
   /** Bridge emits s2c.notify for all four notification categories. */
   notifyAllCategories?: boolean;
   models: boolean;
+  /** Session-scoped user-invocable skill metadata and invalidation notices. */
+  skills?: boolean;
   sessionManagement: boolean;
   /** Bridge can fork a session at an exact event boundary. */
   sessionFork?: boolean;
@@ -348,6 +392,12 @@ interface MessageProjection {
   ts: number;
   truncated?: boolean;
 }
+/** Metadata only: loading instructions remains the Host's responsibility. */
+interface SkillSummary {
+  name: string;
+  description: string;
+  modelInvocable: boolean;
+}
 type NotifyCategory = 'turn.completed' | 'approval.required' | 'question.asked' | 'session.error';
 /**
  * One offline-push-worthy event (same facts as s2c.notify / pending frames,
@@ -391,6 +441,28 @@ interface PendingSnapshotPayload {
 }
 //#endregion
 //#region src/host-api.d.ts
+interface CommandsApiLike {
+  list(req: RpcRequestLike<{
+    sessionId: string;
+  }>): Promise<RpcResponseLike<CommandCatalog>>;
+  execute(req: RpcRequestLike<{
+    sessionId: string;
+    line: string;
+    attachments: CommandAttachment[];
+    expectedDefinitionId?: string;
+  }>): Promise<RpcResponseLike<CommandExecution>>;
+  permissions(req: RpcRequestLike<{
+    sessionId: string;
+  }>): Promise<RpcResponseLike<PermissionCatalog>>;
+  feedback(req: RpcRequestLike<{
+    sessionId: string;
+    text: string;
+    category?: string;
+  }>): Promise<RpcResponseLike<void>>;
+  export(req: RpcRequestLike<{
+    sessionId: string;
+  }>, signal: AbortSignal): Promise<Response>;
+}
 interface RpcOk<T> {
   ok: true;
   value: T;
@@ -441,6 +513,11 @@ interface SessionsApiLike {
   models?(req: RpcRequestLike<{
     sessionId: string;
   }>): Promise<RpcResponseLike<HostSessionModels>>;
+  skills?(req: RpcRequestLike<{
+    sessionId: string;
+  }>): Promise<RpcResponseLike<{
+    skills: SkillSummary[];
+  }>>;
   selectModel?(req: RpcRequestLike<{
     sessionId: string;
     provider: string;
@@ -729,6 +806,7 @@ interface ApiStreamItemLike {
   payload: MuxFrameLike;
 }
 interface ApiProxyLike {
+  commands?: CommandsApiLike;
   sessions: SessionsApiLike;
   workspace?: WorkspaceApiLike;
   schedule?: ScheduleApiLike;
@@ -952,6 +1030,12 @@ declare class HostBridge {
     mediaType?: string;
     data: string;
   } | null>;
+  commandOperation(operation: 'list' | 'execute' | 'permissions' | 'feedback', payload: Record<string, unknown>): Promise<SessionManagementResult<unknown>>;
+  exportSession(sessionId: string, signal: AbortSignal): Promise<Response>;
+  /** 由会话目录决定技能可见性；不读取正文，也不把本机路径发给移动端。 */
+  sessionSkills(sessionId: string): Promise<SessionManagementResult<{
+    skills: SkillSummary[];
+  }>>;
   sessionModels(sessionId: string): Promise<ModelBridgeResult<HostSessionModels>>;
   selectSessionModel(sessionId: string, selection: HostModelSelection): Promise<ModelBridgeResult<HostModelSelection>>;
   renameSession(sessionId: string, title: string): Promise<SessionManagementResult<string>>;

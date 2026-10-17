@@ -77,11 +77,39 @@ const SCHEDULE: Record<string, string> = {
   'subagent_session': 'E_PROTOCOL',
 }
 
+/**
+ * 指令域：一半是插件在 command-api.ts 自造的码，一半是上游 Gateway 的原样拒绝。
+ *
+ * 修复前 HostBridge.commandOperation 把整域无条件压成 E_INTERNAL，手机端于是
+ * 分不清「这个指令不存在」与「主机内部错误」，只能显示一句通用失败。
+ */
+const COMMAND: Record<string, string> = {
+  'command/not-found': 'E_NOT_FOUND',
+  // 目录过期：目标定义已不存在，重试不会成功，因此不是 E_BUSY。
+  'command/definition-changed': 'E_NOT_FOUND',
+  'command/attachments-unsupported': 'E_PROTOCOL',
+  'command/export-unavailable': 'E_INTERNAL',
+  'command/export-cancelled': 'E_INTERNAL',
+  'command/export-unsupported': 'E_UNSUPPORTED',
+  'command/invalid-response': 'E_INTERNAL',
+  'command/permissions-unsupported': 'E_UNSUPPORTED',
+  'gateway/bad-request': 'E_PROTOCOL',
+  'session/not-found': 'E_NOT_FOUND',
+  'session/agent-busy': 'E_BUSY',
+  'session/writer-held': 'E_BUSY',
+  'session/conflict': 'E_BUSY',
+  // 旧 host 的扁平写法。
+  'session-not-found': 'E_NOT_FOUND',
+  'agent-busy': 'E_BUSY',
+  'session-conflict': 'E_BUSY',
+}
+
 test('每个域的 Host code 映射到冻结的 wire 码', () => {
   for (const [domain, table] of [
     ['session', { ...SESSION_NAMESPACED, ...SESSION }],
     ['model', MODEL],
     ['schedule', SCHEDULE],
+    ['command', COMMAND],
   ] as const) {
     for (const [code, expected] of Object.entries(table)) {
       assert.equal(wireCodeFor(domain, code), expected, `${domain}/${code}`)
@@ -114,8 +142,21 @@ test('剥掉命名空间后仍能命中：命名空间换了、尾部没换时�
   assert.equal(wireCodeFor('session', 'session/workspace-attach-failed'), 'E_INTERNAL')
 })
 
+test('指令域把「指令不存在」与主机故障分开，未知码仍安全兜底', () => {
+  // 这三种失败对用户的下一步要求完全不同：重选指令、重拉目录、去掉附件。
+  assert.equal(wireCodeFor('command', 'command/not-found'), 'E_NOT_FOUND')
+  assert.equal(wireCodeFor('command', 'command/definition-changed'), 'E_NOT_FOUND')
+  assert.equal(wireCodeFor('command', 'command/attachments-unsupported'), 'E_PROTOCOL')
+  // 未来新增的指令码没登记时仍然落 E_INTERNAL，而不是被尾部相同的键误伤。
+  for (const code of ['command/some-future-code', 'command/weird/not-found']) {
+    assert.equal(wireCodeFor('command', code), 'E_INTERNAL', code)
+  }
+  // 上游在指令路径上的会话类拒绝与会话域同码，手机端的重试判断不因域而变。
+  assert.equal(wireCodeFor('command', 'session/agent-busy'), 'E_BUSY')
+})
+
 test('查不到的 Host code 归 E_INTERNAL，并原样带出 message', () => {
-  for (const domain of ['session', 'model', 'schedule'] as ErrorDomain[]) {
+  for (const domain of ['session', 'model', 'schedule', 'command'] as ErrorDomain[]) {
     assert.equal(wireCodeFor(domain, 'no-such-code'), 'E_INTERNAL')
     assert.equal(wireCodeFor(domain, undefined), 'E_INTERNAL')
   }

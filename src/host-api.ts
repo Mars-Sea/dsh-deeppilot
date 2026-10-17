@@ -2,6 +2,15 @@ import type { SessionSummary } from './protocol.ts'
 import type { DeviceScope } from './device-auth.ts'
 import type { PushNotification } from './protocol.ts'
 import type { WireErrorCode } from './wire-errors.ts'
+import type { CommandAttachment, CommandCatalog, CommandExecution, PermissionCatalog } from './command-api.ts'
+
+export interface CommandsApiLike {
+  list(req: RpcRequestLike<{ sessionId: string }>): Promise<RpcResponseLike<CommandCatalog>>
+  execute(req: RpcRequestLike<{ sessionId: string; line: string; attachments: CommandAttachment[]; expectedDefinitionId?: string }>): Promise<RpcResponseLike<CommandExecution>>
+  permissions(req: RpcRequestLike<{ sessionId: string }>): Promise<RpcResponseLike<PermissionCatalog>>
+  feedback(req: RpcRequestLike<{ sessionId: string; text: string; category?: string }>): Promise<RpcResponseLike<void>>
+  export(req: RpcRequestLike<{ sessionId: string }>, signal: AbortSignal): Promise<Response>
+}
 
 /* Stable bridge-facing structural types mapped to rc.2 controllers by
  * DshApiProxy. */
@@ -21,6 +30,7 @@ interface SessionsApiLike {
   create(req: RpcRequestLike<{ workspaceId?: string; cwd?: string; agentPreset?: string }>): Promise<RpcResponseLike<{ sessionId: string; agentPreset?: string }>>
   fork?(req: RpcRequestLike<{ sessionId: string; atSeq?: number }>): Promise<RpcResponseLike<{ sessionId: string }>>
   models?(req: RpcRequestLike<{ sessionId: string }>): Promise<RpcResponseLike<HostSessionModels>>
+  skills?(req: RpcRequestLike<{ sessionId: string }>): Promise<RpcResponseLike<{ skills: import('./protocol.ts').SkillSummary[] }>>
   selectModel?(req: RpcRequestLike<{
     sessionId: string
     provider: string
@@ -255,6 +265,7 @@ export function unwrapStreamItem(item: MuxFrameLike | ApiStreamItemLike): MuxFra
 }
 
 export interface ApiProxyLike {
+  commands?: CommandsApiLike
   sessions: SessionsApiLike
   workspace?: WorkspaceApiLike
   schedule?: ScheduleApiLike

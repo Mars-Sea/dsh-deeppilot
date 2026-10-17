@@ -14,6 +14,8 @@ import {
   type RemoteQuestionRequest,
 } from './dsh-remote-interactions.ts'
 import { historyWindow, normalizePageLimit } from './host-event-projection.ts'
+import { DshCommandApi } from './command-api.ts'
+import type { CommandsApiLike } from './host-api.ts'
 import type {
   ApiProxyLike,
   DirectoryListingLike,
@@ -93,6 +95,17 @@ export interface DshApiProxyOptions {
 
 /** Direct-controller adapter with the shape HostBridge consumes. */
 export class DshApiProxy implements ApiProxyLike {
+  private readonly commandApi: DshCommandApi
+  get commands(): CommandsApiLike | undefined {
+    if (!this.commandApi.available) return undefined
+    return {
+      list: request => this.call(() => this.commandApi.list(request.payload!.sessionId)),
+      execute: request => this.call(() => this.commandApi.execute(request.payload!.sessionId, request.payload!.line, request.payload!.attachments, request.payload!.expectedDefinitionId)),
+      permissions: request => this.call(() => this.commandApi.permissions(request.payload!.sessionId)),
+      feedback: request => this.call(() => this.commandApi.feedback(request.payload!.sessionId, request.payload!.text, request.payload!.category)),
+      export: (request, signal) => this.commandApi.export(request.payload!.sessionId, signal),
+    }
+  }
   private readonly session: SessionControllerLike
   private readonly workspaceController: WorkspaceControllerLike | undefined
   private scheduleController: ScheduleControllerLike | undefined
@@ -102,6 +115,7 @@ export class DshApiProxy implements ApiProxyLike {
   private readonly shouldSurfaceInteraction: (kind: DshInteractionKind) => boolean
 
   constructor(private readonly ctx: Context, options: DshApiProxyOptions = {}) {
+    this.commandApi = new DshCommandApi(ctx)
     const session = ctx.get('sessionController') as SessionControllerLike | undefined
     if (session === undefined) throw new Error('DSH sessionController is unavailable')
     this.session = session
@@ -112,6 +126,16 @@ export class DshApiProxy implements ApiProxyLike {
     this.directoryPicker = ctx.get('directoryPickerController') as DirectoryPickerControllerLike | undefined
     this.shouldSurfaceInteraction = options.shouldSurfaceInteraction ?? (() => true)
     this.resolveSchedule()
+    // 技能服务可能晚于桥接层挂载；能力探测与请求都读取当前服务，不缓存缺席。
+    Object.defineProperty(this.sessions, 'skills', { get: () => {
+      const catalog = ctx.get('sessionSkillCatalog') as {
+        list(request: { sessionId: string }, signal: AbortSignal): Promise<{ skills: import('./protocol.ts').SkillSummary[] }>
+      } | undefined
+      if (typeof catalog?.list !== 'function') return undefined
+      const read: NonNullable<ApiProxyLike['sessions']['skills']> = async (request) =>
+        this.call(() => catalog.list({ sessionId: request.payload!.sessionId }, new AbortController().signal))
+      return read
+    } })
   }
 
   /**
@@ -310,6 +334,11 @@ export class DshApiProxy implements ApiProxyLike {
     const offProjection = projections?.onChanged?.((session, key, value) => {
       queue.push({ type: 'session/projection', sessionId: String(session.id), key, value })
     })
+    const offSkills = this.ctx.on('skills/change' as never, (() => {
+      queue.push({ type: 'skills/changed' })
+    }) as never, { global: true })
+    const offCommands = ['commands/change', 'permission-presets/catalog-changed'].map(event =>
+      this.ctx.on(event as never, (() => queue.push({ type: 'commands/changed' })) as never, { global: true }))
 
     let disposeInteractions: (() => Promise<void>) | undefined
     try {
@@ -326,6 +355,8 @@ export class DshApiProxy implements ApiProxyLike {
     } finally {
       offEvent()
       offProjection?.()
+      offSkills()
+      offCommands.forEach(dispose => dispose())
       await disposeInteractions?.()
       queue.close()
     }

@@ -187,6 +187,8 @@ export type WidgetPushRegisterPayload = Omit<PushRegisterPayload, 'categories'>
 // ---------- s2c payloads ----------
 
 export interface WelcomeCapabilities {
+  /** 会话命令目录、执行、权限与原生日志导出入口。缺省不支持。 */
+  commands?: boolean
   historyPaging: boolean
   replay: boolean
   approvals: boolean
@@ -197,6 +199,8 @@ export interface WelcomeCapabilities {
   /** Bridge emits s2c.notify for all four notification categories. */
   notifyAllCategories?: boolean
   models: boolean
+  /** Session-scoped user-invocable skill metadata and invalidation notices. */
+  skills?: boolean
   sessionManagement: boolean
   /** Bridge can fork a session at an exact event boundary. */
   sessionFork?: boolean
@@ -422,6 +426,18 @@ export interface ModelCatalogFailure {
   message: string
 }
 
+/** Metadata only: loading instructions remains the Host's responsibility. */
+export interface SkillSummary {
+  name: string
+  description: string
+  modelInvocable: boolean
+}
+
+export interface SessionSkillsPayload {
+  sessionId: string
+  skills: SkillSummary[]
+}
+
 export interface SessionModelsPayload {
   sessionId: string
   current: ModelSelection
@@ -528,3 +544,8 @@ export { ERROR_CODES, type WireErrorCode } from './wire-errors.ts'
 
 export interface PromptDeliveryPayload { sessionId: string; clientSendId: string }
 export type { DeliveryReceipt } from "./dispatch-journal.ts"
+
+export type { CommandSummary, CommandCatalog, CommandAttachment, CommandExecution, PermissionCatalog, PermissionOption } from './command-api.ts'
+
+/** 模型选择变化只投影公开路由字段；缺少 current 时重新读取当前会话。 */
+export interface ModelsChangedPayload { sessionId: string; current?: { provider: string; model: string; reasoningEffort?: string } }

@@ -49,6 +49,14 @@ export type S2CType =
   | 's2c.session.event'
   | 's2c.session.forked'
   | 's2c.session.models'
+  | 's2c.session.skills'
+  | 's2c.skills.changed'
+  | 's2c.commands.changed'
+  | 's2c.models.changed'
+  | 's2c.session.commands'
+  | 's2c.session.commandResult'
+  | 's2c.session.permissions'
+  | 's2c.session.export.chunk'
   | 's2c.session.modelSelected'
   | 's2c.session.renamed'
   | 's2c.session.tail'
@@ -88,6 +96,12 @@ export type C2SType =
   | 'c2s.session.history'
   | 'c2s.session.attachment'
   | 'c2s.session.models'
+  | 'c2s.session.skills'
+  | 'c2s.session.commands'
+  | 'c2s.session.command'
+  | 'c2s.session.permissions'
+  | 'c2s.session.feedback'
+  | 'c2s.session.export'
   | 'c2s.session.selectModel'
   | 'c2s.session.delivery'
   | 'c2s.session.sendPrompt'
@@ -146,6 +160,8 @@ export interface OpenEventBuffer {
  * 暴露，所有权仍在 connection —— 注册表只拥有帧的事实。
  */
 export interface FrameContext extends BridgeSink {
+  readonly signal?: AbortSignal
+  waitForWritable?(): Promise<void>
   readonly frame: Envelope
   readonly deviceId: string | undefined
   readonly widgetClient: boolean
@@ -280,10 +296,12 @@ import { deviceRows } from './wire-device.ts'
 import { pushRows } from './wire-push.ts'
 import { scheduleRows } from './wire-schedule.ts'
 import { sessionRows } from './wire-session.ts'
+import { commandRows } from './wire-command.ts'
 
 /** 全部入站行。装配是静态的：新增特性 module 必须在这里显式出现。 */
 export const WIRE_FRAME_ROWS: readonly WireFrameRow[] = [
   ...sessionRows,
+  ...commandRows,
   ...scheduleRows,
   ...interactionRows,
   ...pushRows,

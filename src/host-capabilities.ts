@@ -18,6 +18,8 @@ import type { WelcomeCapabilities } from './protocol.ts'
 /** 由宿主表达式挣得的位；表在 HOST_CAPABILITY_PROBES。 */
 export type ProbedCapability =
   | 'models'
+  | 'skills'
+  | 'commands'
   | 'sessionManagement'
   | 'sessionFork'
   | 'sessionRestore'
@@ -29,6 +31,8 @@ export const HOST_CAPABILITY_PROBES: Record<ProbedCapability, (proxy: ApiProxyLi
   // PROTOCOL.md：模型列表必须由 Host 的 session.models 动态提供。切换模型另由
   // c2s.session.selectModel 自己的探测兜底（缺 selectModel 时回 E_UNSUPPORTED）。
   models: (proxy) => typeof proxy.sessions.models === 'function',
+  skills: (proxy) => typeof proxy.sessions.skills === 'function',
+  commands: (proxy) => typeof proxy.commands?.list === 'function' && typeof proxy.commands?.execute === 'function',
   sessionManagement: (proxy) =>
     typeof proxy.sessions.rename === 'function' &&
     typeof proxy.workspace?.archiveSession === 'function',
@@ -93,6 +97,8 @@ export function capabilityBits(
     promptDelivery: true,
     notifyAllCategories: true,
     models: HOST_CAPABILITY_PROBES.models(proxy),
+    skills: HOST_CAPABILITY_PROBES.skills(proxy),
+    commands: HOST_CAPABILITY_PROBES.commands(proxy),
     sessionManagement: HOST_CAPABILITY_PROBES.sessionManagement(proxy),
     sessionFork: HOST_CAPABILITY_PROBES.sessionFork(proxy),
     sessionRestore: HOST_CAPABILITY_PROBES.sessionRestore(proxy),

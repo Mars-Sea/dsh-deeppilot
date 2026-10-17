@@ -13,6 +13,11 @@ import { WIRE_FRAME_ROWS, registryRowFor, validatePayload } from '../src/wire-re
 
 /** [帧类型, 载荷, 期望判定]；判定为 "accept" 或 "E_*: message"。 */
 const EXPECTATIONS: Array<[string, unknown, string]> = [
+  ["c2s.session.commands", {"sessionId":"s"}, "accept"],
+  ["c2s.session.permissions", {"sessionId":"s"}, "accept"],
+  ["c2s.session.feedback", {"sessionId":"s","text":"备注"}, "accept"],
+  ["c2s.session.command", {"sessionId":"s","line":"/compact"}, "accept"],
+  ["c2s.session.export", {"sessionId":"s"}, "accept"],
 ["c2s.ping", null, "accept"],
   ["c2s.ping", null, "accept"],
   ["c2s.ping", {}, "accept"],
@@ -69,6 +74,8 @@ const EXPECTATIONS: Array<[string, unknown, string]> = [
   ["c2s.session.attachment", {"sessionId":"s","attachmentId":"a"}, "accept"],
   ["c2s.session.attachment", {}, "E_PROTOCOL: invalid sessionId"],
   ["c2s.session.models", {"sessionId":"s"}, "accept"],
+  ["c2s.session.skills", {"sessionId":"s"}, "accept"],
+  ["c2s.session.skills", {}, "E_PROTOCOL: invalid sessionId"],
   ["c2s.session.models", {}, "E_PROTOCOL: invalid sessionId"],
   ["c2s.session.selectModel", {"sessionId":"s","provider":"p","model":"m"}, "accept"],
   ["c2s.session.selectModel", {"sessionId":"s","provider":"","model":"m"}, "E_PROTOCOL: invalid model selection"],

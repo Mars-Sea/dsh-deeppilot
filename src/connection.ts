@@ -81,6 +81,7 @@ export class BridgeConnection implements BridgeSink {
   private liveActivityRegistrationGeneration = 0
   private pendingLiveActivityId?: string
   private lastActivity = Date.now()
+  private readonly streamAbort = new AbortController()
 
   /** True when no inbound frame arrived within maxIdleMs. */
   isStale(now: number, maxIdleMs: number): boolean {
@@ -108,6 +109,14 @@ export class BridgeConnection implements BridgeSink {
   ) {
     const connection = this
     const host: GateHost = {
+      signal: this.streamAbort.signal,
+      waitForWritable: async () => {
+        while (this.ws.bufferedAmount > 256 * 1024) {
+          this.streamAbort.signal.throwIfAborted()
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+        this.streamAbort.signal.throwIfAborted()
+      },
       get bridge() { return connection.deps.bridge },
       get devices() { return connection.deps.devices },
       get debug() { return deps.debug === true },
@@ -266,6 +275,7 @@ export class BridgeConnection implements BridgeSink {
   private onClose(): void {
     if (this.closed) return
     this.closed = true
+    this.streamAbort.abort()
     // Unsettled sockets (never proven) settle as 'closed' and give back their
     // admission slot; already-settled ones are a no-op inside the gate.
     this.gate.onClose()

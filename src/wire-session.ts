@@ -400,6 +400,23 @@ export const sessionRows: readonly WireFrameRow[] = [
     },
   },
   {
+    type: 'c2s.session.skills',
+    stage: 'authenticated',
+    scopes: READ,
+    capability: 'skills',
+    doc: 'PROTOCOL.md c2s.session.skills',
+    validate: (payload) => {
+      const checked = payloadObject(payload)
+      if (!checked.ok) return checked
+      return requireSessionId(checked.value) ?? checked
+    },
+    handle: async (ctx, payload) => {
+      const result = await ctx.bridge.sessionSkills(payload.sessionId as string)
+      if (!result.ok) return ctx.fail(result.code, result.message)
+      ctx.send('s2c.session.skills', { sessionId: payload.sessionId, ...result.value })
+    },
+  },
+  {
     type: 'c2s.session.models',
     stage: 'authenticated',
     scopes: READ,

@@ -46,7 +46,7 @@ export const WIRE_ERROR_FALLBACK: WireErrorCode = 'E_INTERNAL'
  * schedule 域例外：定时任务服务（`@deepseek-ai/dsh-schedule`）至今仍抛扁平
  * snake_case（`schedule_not_found`），不要给它加命名空间。
  */
-export type ErrorDomain = 'session' | 'model' | 'schedule'
+export type ErrorDomain = 'session' | 'model' | 'schedule' | 'command'
 
 const DOMAIN_TABLES: Record<ErrorDomain, Readonly<Record<string, WireErrorCode>>> = {
   // 会话/工作区/目录管理域的 Host 错误码。
@@ -112,6 +112,40 @@ const DOMAIN_TABLES: Record<ErrorDomain, Readonly<Record<string, WireErrorCode>>
     // 的目标不可满足，重试无意义。与其余「参数/时序不合法」类拒绝同档。
     'subagent_session': 'E_PROTOCOL',
   },
+  // 手机指令域的 Host 错误码。这一域一半是插件在 command-api.ts 自己造的码
+  // （`command/not-found` 等），一半是上游 Gateway 的原样拒绝（`gateway/*`、
+  // `session/*`）。收进同一张表，理由与别的域相同：HostBridge.commandOperation
+  // 此前把整域无条件压成 E_INTERNAL，手机端于是分不清「这个指令不存在」和
+  // 「主机内部错误」，只能显示一句通用失败，客户端也没法据此分支。
+  command: {
+    'command/not-found': 'E_NOT_FOUND',
+    // 目录过期：用户选中的定义已被替换或删除。归 E_NOT_FOUND 与既有
+    // `model-unavailable` 同惯例——目标不可用，重试无意义；客户端应重拉目录后
+    // 让用户重选，而不是按 E_BUSY 去自动重试。
+    'command/definition-changed': 'E_NOT_FOUND',
+    // 该指令不接受附件：请求参数与指令自身的声明不符，与其余 payload 类拒绝同档。
+    'command/attachments-unsupported': 'E_PROTOCOL',
+    // 主机没有生成归档，或归档内容类型不符：能力在，是这一次失败，重试有意义。
+    'command/export-unavailable': 'E_INTERNAL',
+    // 导出被取消或超时：没有上游码可依，保持 E_INTERNAL 的语义。
+    'command/export-cancelled': 'E_INTERNAL',
+    // 主机连命令 API 都没挂载：能力缺失，客户端不该按「稍后重试」处理。
+    'command/export-unsupported': 'E_UNSUPPORTED',
+    // 主机返回的目录/执行/反馈结果不合约定的形状：主机侧违约，客户端修不了。
+    'command/invalid-response': 'E_INTERNAL',
+    // 主机没挂载权限预设服务：能力缺失，与 directory-picker/unavailable 同档。
+    'command/permissions-unsupported': 'E_UNSUPPORTED',
+    // 上游 Gateway 在指令路径上的原样拒绝。
+    'gateway/bad-request': 'E_PROTOCOL',
+    'session/not-found': 'E_NOT_FOUND',
+    'session/agent-busy': 'E_BUSY',
+    'session/writer-held': 'E_BUSY',
+    'session/conflict': 'E_BUSY',
+    // 旧 host 的扁平写法。
+    'session-not-found': 'E_NOT_FOUND',
+    'agent-busy': 'E_BUSY',
+    'session-conflict': 'E_BUSY',
+  },
 }
 
 /**
@@ -157,6 +191,22 @@ export function wireErrorOf(
     code,
     message: describeFailure(error, code),
   }
+}
+
+/**
+ * 把任意抛出物收敛成 `HostFailure`，供 `catch` 分支复用同一张域表。
+ *
+ * 指令链路里有两种失败来源：`DshApiProxy.call` 把插件的失败码放在
+ * `{result:{ok:false,error}}` 里正常返回，而导出的归档流是直接抛出的
+ * （`AbortError`、主机侧 `Error` 都算）。把「取形状」和「查表」分开，是为了让
+ * 两条路都只经一次翻译；没有 code 的抛出物用调用方给的 fallback，避免把
+ * `undefined` 当码送进 lookupCode 而落进无法解释的兜底。
+ */
+export function hostFailureOf(error: unknown, fallbackCode: string): HostFailure {
+  const value = error as { code?: unknown; message?: unknown } | null | undefined
+  const code = typeof value?.code === 'string' && value.code.length > 0 ? value.code : fallbackCode
+  const message = typeof value?.message === 'string' && value.message.length > 0 ? value.message : undefined
+  return message === undefined ? { code } : { code, message }
 }
 
 /**

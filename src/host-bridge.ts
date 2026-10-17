@@ -47,7 +47,7 @@ import { documentPromptBlock, type PromptDocument } from './document-payload.ts'
 import type { DispatchJournal } from './dispatch-journal.ts'
 import { pushScopeFor } from './connection-policy.ts'
 import { capabilityBits } from './host-capabilities.ts'
-import { wireCodeFor, wireErrorOf, type WireErrorCode } from './wire-errors.ts'
+import { hostFailureOf, wireCodeFor, wireErrorOf, type WireErrorCode } from './wire-errors.ts'
 
 export {
   MAX_MESSAGE_PROJECTION_BYTES,
@@ -432,12 +432,21 @@ export class HostBridge {
 
   private onMuxFrame(frame: MuxFrameLike): void {
     switch (frame.type) {
+      case 'skills/changed':
+        this.record('s2c.skills.changed', {})
+        break;
+      case 'commands/changed':
+        this.record('s2c.commands.changed', {})
+        break;
       case 'session/event': {
         const event = frame.event as SessionEventLike | undefined;
         const sessionId = String(frame.sessionId ?? '');
         if (!event || !sessionId) break;
         if (frame.isSubagent === true) this.subagentSessionIds.add(sessionId);
         if (this.subagentSessionIds.has(sessionId)) break;
+        if (event.type === 'agent-preset/selected') {
+          this.record('s2c.skills.changed', { sessionId });
+        }
         this.noteActivity(sessionId, event);
         this.captureAssistantText(sessionId, event);
         const projection = projectEvent(sessionId, event);
@@ -453,6 +462,17 @@ export class HostBridge {
       case 'session/projection': {
         const p = frame as { sessionId?: string; key?: string; value?: unknown };
         if (!p.sessionId) break;
+        if (p.key === 'workingDirectory' || p.key === 'agentPreset') {
+          this.record('s2c.skills.changed', { sessionId: p.sessionId });
+        }
+        if (p.key === 'modelSelection') {
+          const next = (p.value as { next?: { provider?: unknown; model?: unknown; reasoningEffort?: unknown } } | undefined)?.next
+          const current = next && typeof next.provider === 'string' && typeof next.model === 'string'
+            ? { provider: next.provider, model: next.model, ...(typeof next.reasoningEffort === 'string' ? { reasoningEffort: next.reasoningEffort } : {}) }
+            : undefined
+          // 当前选择来自实时投影；目录缓存不能让其他客户端的模型切换长期滞留。
+          this.record('s2c.models.changed', { sessionId: p.sessionId, ...(current ? { current } : {}) });
+        }
         this.applyProjection(p.sessionId, String(p.key ?? ''), p.value);
         break;
       }
@@ -872,6 +892,50 @@ export class HostBridge {
       };
     } catch {
       return null;
+    }
+  }
+
+  async commandOperation(operation: 'list' | 'execute' | 'permissions' | 'feedback', payload: Record<string, unknown>): Promise<SessionManagementResult<unknown>> {
+    const api = this.apiProxy.commands
+    if (!api) return { ok: false, code: 'E_UNSUPPORTED', message: '当前主机不支持手机指令' }
+    try {
+      const invoke = api[operation] as (request: { rpcId: string; payload: Record<string, unknown> }) => Promise<{ result?: { ok: boolean; value?: unknown; error?: { code: string; message?: string } } }>
+      const response = await invoke.call(api, { rpcId: randomUUID(), payload })
+      if (response.result?.ok) return { ok: true, value: response.result.value ?? {} }
+      // 指令域的失败一律过域表：原先这里无条件回落 E_INTERNAL，于是「指令不存在」
+      // 与「主机内部错误」在手机上是同一个码，客户端没法据此分支。
+      return wireErrorOf('command', response.result?.error ?? { code: 'command/invalid-response' })
+    } catch (error) {
+      return wireErrorOf('command', hostFailureOf(error, 'command/invalid-response'))
+    }
+  }
+
+  async exportSession(sessionId: string, signal: AbortSignal): Promise<Response> {
+    const api = this.apiProxy.commands
+    if (!api) throw Object.assign(new Error('当前主机不支持日志导出'), { code: 'command/export-unsupported' })
+    return api.export({ rpcId: randomUUID(), payload: { sessionId } }, signal)
+  }
+
+  /** 由会话目录决定技能可见性；不读取正文，也不把本机路径发给移动端。 */
+  async sessionSkills(sessionId: string): Promise<SessionManagementResult<{ skills: import('./protocol.ts').SkillSummary[] }>> {
+    const read = this.apiProxy.sessions.skills
+    if (!read) return { ok: false, code: 'E_UNSUPPORTED', message: '当前主机不支持技能目录' }
+    try {
+      const response = await read.call(this.apiProxy.sessions, { rpcId: randomUUID(), payload: { sessionId } })
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: '技能目录响应无效' }
+      if (!response.result.ok) return wireErrorOf('session', response.result.error)
+      const seen = new Set<string>()
+      const skills = response.result.value.skills.map(skill => {
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(skill.name) || seen.has(skill.name) ||
+            typeof skill.description !== 'string' || typeof skill.modelInvocable !== 'boolean') {
+          throw new Error('技能目录条目无效')
+        }
+        seen.add(skill.name)
+        return { name: skill.name, description: skill.description, modelInvocable: skill.modelInvocable }
+      })
+      return { ok: true, value: { skills } }
+    } catch {
+      return { ok: false, code: 'E_INTERNAL', message: '无法读取当前会话的技能目录' }
     }
   }
 

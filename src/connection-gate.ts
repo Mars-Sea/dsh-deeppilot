@@ -71,6 +71,8 @@ export interface AuthenticatedIdentity {
  * 审计两个通知。行（wire-registry）看到的 FrameContext 是它的一个按帧投影。
  */
 export interface GateHost {
+  readonly signal?: AbortSignal
+  waitForWritable?(): Promise<void>
   readonly bridge: HostBridge
   readonly devices: DeviceStore
   readonly debug: boolean
@@ -379,6 +381,8 @@ export class ConnectionGate {
     const host = this.host!
     return {
       frame: env,
+      signal: host.signal,
+      waitForWritable: host.waitForWritable?.bind(host),
       deviceId: this.deviceId,
       widgetClient: this.widgetClient,
       bridge: host.bridge,

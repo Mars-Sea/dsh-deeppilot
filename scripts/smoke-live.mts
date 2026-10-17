@@ -9,12 +9,13 @@
  * drives a `dsh web` profile that already has this working copy installed and
  * asserts the phone protocol end to end against it.
  *
- * Two subcommands:
+ * Three subcommands:
  *   register  mint a stable smoke identity and pre-authorize it in the
  *             profile's devices-v2.json, so the run can authenticate without a
  *             pairing code. Run this BEFORE starting the host, then restart it
  *             — DeviceStore snapshots the file once at mount.
  *   run       connect over WSS and execute the checklist.
+ *   commands  exercise commands on an isolated host with synthetic model/data.
  *
  * The pairing-code happy path is deliberately NOT driven here: the code only
  * exists inside the host process and can only be minted through the plugin's
@@ -27,6 +28,7 @@
  * Usage:
  *   npx tsx scripts/smoke-live.mts register
  *   npx tsx scripts/smoke-live.mts run [--interactions] [--prompt]
+ *   SMOKE_ISOLATED=1 npx tsx scripts/smoke-live.mts commands
  *
  * Environment:
  *   SMOKE_DSH_HOME    profile home (default: <repo>/.dsh-smoke-home)
@@ -39,6 +41,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { request as httpsRequest } from 'node:https'
 import { X509Certificate } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import WebSocket from 'ws'
 import {
   canonicalAuthChallenge,
@@ -151,6 +154,7 @@ class PhoneClient {
   private ws!: WebSocket
   private seq = 0
   private readonly waiters = new Map<string, (frame: Frame) => void>()
+  private readonly progress = new Map<string, (frame: Frame) => void>()
   private readonly pushHandlers = new Set<PushHandler>()
   /** Every frame received, so a step can assert on what it did NOT get. */
   readonly received: Frame[] = []
@@ -168,6 +172,7 @@ class PhoneClient {
       const failure = { v: 2, type: 's2c.error', payload: { code: 'E_INTERNAL', message: `连接已关闭 ${code}` } }
       for (const [, resolve] of this.waiters) resolve(failure)
       this.waiters.clear()
+      this.progress.clear()
     })
     this.ws.on('error', () => { /* close handler reports it */ })
     await new Promise<void>((resolve, reject) => {
@@ -187,9 +192,14 @@ class PhoneClient {
     this.received.push(frame)
     for (const handler of this.pushHandlers) handler(frame)
     if (frame.id !== undefined) {
+      if (frame.type === 's2c.session.export.chunk') {
+        this.progress.get(frame.id)?.(frame)
+        return
+      }
       const waiter = this.waiters.get(frame.id)
       if (waiter) {
         this.waiters.delete(frame.id)
+        this.progress.delete(frame.id)
         waiter(frame)
       }
     }
@@ -201,14 +211,16 @@ class PhoneClient {
   }
 
   /** Send one request and await the response that echoes its id. */
-  request(type: string, payload?: unknown, timeoutMs = STEP_TIMEOUT_MS): Promise<Frame> {
+  request(type: string, payload?: unknown, timeoutMs = STEP_TIMEOUT_MS, onProgress?: (frame: Frame) => void): Promise<Frame> {
     const id = `smoke-${++this.seq}`
     return new Promise<Frame>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.waiters.delete(id)
+        this.progress.delete(id)
         reject(new StepError(`${type} 等待响应超时 (${timeoutMs}ms)`))
       }, timeoutMs)
       this.waiters.set(id, (frame) => { clearTimeout(timer); resolve(frame) })
+      if (onProgress) this.progress.set(id, onProgress)
       this.ws.send(JSON.stringify({ v: 2, type, id, ts: Date.now(), ...(payload === undefined ? {} : { payload }) }))
     })
   }
@@ -651,14 +663,109 @@ async function runInteraction(
 
 // ---------- entry ----------
 
+/** 官方主机集成验收；只应指向无真实数据、无收费凭据的隔离测试主机。 */
+async function runCommands(): Promise<void> {
+  if (process.env.SMOKE_ISOLATED !== '1') throw new StepError('指令验收要求 SMOKE_ISOLATED=1，并使用独立主机与合成模型')
+  const identity = loadIdentity()
+  const client = new PhoneClient()
+  try {
+    await client.connect()
+    const cp = (await client.waitForPush(f => f.type === 's2c.auth.challenge')).payload
+    const fields = { ...cp, deviceId: identity.deviceId, deviceName: 'Smoke Harness', appVersion: 'smoke' }
+    const welcome = client.waitForPush(f => f.type === 's2c.welcome')
+    client.send('c2s.auth.prove', { ...fields, signature: signProof(fields, identity) })
+    assert('指令能力已启用', (await welcome).payload?.capabilities?.commands === true, '真实 WSS 鉴权')
+    const workspace = join(DSH_HOME, 'command-workspace')
+    mkdirSync(workspace, { recursive: true })
+    // 技能的项目根以最近 .git 为界；隔离目录不能继承外层插件仓库。
+    mkdirSync(join(workspace, '.git'), { recursive: true })
+    const skillDirectory = join(workspace, '.agents', 'skills', 'command-smoke')
+    mkdirSync(skillDirectory, { recursive: true })
+    writeFileSync(join(skillDirectory, 'SKILL.md'), '---\nname: command-smoke\ndescription: 合成技能目录验收\n---\n仅处理合成测试文本。\n')
+    const sessionId = expect(await client.request('c2s.session.create', { cwd: workspace }), 's2c.ack').payload.sessionId
+    const tail = client.waitForPush(f => f.type === 's2c.session.tail' && f.payload?.sessionId === sessionId)
+    client.send('c2s.session.open', { sessionId, tailCount: 20 })
+    await tail
+    const read = async (name: string) => expect(await client.request('c2s.session.' + name, { sessionId }), 's2c.session.' + name).payload
+    const catalog = await read('commands')
+    const names = catalog.commands.map((row: any) => row.name)
+    assert('六项官方指令目录', ['compact', 'goal', 'plan', 'permission', 'feedback', 'export'].every(n => names.includes(n)), names.join(','))
+    const skills = await read('skills')
+    assert('真实技能目录加载工作区技能', skills.skills.some((row: any) => row.name === 'command-smoke'), `${skills.skills.length} 个技能`)
+    const command = async (line: string, attachments: unknown[] = []) => expect(await client.request('c2s.session.command', { sessionId, line, attachments }, 120_000), 's2c.session.commandResult').payload.result
+    const empty = await command('/compact')
+    assert('空历史压缩返回成功', empty.kind === 'success' && empty.text === 'No compactable history yet.', String(empty.text))
+    assert('压缩拒绝多余参数', (await command('/compact unexpected')).kind === 'error', '业务错误而非模型消息')
+    const rejected = await client.request('c2s.session.command', { sessionId, line: '/missing-smoke-command' })
+    assert('未知指令拒绝执行', rejected.type === 's2c.error', String(rejected.payload?.code))
+    const stale = await client.request('c2s.session.command', { sessionId, line: '/permission read-only', expectedDefinitionId: 'stale-definition' })
+    assert('旧定义身份拒绝执行', stale.type === 's2c.error', '实时目录重新校验')
+    const permissions = await read('permissions')
+    assert('危险权限要求确认', permissions.options.some((o: any) => o.value === 'danger-full-access' && o.confirmation), `${permissions.options.length} 个选项`)
+    const permissionResult = await command('/permission read-only')
+    assert('权限切换与投影一致', permissionResult.kind === 'success' && (await read('permissions')).currentValue === 'read-only', '只修改合成测试会话')
+    const models = await read('models')
+    const group = models.groups.find((g: any) => g.id === 'command-smoke')
+    assert('真实模型目录可读', group?.models.length === 2, `${group?.models.length ?? 0} 个本机测试模型`)
+    const changed = client.waitForPush(f => f.type === 's2c.models.changed' && f.payload?.sessionId === sessionId && f.payload?.current?.model === 'smoke-b')
+    const selected = expect(await client.request('c2s.session.selectModel', { sessionId, provider: 'command-smoke', model: 'smoke-b' }), 's2c.session.modelSelected')
+    assert('模型切换发出实时失效通知', selected.payload?.selected?.model === 'smoke-b' && (await changed).payload.current.model === 'smoke-b', '切换与推送均核对')
+    const categories = ['task-result', 'instruction-following', 'product-interaction', 'service-stability', 'resource-cost', 'security-privacy-permission', 'other']
+    for (const category of categories) expect(await client.request('c2s.session.feedback', { sessionId, text: 'command-smoke-' + category, category }), 's2c.ack')
+    record('七类反馈接口成功', 'PASS')
+    const rejectedAttachment = await client.request('c2s.session.command', { sessionId, line: '/compact', attachments: [{ type: 'document', name: 'rejected', mediaType: 'text/plain', data: Buffer.from('must-not-upload').toString('base64') }] })
+    assert('不支持附件的指令拒绝上传', rejectedAttachment.type === 's2c.error', '压缩附件被拒绝')
+    // 先产生完整已结束轮次，再通过官方压缩服务压缩；模型只返回本机固定文本。
+    for (let i = 0; i < 5; i++) {
+      const end = client.waitForPush(f => f.type === 's2c.session.event' && f.payload?.sessionId === sessionId && f.payload?.kind === 'turn.end', 120_000)
+      const receipt = expect(await client.request('c2s.session.sendPrompt', { sessionId, text: `合成历史第${i}轮：` + 'synthetic context for command acceptance. '.repeat(2300), clientSendId: `${Date.now()}-${randomUUID()}` }, 120_000), 's2c.ack').payload
+      if (receipt.status === 'rejected') throw new StepError('合成输入被主机拒绝：' + receipt.code)
+      await end
+    }
+    const compacted = await command('/compact')
+    assert('官方压缩完成并产生摘要事件', compacted.kind === 'success' && Number.isSafeInteger(compacted.sourceEventSeq) && /^Compacted /.test(compacted.text ?? ''), String(compacted.text))
+    assert('目标文本参数可执行', (await command('/goal 验证合成会话目标')).kind === 'success', '真实目标服务')
+    assert('目标暂停参数可执行', (await command('/goal pause')).kind === 'success', '真实目标服务')
+    assert('目标清除参数可执行', (await command('/goal clear')).kind === 'success', '真实目标服务')
+    const planEnd = client.waitForPush(f => f.type === 's2c.session.event' && f.payload?.sessionId === sessionId && f.payload?.kind === 'turn.end', 120_000)
+    const plan = await command('/plan 验证文本附件', [{ type: 'document', name: 'smoke-note', mediaType: 'text/plain', data: Buffer.from('command-smoke-attachment-body').toString('base64') }])
+    assert('计划参数与文档附件可执行', plan.kind === 'success', String(plan.text))
+    await planEnd
+    assert('退出计划模式可执行', (await command('/plan off')).kind === 'success', '真实计划服务')
+    const fork = expect(await client.request('c2s.session.fork', { sessionId, clientRequestId: `${Date.now()}-${randomUUID()}` }), 's2c.session.forked').payload
+    assert('生成待导出的子会话', typeof fork.sessionId === 'string', '仅合成会话')
+    const chunks: Buffer[] = []
+    const archive = expect(await client.request('c2s.session.export', { sessionId }, 120_000, frame => {
+      if (frame.payload.index !== chunks.length) throw new StepError('日志块序号不连续')
+      chunks.push(Buffer.from(frame.payload.data, 'base64'))
+    }), 's2c.ack').payload
+    const zip = Buffer.concat(chunks)
+    assert('归档分块与最终大小一致', archive.chunks === chunks.length && archive.bytes === zip.length && archive.sessionId === sessionId, `${chunks.length} 块，${zip.length} 字节`)
+    const zipPath = join(DSH_HOME, 'command-smoke-export.zip')
+    writeFileSync(zipPath, zip)
+    execFileSync('unzip', ['-t', zipPath], { stdio: 'pipe' })
+    const paths = execFileSync('unzip', ['-Z1', zipPath], { encoding: 'utf8' })
+    const contents = execFileSync('unzip', ['-p', zipPath], { maxBuffer: 32 * 1024 * 1024 }).toString('utf8')
+    // 官方根日志使用固定文件名；只有子会话目录带会话编号。
+    assert('官方 ZIP 完整解包且含子会话', /^session(?:\.v\d+)?\.jsonl$/m.test(paths) && paths.includes(`subagents/${fork.sessionId}/`), `${paths.trim().split('\n').length} 个文件`)
+    const rootLog = execFileSync('unzip', ['-p', zipPath, paths.split('\n').find(path => /^session(?:\.v\d+)?\.jsonl$/.test(path))!], { maxBuffer: 32 * 1024 * 1024 }).toString('utf8')
+    const feedback = rootLog.trim().split('\n').map(line => JSON.parse(line)).filter(row => row.type === 'feedback/record')
+    assert('七类反馈已写入日志', categories.every(c => feedback.some(row => row.data?.category === c && row.data?.text === 'command-smoke-' + c)), '核对 feedback/record 事件')
+    assert('导出包含文档正文附件', contents.includes('command-smoke-attachment-body'), '官方附件归档')
+    assert('被拒附件未进入归档', !contents.includes('must-not-upload') && !paths.includes('rejected'), '附件准入先于上传')
+    console.log('归档证据：' + zipPath)
+  } finally { client.close() }
+}
+
 const [command = 'run', ...flags] = process.argv.slice(2)
 
 if (command === 'register') {
   registerDevice()
-} else if (command === 'run') {
+} else if (command === 'run' || command === 'commands') {
   const options = { interactions: flags.includes('--interactions'), prompt: flags.includes('--prompt') }
   try {
-    await run(options)
+    if (command === 'commands') await runCommands()
+    else await run(options)
   } catch (error) {
     record('冒烟测试执行', 'FAIL', error instanceof Error ? error.message : String(error))
   }
@@ -669,6 +776,6 @@ if (command === 'register') {
   console.log(`\n汇总: ${passed} 通过 / ${failed.length} 失败 / ${warned.length} 警告 / ${skipped.length} 跳过`)
   process.exitCode = failed.length === 0 ? 0 : 1
 } else {
-  console.error(`未知子命令: ${command}（可用: register | run）`)
+  console.error(`未知子命令: ${command}（可用: register | run | commands）`)
   process.exitCode = 2
 }

@@ -1,0 +1,41 @@
+# 必须配合独立 DSH_HOME 和 DEEPPILOT_COMMAND_SMOKE=1；从公共插件仓库运行 CLI。
+- id: deeppilot
+  config:
+    local:
+      enabled: true
+      port: 3198
+    remote:
+      enabled: false
+      provider: tailscale-funnel
+    push:
+      provider: none
+- id: agent-default-model
+  config:
+    provider: command-smoke
+    model: smoke-a
+- id: llm-pi-ai
+  config:
+    providers:
+      command-smoke:
+        displayName: 本机指令验收
+        apiKeyEnv: COMMAND_SMOKE_API_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:3188/v1
+        retryPolicy:
+          mode: normal
+          maxRetries: 0
+        models:
+          - id: smoke-a
+            name: 测试模型甲
+            contextWindow: 32768
+            maxTokens: 4096
+            reasoningEfforts: false
+          - id: smoke-b
+            name: 测试模型乙
+            contextWindow: 32768
+            maxTokens: 4096
+            reasoningEfforts: false
+- insert:
+    - id: command-smoke-host
+      # CLI 在求值前校验 name；相对模块以本补丁所在目录解析。
+      name: ./command-smoke-host.mjs

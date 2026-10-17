@@ -168,8 +168,8 @@ scope 与操作映射：
 
 | scope | 允许的操作 |
 |---|---|
-| `sessions.read` | 会话/工作区/目录读取、会话打开与历史、模型目录读取 |
-| `prompt.send` | `c2s.session.sendPrompt` |
+| `sessions.read` | 会话/工作区/目录读取、会话打开与历史、模型目录读取、`c2s.session.skills` 技能目录，以及 `c2s.session.commands`、`c2s.session.permissions`、`c2s.session.export` |
+| `prompt.send` | `c2s.session.sendPrompt`、`c2s.session.command`、`c2s.session.feedback` |
 | `sessions.manage` | 创建/重命名/归档/取消会话，创建工作区，切换模型 |
 | `interactions.respond` | pending 快照、回答 approval 与 question |
 | `notifications.register` | 注册 APNs token 与通知偏好 |
@@ -187,7 +187,7 @@ scope 同样约束服务端**推送**给已认证连接的内容。桥在每次�
 
 | 下行帧类型 | 需要的 scope |
 |---|---|
-| `s2c.session.event`、`s2c.sessions.delta`、`s2c.session.tail`、`s2c.history.page` | `sessions.read` |
+| `s2c.models.changed`、`s2c.commands.changed`、`s2c.skills.changed`、`s2c.session.event`、`s2c.sessions.delta`、`s2c.session.tail`、`s2c.history.page` | `sessions.read` |
 | `s2c.pending.approval`、`s2c.pending.question`、`s2c.pending.cleared` | `interactions.respond` |
 | `s2c.notify`（`category` 为 `approval.required` / `question.asked`） | `interactions.respond` |
 | `s2c.notify`（`category` 为 `turn.completed` / `session.error`） | `sessions.read`（正文可能包含助手输出） |
@@ -338,6 +338,26 @@ Message 投影：
   文本文档的 `kind=document`，由 Bridge 以带边界的模型文本提交；当前 Host 没有通用二进制附件服务，
   因此文档不提供 attachmentId/read-back。`truncated=true` 表示客户端只提交了可读文本前缀。
   attachmentId/宽高为可选字段，客户端必须容忍缺失。
+
+### c2s.session.skills → s2c.session.skills
+
+协议 v2 的可选兼容扩展，能力位 `skills` 缺省视为 false。请求需要 `sessions.read`；小组件连接不允许调用。响应沿用请求 `id`，不进入离线重放。
+
+```json
+{ "type": "c2s.session.skills", "id": "catalog-1", "payload": { "sessionId": "session-1" } }
+{ "type": "s2c.session.skills", "id": "catalog-1", "payload": { "sessionId": "session-1", "skills": [
+  { "name": "review", "description": "检查代码", "modelInvocable": true }
+] } }
+```
+
+1. 插件调用当前 Host 的 `sessionSkillCatalog.list({sessionId}, signal)`，由上游按会话当前工作目录与预设筛选用户可调用技能；不扫描插件固定目录，不读取技能正文。
+2. 响应只投影 `name`、`description`、`modelInvocable`；指令文件路径和正文不传送。`modelInvocable=false` 仍允许用户显式调用，客户端显示「仅限用户调用」。
+3. 点击候选只将当前光标处的斜杠词补全为 `/name `，保留前后草稿与键盘，用户继续编辑后通过既有 `c2s.session.sendPrompt` 发送。此能力不增加命令执行通道。
+4. 主机缺少该目录服务时能力为 false，请求回 `E_UNSUPPORTED`；目录读取失败回既有错误帧，不伪装成空目录。
+
+### s2c.skills.changed
+
+技能注册表失效时广播 `{}`；会话工作目录或预设变化时广播 `{sessionId}`。此帧只通知失效，不携带技能内容，需要 `sessions.read`，进入既有重放序列。客户端丢弃对应目录及在途结果；候选面板打开时重新读取，关闭时等下一次触发。重连必须重新读取，不复用旧连接结果。
 
 ### 会话模型目录与切换
 
@@ -789,6 +809,23 @@ deeppilot/setDeviceName(deviceId, customName) -> customName | null
 
 Bridge 侧 Host code 到 wire 码的映射是 `src/wire-errors.ts` 的单一属主，逐码有测试冻结。命名空间码（`session/agent-busy`）与旧 host 的扁平写法（`agent-busy`）必须映到同一个 wire 码：只认一套会让另一半落进 `E_INTERNAL`，`E_BUSY` 于是永不出现，客户端的重试判断随之失真。
 
+手机指令域（见「移动端系统命令」）的失败同样走这张表。桥接与插件自造的码与上游码同形，都在 `src/wire-errors.ts` 的 `command` 域逐条登记：
+
+| Host/Bridge code | wire 码 | 触发条件 |
+|---|---|---|
+| `command/not-found` | E_NOT_FOUND | 当前会话没有这个指令 |
+| `command/definition-changed` | E_NOT_FOUND | `expectedDefinitionId` 与当前目录不一致（缓存目录已过期） |
+| `command/attachments-unsupported` | E_PROTOCOL | 指令声明不接受附件，但请求带了附件 |
+| `command/export-unavailable` | E_INTERNAL | 主机未生成归档，或归档内容类型不符 |
+| `command/export-cancelled` | E_INTERNAL | 导出被取消，或超过十分钟上限 |
+| `command/invalid-response` | E_INTERNAL | 主机返回的目录/执行/反馈结果不合约定的形状 |
+| `command/export-unsupported` | E_UNSUPPORTED | 主机未挂载命令 API，导出能力不存在 |
+| `command/permissions-unsupported` | E_UNSUPPORTED | 主机未挂载权限预设服务 |
+| `gateway/bad-request` | E_PROTOCOL | 上游 Gateway 拒绝请求形状 |
+| `session/not-found`、`session/agent-busy`、`session/writer-held`、`session/conflict` | 同会话域取值 | 上游在指令路径上的原样拒绝 |
+
+两处取值理由需要写明：`command/definition-changed` 归 `E_NOT_FOUND` 而不是 `E_BUSY`，因为目标定义已不存在，自动重试不会成功，客户端应重拉目录后让用户重选；`command/attachments-unsupported` 归 `E_PROTOCOL`，因为请求参数与指令自身的声明不符，与其余 payload 类拒绝同档。未登记的码仍然落 `E_INTERNAL`，并按本节约定把真实原因并进 `message`。
+
 ## 10. 能力协商与版本策略
 
 - welcome.capabilities 中为 false 的能力，客户端不得调用对应 c2s 帧（服务端将回 E_UNSUPPORTED）。
@@ -992,3 +1029,35 @@ Host 必须确认源会话是普通、可见且未归档的会话；subagent、�
 同一设备的 `clientRequestId` 和相同请求内容只能执行一次。重启后 Host 从独立
 fork journal 恢复已创建的新 Session id，并返回 `replayed:true`；同一 ID 搭配不同
 内容返回 `E_PROTOCOL`。原会话永远不被修改或归档。
+
+## 移动端系统命令（v2 可选扩展）
+
+`welcome.capabilities.commands?: boolean` 缺省为不支持。手机从当前会话的官方命令目录发现指令；目录名称、`definitionId`、`input.hint` 和 `input.attachments` 原样投影，不传处理器。命令不走普通 prompt 通道，执行生命周期由主机记录。所有新帧均拒绝 widget。
+
+### c2s.session.commands
+
+权限 `sessions.read`。请求 `{sessionId}`，响应 `s2c.session.commands {sessionId,commands:[{name,description,definitionId?,input?:{hint,attachments?}}],permissions:boolean,export:boolean}`。名称按主机 Agent 作用域覆盖后的结果读取。`s2c.commands.changed {sessionId}` 表示该会话的命令或权限目录失效，负载恒带 `sessionId`：权限目录与命令目录共用这一条推送，客户端不区分来源，收到后重拉两个目录。连接、会话预设变化同样撤销旧结果。
+
+### c2s.session.command
+
+权限 `prompt.send`。请求 `{sessionId,line,attachments?:[{type:"image"|"document",name,mediaType,data}],expectedDefinitionId?:string}`，响应 `s2c.session.commandResult {sessionId,commandId,result:{kind:"success"|"error",text?,sourceEventSeq?}}`。`line` 必须为草稿起始命令行，格式为 `/` 加命令名，命令名匹配 `[a-z][a-z0-9_-]*` 且其后必须是空白或字符串结尾，总长最多 64 KiB 字符；保留命令名后的原始空白和参数，两端都不 trim、也不折叠空格。附件最多 4 个，每项 base64 最长 16 MiB；图片限 PNG/JPEG/WebP/GIF。`document` 是手机已提取的 UTF-8 正文，以文本文件上传，绝不声称是原始 PDF/二进制。主机先核对命令声明的附件支持，再上传及执行。未知命令不可回退为模型消息。客户端不自动重试执行；网络中断可能无法确认主机结果。
+
+### c2s.session.permissions
+
+权限 `sessions.read`。请求 `{sessionId}`，响应 `s2c.session.permissions {sessionId,currentValue?,options:[{value,name,description?,confirmation:boolean}]}`。当前值来自 `permissions` 投影；目录来自 `permissionPresets/catalog`。选择器对完全权限与实验自动审查显示确认，选中后执行 `/permission <value>`；显式完整命令直接交主机校验。
+
+### c2s.session.feedback
+
+权限 `prompt.send`。请求 `{sessionId,text,category?}`，类别限主机固定的七种反馈类别，正文最长 64 KiB 字符。通过官方 `sessionFeedback/record` 记录会话反馈，响应 `s2c.ack {sessionId}`。该操作只记录本机主机的会话日志，不自动提交模型提示词或向外部平台发送。
+
+### c2s.session.export
+
+权限 `sessions.read`。请求 `{sessionId}`。使用官方 `/api/session.export?includeDescendants=true` 归档路由，返回含子会话、图片和文件的完整 ZIP。连续响应 `s2c.session.export.chunk {index,data}`，从 0 连续编号，每块最多 48 KiB 二进制的 base64；同一请求 `id` 关联所有块，块不是最终响应。最终 `s2c.ack {sessionId,fileName,chunks,bytes}` 核对完整性。错误为同 id 的 `s2c.error`，客户端删除未完成临时文件。传输按连接写缓冲等待，断线取消归档流；块不进入重放环。服务端对整次导出设十分钟上限，超时同样取消归档流、按同 id 的 `s2c.error`（E_INTERNAL）结束，且不发送 `s2c.ack`——部分块永远不构成成功的导出。手机按块落临时文件、核对编号和最终大小，成功后才打开系统分享。
+
+模型与文件入口由手机自身提供，并复用已有选择器；权限、反馈仅装饰匹配的官方 `definitionId`，同名第三方命令仍保留自己的执行与参数语义。技能继续补全文字后作为 prompt 发送；同名候选按类型分开，显式选择技能优先保留技能语义。
+
+### s2c.models.changed
+
+需要 `sessions.read`。主机 `modelSelection` 会话投影变化时推送 `{sessionId,current?:{provider,model,reasoningEffort?}}`；字段只投影公开模型选择，不包含其他上游数据。缺少 `current` 表示重新读取权威选择。它使对应会话的模型目录缓存失效；当前选择与可选模型列表分别更新，防止旧目录覆盖另一端的实时切换。旧客户端可忽略未知帧，旧桥接由短有效期与手动刷新兜底。
+
+原生权限操作可在 `c2s.session.command` 携带 `expectedDefinitionId`；插件重新读取目录并精确核对来源后才执行。定义变化时拒绝执行，不把缓存中的界面操作错误转给新的同名命令。此字段可选，最长 512 字符，不影响已有调用。
