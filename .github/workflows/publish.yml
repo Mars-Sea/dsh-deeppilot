@@ -158,7 +158,10 @@ jobs:
             return response.json()
           }
           // 注册表可能短暂延迟可见，重试只读取元数据，不重复上传包。
-          for (let attempt = 1; attempt <= 12; attempt++) {
+          // 0.9.5 与 0.9.6 的末尾核对都撞上过这段延迟：固定 12 次 × 5 秒（约 1 分钟）
+          // 不够，上传其实已经成功，却让整次运行以红色收尾。放宽到最多 24 次、
+          // 间隔 5 秒线性递增并封顶 20 秒（约 7 分钟），仍只读元数据，不会重复上传。
+          for (let attempt = 1; attempt <= 24; attempt++) {
             try {
               const [pkg, tags] = await Promise.all([
                 get(`dsh-deeppilot/${encodeURIComponent(version)}`),
@@ -172,9 +175,9 @@ jobs:
               console.log(`发布核对通过：dsh-deeppilot@${version}（${tag}），来源证明：${pkg.dist.attestations.url}`)
               break
             } catch (error) {
-              if (attempt === 12) throw error
+              if (attempt === 24) throw error
               console.log(`发布元数据尚未同步，准备第 ${attempt + 1} 次核对`)
-              await setTimeout(5_000)
+              await setTimeout(Math.min(5_000 * attempt, 20_000))
             }
           }
           NODE
