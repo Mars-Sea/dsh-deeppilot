@@ -91,10 +91,12 @@
     committed tree), `npm run check:config-schema` against the pinned
     `0.2.0-rc.2` CLI, `go test ./...` for the helper, and all six
     `bin/SHA256SUMS` entries verified.
-- **Nothing has been published from this tree yet.** `package.json` reads `0.9.7`
-  on the release branch; no tag, registry version, or GitHub release corresponds
-  to it yet. This entry records an audit, a declaration sync, and the local
-  preparation of 0.9.7 — **not** a published release.
+- **Published as 0.9.7 on 2026-10-17.** `npm view dsh-deeppilot dist-tags` reads
+  `latest: 0.9.7`, and the version carries an npm provenance attestation
+  (`https://slsa.dev/provenance/v1`). The release commit `bf18755` is on `main`,
+  the annotated tag `v0.9.7` dereferences to it, and the GitHub release was made
+  public only after a clean-profile install had been verified — see the publish
+  verification section below.
 
 ### Previous decision — `dsh-v0.2.1-alpha.4`
 
@@ -588,9 +590,13 @@ close that gap rather than assume it.
   `npm run typecheck`, `npm run build` with a byte-identical regenerated `lib/`,
   `npm run check:config-schema` against the pinned `0.2.0-rc.2` CLI, the Go helper
   tests, and the six `bin/SHA256SUMS` entries.
-- **No release action yet.** `package.json` reads `0.9.7` on the release branch;
-  nothing was published, tagged, or pushed. The widened list reaches users only
-  through that release.
+- **Release action completed — 0.9.7 published on 2026-10-17.** The annotated tag
+  `v0.9.7` points at `bf18755` on `main`; the publish workflow ran on that tag and
+  all of its steps passed, including the post-publish registry check whose retry
+  window this release widened. Registry `latest` reads `0.9.7` with provenance,
+  and a clean isolated profile installed `dsh-deeppilot@0.9.7` from npm, composed
+  it on a real `0.2.1-alpha.5` host, and answered `/phone/health` with `200` and
+  `serverVersion: "0.9.7"`.
 - **The declaration mirrors have drifted historically.** `README.md`,
   `README.zh-CN.md`, `COMPATIBILITY.md`, and `AGENTS.md` all said "three
   releases" while `package.json` already named four; that contradiction was
@@ -1644,3 +1650,21 @@ For every future DSH release, compare the new tag against the last audited tag,
 inspect the package/service surfaces actually imported by this repository,
 classify install/runtime/protocol risk separately, and append a dated decision
 here. Do not treat a release-note summary as proof of compatibility.
+
+## 2026-10-15 — 移动端技能发现扩展
+
+新增可选的 `skills` 手机能力，使用官方 `sessionSkillCatalog.list({sessionId}, AbortSignal)` 服务，已对照本机 `0.2.0-rc.2` 和 `0.2.1-alpha.3` 发行声明。缺少服务只关闭该特性，晚挂载服务会重新探测，不缓存缺席。未修改宿主版本范围、鉴权、包版本或命令派发契约。手机只接收元数据，技能注册表和会话预设、工作目录变化触发目录失效。完整文档清单与四类差异表见《技能提示对接说明》。此源码改动尚未发布，真实主机与真机技能加载仍未验收。
+
+## 2026-10-16 — 移动端系统指令扩展
+
+1. 安装：本轮命令改动未调整依赖范围、包版本或发布状态。命令接口核对基于 `0.2.0-rc.2` 与 `0.2.1-alpha.3`；工作区并行的 `alpha.4` 兼容改动以其独立审计为准，不把本轮合成测试算作新版本真实业务验收。
+2. 运行：对照两版生成声明和实现，使用公开 `typertGateway.invoke` 的 `commands/list`、`commands/execute`、`fileUploads/upload`、`permissionPresets/catalog`、`sessionFeedback/record`；当前权限来自会话投影，日志复用官方共享 Fetch 归档路由。alpha.3 创建不参与审批的 owner Peer，rc.2 回退既有 operator。详情及上游全接口清单见[移动端命令对接说明](移动端命令对接说明.md)。
+3. 手机协议：v2 可选 `commands` 能力和五个新请求；读取使用 `sessions.read`，执行/反馈使用 `prompt.send`，小组件默认拒绝。旧手机忽略新字段，旧桥接不展示新增入口。导出分块不重放，接收方完整校验后分享。
+4. 验证：576 项测试通过、1 项原有待办；类型检查、构建和配置检查通过。新增逻辑为合成服务测试，未在两版真实 Host 会话执行系统指令，不据此声称运行验收或发布完成。
+
+## 2026-10-16 — 移动端目录缓存
+
+1. 安装与主机 API：本轮不改安装范围或依赖；读取沿用现有技能、命令和模型接口。工作区另有 alpha.4 兼容改动，命令对接已重新枚举该版 29 包、144 个接口，相关主机实现与 alpha.3 相同；不据此宣称真实业务验收。
+2. 手机协议：模型当前选择投影新增 `s2c.models.changed`，受 `sessions.read` 控制；原生权限执行可附加 `expectedDefinitionId`，重读目录核对来源，旧客户端字段缺省兼容。无新增周期轮询或第二层主机时间缓存。
+3. 客户端：内存五分钟、磁盘最长七天，重启旧目录先展示并校验，按配对身份/主机/会话隔离；当前模型、权限和执行结果不落盘。具体约定和格式重建见[移动端目录缓存](移动端目录缓存.md)。
+4. 验证：插件 577 项通过、1 项原有待办，类型检查、生成产物构建和使用本机固定版本的离线配置校验通过；两端缓存单元与模拟器证据见各自文档。未发布。
