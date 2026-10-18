@@ -105,6 +105,17 @@
    本轮还确认了一个易漏点：升版本号必须同步重录
    `tests/apply-baseline.snapshot.json`，否则 `npm test` 会失败——已写入
    `AGENTS.md` 的发布流程第 1 步。
+8. `0.9.8` 的实际发布结果（2026-10-18）：附注标签 `v0.9.8` 指向
+   `f4551b61602e5e60b11565ae31ccba3257d3dc9e`，该提交的 CI 与 CodeQL 均为绿；
+   `publish.yml` 在该标签上运行（运行号 `39048037503`，24 个步骤全部成功），
+   注册表 `latest` 为 `0.9.8`。逐项核验：来源证明类型为
+   `https://slsa.dev/provenance/v1`，其 `gitCommit` 正是该提交；压缩包 SHA1
+   `8288977711e04679d077b970f863e726631fc309` 与 SHA512 与注册表一致；注册表
+   条目数 68、解包 130,945,335 字节与发布前的打包核对一致，包内逐个文件与已验证
+   的工作树逐字节相同。随后在全新隔离 profile 中从 npm 安装
+   `dsh-deeppilot@0.9.8`，在真实 `0.2.1-rc.2` 宿主上完成组合与启动，插件自有端口
+   3098 的 `/phone/health` 返回 200 且 `serverVersion` 为 `0.9.8`；GitHub Release
+   在这一步通过后才公开并标记 Latest。
 
 ## 五、官方资料
 

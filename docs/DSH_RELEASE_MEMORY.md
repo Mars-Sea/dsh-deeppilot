@@ -87,12 +87,34 @@
   `0.2.0-rc.2` this branch builds and typechecks against.
 - **Protocol verdict: no phone-protocol change.** Protocol v2, pairing state, and
   device records are untouched by this release; no phone needs to re-pair.
-- **Audit limits, stated rather than implied.** The positive half of the rc.2
-  verification — loading this plugin on a real isolated `0.2.1-rc.2` host after the
-  widening — had **not** been completed when this entry was written, and neither had
-  the full release check set against that host. Until they run, rc.2 is recorded as
-  audited at the artifact-diff and declaration level only; no plugin release has
-  been made from this tree.
+- **The limits this entry originally stated are now closed.** The positive half of
+  the rc.2 verification ran before publication: on an isolated `0.2.1-rc.2` host
+  carrying the widened declaration, `--dump-config` wrote nothing to stderr, the
+  composed tree contained `# == dsh-deeppilot` (line 1233) together with
+  `# == @deepseek-ai/dsh-web-app, patched by dsh-deeppilot` (line 449), the running
+  host logged four `[deeppilot]` lines, and the plugin's own LAN listener on port
+  3098 answered `/phone/health` with `200` and `serverVersion` `0.9.8`. A tamper
+  control removed the `0.2.1-rc.2` token from a copy of `engines.dsh`: the host
+  refused again with the single `engines.dsh` requirement (`exempted: false`) and
+  accepted it once restored. Independent verification of the whole release tree —
+  `npm ci`, 581 tests (580 pass, 0 fail, 1 pre-existing TODO), typecheck, build
+  with a byte-identical regenerated `lib/`, `check:config-schema`, the Go helper
+  tests, and all six `bin/SHA256SUMS` entries — is recorded in
+  `.rc2-verify/VERIFICATION.md`; that pass also caught a real defect, a version
+  bump that had left `tests/apply-baseline.snapshot.json` stale.
+- **Published as 0.9.8 on 2026-10-18.** The annotated tag `v0.9.8` dereferences to
+  `f4551b61602e5e60b11565ae31ccba3257d3dc9e` on `main`, CI and CodeQL were green on
+  that commit, and `publish.yml` ran on the tag (run `39048037503`, 24/24 steps).
+  The registry records `latest: 0.9.8`, published `2026-10-17T16:12:59.699Z`, with a
+  `https://slsa.dev/provenance/v1` attestation naming that commit as its source. The
+  published tarball's SHA1 `8288977711e04679d077b970f863e726631fc309` and its SHA512
+  match the registry, its 68 entries and 130,945,335 unpacked bytes match the
+  pre-publication pack, and every packaged file compared byte-identically with the
+  verified tree. A clean isolated profile then installed `dsh-deeppilot@0.9.8` from
+  npm, composed it on a real `0.2.1-rc.2` host, and answered `/phone/health` with
+  `200` and `serverVersion: "0.9.8"`; the GitHub Release was made public only after
+  that install verification. The same release shipped the mobile skills, host
+  commands, and catalog-cache work recorded below.
 
 ### Previous decision — `dsh-v0.2.1-alpha.5`
 
@@ -1756,7 +1778,7 @@ release notes.
 
 ## 2026-10-15 — 移动端技能发现扩展
 
-新增可选的 `skills` 手机能力，使用官方 `sessionSkillCatalog.list({sessionId}, AbortSignal)` 服务，已对照本机 `0.2.0-rc.2` 和 `0.2.1-alpha.3` 发行声明。缺少服务只关闭该特性，晚挂载服务会重新探测，不缓存缺席。未修改宿主版本范围、鉴权、包版本或命令派发契约。手机只接收元数据，技能注册表和会话预设、工作目录变化触发目录失效。完整文档清单与四类差异表见《技能提示对接说明》。此源码改动尚未发布，真实主机与真机技能加载仍未验收。
+新增可选的 `skills` 手机能力，使用官方 `sessionSkillCatalog.list({sessionId}, AbortSignal)` 服务，已对照本机 `0.2.0-rc.2` 和 `0.2.1-alpha.3` 发行声明。缺少服务只关闭该特性，晚挂载服务会重新探测，不缓存缺席。未修改宿主版本范围、鉴权、包版本或命令派发契约。手机只接收元数据，技能注册表和会话预设、工作目录变化触发目录失效。完整文档清单与四类差异表见《技能提示对接说明》。此源码改动随 0.9.8（2026-10-18）发布；主机侧集成已在本机隔离真实宿主上验收，真机技能加载仍未验收。
 
 ## 2026-10-16 — 移动端系统指令扩展
 
@@ -1770,4 +1792,4 @@ release notes.
 1. 安装与主机 API：本轮不改安装范围或依赖；读取沿用现有技能、命令和模型接口。工作区另有 alpha.4 兼容改动，命令对接已重新枚举该版 29 包、144 个接口，相关主机实现与 alpha.3 相同；不据此宣称真实业务验收。
 2. 手机协议：模型当前选择投影新增 `s2c.models.changed`，受 `sessions.read` 控制；原生权限执行可附加 `expectedDefinitionId`，重读目录核对来源，旧客户端字段缺省兼容。无新增周期轮询或第二层主机时间缓存。
 3. 客户端：内存五分钟、磁盘最长七天，重启旧目录先展示并校验，按配对身份/主机/会话隔离；当前模型、权限和执行结果不落盘。具体约定和格式重建见[移动端目录缓存](移动端目录缓存.md)。
-4. 验证：插件 577 项通过、1 项原有待办，类型检查、生成产物构建和使用本机固定版本的离线配置校验通过；两端缓存单元与模拟器证据见各自文档。未发布。
+4. 验证：插件 577 项通过、1 项原有待办，类型检查、生成产物构建和使用本机固定版本的离线配置校验通过；两端缓存单元与模拟器证据见各自文档。随 0.9.8（2026-10-18）发布；真机与系统分享仍未验收。
