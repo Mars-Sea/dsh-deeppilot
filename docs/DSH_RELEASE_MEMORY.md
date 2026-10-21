@@ -115,6 +115,33 @@
   `200` and `serverVersion: "0.9.8"`; the GitHub Release was made public only after
   that install verification. The same release shipped the mobile skills, host
   commands, and catalog-cache work recorded below.
+- **Published as 0.9.9 on 2026-10-21.** The annotated tag `v0.9.9` dereferences to
+  `feee5c5854cd598af7b7827c53ddffdec3199573` on `main`, with CI and CodeQL green on
+  that commit. The DSH compatibility declaration did not change (the same five
+  audited hosts). The first CI run on the release commit failed in the helper job:
+  `govulncheck` reported GO-2026-6809 in Go 1.26.9's `crypto/x509`, reachable
+  through `http.Server.Serve`; the helper moved to Go 1.26.10 and the
+  `build-helpers` workflow refreshed all six binaries (PR #30, six `go1.26.10`
+  binaries, `bin/SHA256SUMS` 6/6) before the tag was cut. `publish.yml` ran on the
+  tag (run `39612245054`): the upload and provenance steps succeeded, but its last
+  step (registry verification) exhausted its 24 retries with `HTTP 404` — the
+  registry-visibility delay already seen in 0.9.5 and 0.9.6, not an upload failure.
+  Checked by hand instead: `npm view --prefer-online` gives `latest: 0.9.9` with a
+  `https://slsa.dev/provenance/v1` attestation whose `gitCommit` is that commit and
+  whose workflow ref is `refs/tags/v0.9.9`; the published tarball's SHA1
+  `bfea9ade6be9eb07f209e0e76f5ea20326dc0ddb` and its SHA512 match the registry and
+  the attestation subject; it holds 68 entries (the pre-publication pack count) and
+  every packaged file compared byte-identically with the verified tree. A clean
+  isolated `DSH_HOME` then installed `dsh-deeppilot@0.9.9` from npm on a real
+  `0.2.1-rc.2` host (`dsh web --no-open --port 0`) and `/phone/health` answered `200`
+  with `serverVersion: "0.9.9"`, `protocolVersion: 2` and the data plane active.
+  The first start attempt failed because DSH's own web server could not bind
+  `127.0.0.1:3080`, which another running DSH instance held; that is an environment
+  conflict, not a plugin fault, and the plugin's own listener had come up. The
+  GitHub Release was made public only after that install verification. The release
+  ships connection-failure diagnostics, the `failed` Live Activity phase, the
+  optional `toolName` / `detail` approval fields and `mutable-content`; it must run
+  against a Relay that already accepts them.
 
 ### Previous decision — `dsh-v0.2.1-alpha.5`
 
