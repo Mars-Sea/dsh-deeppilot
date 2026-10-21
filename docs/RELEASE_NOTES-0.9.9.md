@@ -35,6 +35,14 @@
 7. No protocol version change; all additions are optional and older clients ignore
    them. Run this release against a Relay that already accepts `failed` and the
    new fields.
+8. Security: the embedded tunnel helper is rebuilt with Go 1.26.10 for all six
+   platforms. Go 1.26.9 is affected by GO-2026-6809 (`crypto/x509` trusting
+   compromised intermediate certificates); `govulncheck` showed the helper
+   reached it through `http.Server.Serve` → `x509.Certificate.Verify`. The six
+   binaries were refreshed by the `build-helpers` workflow and `bin/SHA256SUMS`
+   updated; all six report `go1.26.10`. Ten advisories remain in `x/net`,
+   `x/crypto` and `x/text` modules the helper requires, which source-mode
+   `govulncheck` reports as not called.
 
 ## 二、简体中文
 
@@ -60,12 +68,20 @@
    time-sensitive`。
 7. 协议版本不变，所有新增均为可选字段，旧客户端会忽略。请在已支持 `failed` 与新增
    字段的 Relay 上运行本版本。
+8. 安全：内嵌的隧道 helper 在六个平台上都用 Go 1.26.10 重新构建。Go 1.26.9 受
+   GO-2026-6809（`crypto/x509` 信任被攻破的中间证书）影响，`govulncheck` 显示
+   helper 经 `http.Server.Serve` → `x509.Certificate.Verify` 可到达该问题。六个
+   二进制由 `build-helpers` 工作流刷新并更新 `bin/SHA256SUMS`，六个均报告
+   `go1.26.10`。helper 所需的 `x/net`、`x/crypto`、`x/text` 模块里仍有 10 条公告，
+   源码模式的 `govulncheck` 判定代码并不调用。
 
 ## 三、本地发布清单（待发布工作树）
 
 在版本号 `0.9.9`、`tests/apply-baseline.snapshot.json`（只改版本字段）与重新生成
 的 `lib/` 就绪后执行：`npm ci`、单元测试 600 项（599 通过、0 失败、1 项既有待办）、
 类型检查、构建、`check:config-schema`（针对锁定的 `0.2.0-rc.2`）、helper 的 Go 测试、
-`bin/SHA256SUMS` 6/6；`npm pack --dry-run` 为 68 个条目。DSH 兼容声明未变，仍是五个
+`bin/SHA256SUMS` 6/6；`npm pack --dry-run` 为 68 个条目。helper 升到 Go 1.26.10 并由
+CI 重建六个二进制后，`go test`、`govulncheck ./...`（0 个受影响）与 `SHA256SUMS`
+6/6 在刷新后的树上重新通过，发布提交上的 CI 与 CodeQL 均为绿。DSH 兼容声明未变，仍是五个
 已审计版本。**本地检查不能证明**：OIDC 发布、来源证明与全新 profile 安装，这些在发布
 后核验并记入 `docs/DSH_RELEASE_MEMORY.md`。
