@@ -34,7 +34,12 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
 
 - Documentation-only changes: check links, examples, and `git diff --check`.
 - TypeScript changes: run tests, typecheck, and build; include regenerated `lib/`.
-- Helper changes: run Go tests, rebuild affected binaries, and verify checksums.
+- Helper changes: run Go tests, rebuild affected binaries, verify checksums, and
+  run `npm run smoke:helper`. The helper build is byte-reproducible on any host,
+  so CI (on `main`) and `publish.yml` rebuild the full matrix and fail if `bin/`
+  changes; merge the `chore/helper-matrix-refresh` PR before tagging a release.
+  CI's `helper-smoke` job starts the committed binary on all six platforms.
+  Both choices are recorded in `docs/决策记录.md` (章节八).
 - Release candidates: run the full checklist below. Use `npm ci` for a clean
   dependency install or after lockfile changes; it is not needed for every edit.
 - For any DSH release audit or compatibility decision, read and update
@@ -71,9 +76,14 @@ npm test
 npm run typecheck
 npm run build
 npm run check:config-schema
+npm run smoke:helper
 cd helper && go test ./...
 cd ../bin && shasum -a 256 -c SHA256SUMS
+cd .. && sh scripts/build-all-helpers.sh && git status --porcelain -- bin
 ```
+
+The last command must print nothing: a non-empty `bin/` status means the
+committed helpers were not built from the current `helper/` sources.
 
 Commit regenerated `lib/` with source changes. Rebuild the helper and update
 `bin/SHA256SUMS` whenever helper code or build inputs change.

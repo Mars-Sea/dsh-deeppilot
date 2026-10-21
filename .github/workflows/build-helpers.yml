@@ -1,11 +1,12 @@
 name: Build tunnel helpers
 
 # Rebuild the embedded Go helper for every supported platform/arch and
-# refresh bin/SHA256SUMS. Each runner builds the targets it can build
-# natively; artifacts are then merged so a single commit contains the
-# full matrix. The resulting tree must be committed back to the PR via
-# the peter-evans/create-pull-request action, or pushed directly when
-# triggered from a trusted workflow_dispatch.
+# refresh bin/SHA256SUMS. The matrix is split across two runners (Linux and
+# Windows on ubuntu, macOS on macos); every target is a pure-Go cross-compile,
+# so the split only parallelises the work. Artifacts are then merged so a
+# single commit contains the full matrix, and the refreshed tree always lands
+# as a pull request on chore/helper-matrix-refresh (never a direct push). That
+# PR must be merged before the next release, or the package ships stale bin/.
 on:
   push:
     branches: [main]
@@ -93,7 +94,7 @@ jobs:
             | sort -z \
             | xargs -0 sha256sum >> SHA256SUMS
           cat SHA256SUMS
-      - name: Open PR with refreshed helper binaries (pushes to main if dispatch + trusted)
+      - name: Open PR with refreshed helper binaries
         uses: peter-evans/create-pull-request@v8
         with:
           commit-message: 'chore(helpers): refresh bin/ matrix and SHA256SUMS'

@@ -117,6 +117,25 @@
    3098 的 `/phone/health` 返回 200 且 `serverVersion` 为 `0.9.8`；GitHub Release
    在这一步通过后才公开并标记 Latest。
 
+9. `0.9.9` 的实际发布结果（2026-10-21）：附注标签 `v0.9.9` 指向
+   `feee5c5854cd598af7b7827c53ddffdec3199573`，该提交的 CI 与 CodeQL 均为绿。发布
+   提交的首次 CI 曾因 helper 的 `govulncheck` 报 GO-2026-6809（Go 1.26.9 的
+   `crypto/x509`，调用链可达）而失败，处理方式是 helper 升到 Go 1.26.10，由
+   `build-helpers` 工作流重建六个二进制并合并刷新 PR（#30），之后才打标签。
+   `publish.yml` 在该标签上运行（运行号 `39612245054`）：**上传与来源证明步骤成功，
+   但最后的核对步骤在 24 次重试后仍抛 `读取 npm 发布信息失败（HTTP 404）`，整次运行
+   结论为失败**——与 `0.9.5`、`0.9.6` 同一形态，说明 `0.9.7` 放宽的约 7 分钟窗口并非
+   总是足够，注册表元数据的可见性延迟仍会超出它。事后人工核验：
+   `npm view --prefer-online` 得到 `latest = 0.9.9`；来源证明类型为
+   `https://slsa.dev/provenance/v1`，`gitCommit` 正是该提交，工作流引用为
+   `refs/tags/v0.9.9`；压缩包 SHA1 `bfea9ade6be9eb07f209e0e76f5ea20326dc0ddb` 与 SHA512
+   同注册表和来源证明主体一致，共 68 个条目，包内每个文件与已验证的工作树逐字节相同。
+   随后在全新隔离 `DSH_HOME` 中从 npm 安装 `dsh-deeppilot@0.9.9`，在真实
+   `0.2.1-rc.2` 宿主上用 `dsh web --no-open --port 0` 启动，`/phone/health` 返回 200，
+   `serverVersion` 为 `0.9.9`；首次启动因另一个正在运行的 DSH 占用了宿主自己的 3080
+   端口而失败，属环境冲突，不是插件问题。GitHub Release 在这一步通过后才公开并标记
+   Latest。是否再放宽核对窗口，留待下次发布前决定，本次未改工作流。
+
 ## 五、官方资料
 
 1. [npm 可信发布配置与限制](https://docs.npmjs.com/trusted-publishers/)

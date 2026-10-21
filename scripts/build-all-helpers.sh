@@ -3,13 +3,11 @@
 # refresh bin/SHA256SUMS. Used by the build-helpers CI workflow and by
 # maintainers who want to regenerate the full matrix locally.
 #
-# On a single machine we can only cross-compile the helper for foreign OS
-# targets. CGO is required by some Tailscale subsystems (macOS frameworks,
-# Windows sspi, Linux netlink), so we leave CGO_ENABLED unset and rely on
-# the platform-native Go toolchain. Cross-compiling from macOS to Linux
-# typically still works because Tailscale keeps the affected files behind
-# build tags; cross-compiling to Windows from macOS requires cgo and is
-# expected to be done by the windows-latest runner in CI.
+# Every target is a pure-Go cross-compile (CGO_ENABLED=0): the tsnet code
+# path the helper uses needs no cgo, so any host can build every target.
+# Together with -trimpath, -buildvcs=false and a fixed Go version from
+# helper/go.mod, the output is byte-identical whichever OS builds it, which
+# is what lets CI verify bin/ by rebuilding it.
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -18,8 +16,8 @@ BIN_DIR="$PLUGIN_DIR/bin"
 SUMS_FILE="$BIN_DIR/SHA256SUMS"
 
 # Each entry is "<GOOS>-<GOARCH>". Adjust this list when adding new
-# supported platforms. The bundle size for every entry is roughly 6 MB
-# (compressed); the matrix below is ~36 MB on the wire.
+# supported platforms. Each binary is roughly 20-22 MB (about 8 MB
+# gzipped), so the matrix below adds ~48 MB to the npm tarball.
 TARGETS="
 darwin-amd64
 darwin-arm64
@@ -62,10 +60,6 @@ for target in $TARGETS; do
       go build -trimpath -buildvcs=false -ldflags='-s -w' \
         -o "$OUT_DIR/$OUT_NAME" . )
   chmod 0755 "$OUT_DIR/$OUT_NAME"
-  if [ "$GOOS" = "windows" ]; then
-    # Windows cannot chmod +x, but the .exe is already executable.
-    :
-  fi
   # Compute the hash from a stable relative path so the manifest is
   # portable across checkouts.
   REL="./$target/$OUT_NAME"
