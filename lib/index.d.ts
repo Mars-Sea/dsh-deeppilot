@@ -411,6 +411,9 @@ interface PushNotification {
   sessionId: string;
   title: string;
   body: string;
+  /** Same optional approval-only fields as NotifyPayload; dropped in `generic` content mode. */
+  toolName?: string;
+  detail?: string;
 }
 interface PendingApprovalPayload {
   requestId: string;
