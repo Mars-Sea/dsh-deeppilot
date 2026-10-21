@@ -21,6 +21,30 @@ v2 不接受 v1 Bearer Token、`c2s.hello.auth` 或任何降级握手；升级�
 
 ## 2. 连接与鉴权
 
+### 2.0 传输层诊断标识（可选扩展）
+
+为了让手机端与主机端的失败记录能对应到同一次尝试，双方可交换一个**不参与鉴权**的
+短标识 `attemptId`：
+
+- HTTP 请求（`GET /phone/health`、`POST /phone/pair`）可携带请求头
+  `X-DeepPilot-Attempt: <attemptId>`。
+- WebSocket 升级请求可在 URL 查询串携带 `at=<attemptId>`，例如
+  `wss://host/phone?at=a1b2c3d4`。
+
+约束：
+
+- `attemptId` 由客户端生成，建议 8 位小写十六进制；服务端只接受
+  `[A-Za-z0-9_-]{1,16}`，超长或含非法字符时一律忽略，**不得因此拒绝请求**。
+- 服务端只把它写入本地诊断记录（终端日志与诊断事件），不校验、不回显、不参与
+  鉴权，也不改变任何响应语义；缺失时行为与不带该字段完全一致。
+- 客户端追加失败（例如 URL 构造异常）必须退回不带该字段的请求，连接不能因为
+  诊断字段失败。
+- 它属于传输层元数据，不是信封字段，不影响 `v`、帧结构与错误帧定义。
+- 隐私：`attemptId` 只能是随机标识，不得编码设备 ID、主机地址、配对码或任何凭据。
+
+兼容性：旧客户端不带、旧服务端忽略；双方都实现后，用户只需报告 `attemptId`，即可
+在主机诊断记录中检索同一次尝试。
+
 ### 2.1 一次性配对
 
 设置页在用户主动操作后生成 24 字节随机配对码，base64url 编码、5 分钟过期、成功使用
@@ -648,6 +672,13 @@ Web 或另一 Client 先回答时，Gateway cancellation 会让插件发布对�
   客户端应按该字段幂等去重。notify 计入 seq 游标参与重放。
 - `title` / `body` 是可直接展示的回退文本；客户端可按已知 category 使用本地化标题，
   但不得改写动态 body 或依赖 title 文案判断类别。
+- 可选字段 `toolName`（≤ 80 字符）与 `detail`（≤ 600 字符，Host 给出的审批原因 / 摘要）
+  只出现在 `approval.required` 的 `s2c.notify` 与 APNs / Relay 投影中，供长按展开页显示；
+  不改变 `body` 的 120 / 200 字符上限，也不用于判断类别。其他类别忽略这两个字段。
+  插件 `push.contentMode` 为 `generic` 时两个字段不出站。APNs 提醒推送同时携带
+  `aps.mutable-content: 1`，让 Notification Service Extension 可按类别附上缩略图；
+  `session.error` 与 `approval.required`、`question.asked` 一样使用
+  `interruption-level: time-sensitive`。
 
 ### 离线推送（APNs）
 
@@ -923,7 +954,11 @@ Push delivery adds `kind: "liveactivity"`, `event: "update" | "end"`, `timestamp
 (Unix seconds), and `contentState: { title, task, done, total, phase }`. Title and
 current-task text (current tool operation when available, otherwise the checklist item) are limited to 100 and 160 Unicode code points. Counts are
 nonnegative integers, with `done <= total`; phase is `running`, `approval`,
-`question`, `ended`, or `unavailable`. End does not imply all todos completed.
+`question`, `ended`, `failed`, or `unavailable`. `failed` is projected when the
+session status is `error` and, like `ended` and `unavailable`, is terminal (sent
+as an `end` event). A client that does not know `failed` must treat it as
+`unavailable`. Deploy order: Relay, then plugin, then App; an App that predates
+`failed` shows an untranslated label. End does not imply all todos completed.
 APNs uses the main app topic suffixed `.push-type.liveactivity`, push type
 `liveactivity`, and `aps.content-state`. Updates have a 180-second stale date;
 end events dismiss after 300 seconds. Bursts coalesce with a 15-second minimum

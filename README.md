@@ -144,6 +144,12 @@ was rebuilt, the start time and the last failure, so the phone can locate the
 cause even while it cannot connect. Records contain only source hashes — never
 raw IPs, pairing codes, keys, APNs tokens or message content.
 
+Each connection attempt from the phone carries a random `attemptId` (the `?at=`
+query parameter on the WebSocket upgrade, or the `X-DeepPilot-Attempt` header on
+pairing and health checks). The plugin writes it into the log lines and
+diagnostic events above, so a user reporting that ID lets you find the exact
+attempt in the host log.
+
 Offline push is optional. Relay mode sends only the target APNs device token
 and a limited notification payload; full conversation history and live output
 do not pass through the relay. Read [PRIVACY.md](./PRIVACY.md) and

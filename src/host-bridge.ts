@@ -233,10 +233,16 @@ export class HostBridge {
     title: string
     body: string
     notificationId: string
+    toolName?: string
+    detail?: string
   }): void {
     if ((args.category === 'turn.completed' || args.category === 'session.error') &&
         this.subagentSessionIds.has(args.sessionId)) return;
     const body = args.body.length > 120 ? args.body.slice(0, 119) + '…' : args.body;
+    // 展开页所需的工具名与详情只随审批通知下发；正文 120 字的上限不动，详情另有 600 字上限。
+    const approvalExtras = args.category === 'approval.required' && args.toolName
+      ? { toolName: args.toolName.slice(0, 80), ...(args.detail ? { detail: args.detail.slice(0, 600) } : {}) }
+      : {};
     this.record(
       's2c.notify',
       {
@@ -245,6 +251,7 @@ export class HostBridge {
         sessionId: args.sessionId,
         title: args.title,
         body,
+        ...approvalExtras,
         ts: Date.now(),
       },
       (sink) => this.isViewedBy(sink, args.sessionId),
@@ -255,6 +262,7 @@ export class HostBridge {
       sessionId: args.sessionId,
       title: args.title,
       body,
+      ...approvalExtras,
     });
   }
 
@@ -503,6 +511,8 @@ export class HostBridge {
           title: '需要批准',
           body: toolName + ': ' + summary,
           notificationId: 'apr-' + p.approvalId,
+          toolName,
+          detail: summary,
         });
         this.bumpPendingFlags(sessionId);
         break;

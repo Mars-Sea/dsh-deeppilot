@@ -50,7 +50,7 @@ export interface LiveActivityState {
   task: string
   done: number
   total: number
-  phase: 'running' | 'approval' | 'question' | 'ended' | 'unavailable'
+  phase: 'running' | 'approval' | 'question' | 'ended' | 'failed' | 'unavailable'
 }
 export interface LiveActivityPushNotification {
   kind: 'liveactivity'
@@ -493,6 +493,9 @@ export interface NotifyPayload {
   sessionId: string
   title: string
   body: string
+  /** Only for `approval.required`: tool name and the Host's reason/summary, for the expanded notification view. */
+  toolName?: string
+  detail?: string
   ts: number
 }
 
@@ -508,6 +511,9 @@ export interface PushNotification {
   sessionId: string
   title: string
   body: string
+  /** Same optional approval-only fields as NotifyPayload; dropped in `generic` content mode. */
+  toolName?: string
+  detail?: string
 }
 
 export interface PendingApprovalPayload {

@@ -41,6 +41,9 @@ export function shouldReEnrollRelayToken(
 /** Apply before either transport receives the payload, including the Relay. */
 export function pushContent(notification: PushNotification, mode?: 'preview' | 'generic'): PushNotification {
   if (mode !== 'generic') return notification
+  // generic 模式下工具名与详情同样不得出站。
+  const { toolName: _toolName, detail: _detail, ...rest } = notification
+  notification = rest
   const bodies: Record<PushNotification['category'], string> = {
     'turn.completed': 'A task has completed.',
     'approval.required': 'An approval needs your attention.',

@@ -87,7 +87,9 @@ export function apnsPayload(notification: PushDelivery): Record<string, unknown>
 }
 
 function alertPayload(notification: PushNotification): Record<string, unknown> {
-  const timeSensitive = notification.category === 'approval.required' || notification.category === 'question.asked'
+  // 需要用户动手或任务出事的通知穿透专注模式；任务完成保持普通级别。
+  const timeSensitive = notification.category === 'approval.required' || notification.category === 'question.asked' ||
+    notification.category === 'session.error'
   return {
     aps: {
       alert: {
@@ -96,6 +98,8 @@ function alertPayload(notification: PushNotification): Record<string, unknown> {
       },
       sound: 'default',
       category: notification.category,
+      // 让 Notification Service Extension 有机会按类别给横幅附上阶段缩略图。
+      'mutable-content': 1,
       'thread-id': notification.hostAudience ? createHash('sha256').update(`${notification.hostAudience}:${notification.sessionId}`).digest('hex') : notification.sessionId.slice(0, 64),
       ...(timeSensitive ? { 'interruption-level': 'time-sensitive' } : {}),
     },
@@ -103,6 +107,10 @@ function alertPayload(notification: PushNotification): Record<string, unknown> {
     sessionId: notification.sessionId,
     notificationId: notification.notificationId,
     kind: notification.category,
+    // 长按展开页使用；仅审批通知携带，generic 模式下已在 pushContent 中剔除。
+    ...(notification.category === 'approval.required' && notification.toolName
+      ? { toolName: notification.toolName.slice(0, 80), ...(notification.detail ? { detail: notification.detail.slice(0, 600) } : {}) }
+      : {}),
   }
 }
 

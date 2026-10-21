@@ -713,6 +713,26 @@ test('APNs preserves Host identity and isolates collapse and thread identifiers'
 })
 
 
+test('approval pushes carry bounded tool details, other categories and generic mode drop them', async () => {
+  const { pushContent } = await import('../src/push-policy.ts')
+  const approval: PushNotification = { notificationId: 'apr-1', category: 'approval.required', sessionId: 's',
+    title: 't', body: 'b', toolName: 'bash', detail: 'x'.repeat(700) }
+  const payload = apnsPayload(approval)
+  assert.equal(payload.toolName, 'bash')
+  assert.equal((payload.detail as string).length, 600)
+  assert.equal((payload.aps as { 'mutable-content': number })['mutable-content'], 1)
+  // Details never leak onto other categories, even when a caller passes them.
+  assert.equal(apnsPayload({ ...approval, category: 'turn.completed' }).toolName, undefined)
+  const generic = pushContent(approval, 'generic')
+  assert.equal('toolName' in generic, false)
+  assert.equal('detail' in generic, false)
+  assert.equal(apnsPayload(generic).toolName, undefined)
+  const alert = (category: PushNotification['category']) =>
+    (apnsPayload({ ...approval, category }).aps as Record<string, unknown>)['interruption-level']
+  assert.equal(alert('session.error'), 'time-sensitive')
+  assert.equal(alert('turn.completed'), undefined)
+})
+
 test('generic push content removes previews before transport while retaining routing', async () => {
   const { pushContent } = await import('../src/push-policy.ts')
   const original = { notificationId: 'apr-1', category: 'approval.required' as const,

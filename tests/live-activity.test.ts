@@ -21,6 +21,8 @@ test('activity projection preserves partial completion and current task', () => 
   assert.deepEqual(liveActivityState({ ...session, status: 'idle' }), { title: 'Work', task: 'Now', done: 1, total: 3, phase: 'ended' })
   assert.equal(liveActivityState().phase, 'unavailable')
   assert.equal(liveActivityState({ ...session, status: 'unknown' }).phase, 'unavailable')
+  // status: error is a terminal failure of the round, distinct from a normal end.
+  assert.deepEqual(liveActivityState({ ...session, status: 'error' }), { title: 'Work', task: 'Now', done: 1, total: 3, phase: 'failed' })
   assert.equal(liveActivityState({ ...session, status: 'idle', pendingApproval: true }).phase, 'approval')
   assert.equal(Array.from(liveActivityState({ ...session, title: '😀'.repeat(200) }).title).length, 100)
 })

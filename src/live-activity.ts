@@ -13,7 +13,7 @@ export function liveActivityState(session?: SessionSummary): LiveActivityState {
     task: Array.from(session?.activity?.trim() || task?.content || '').slice(0, 160).join(''), done, total,
     phase: !session || total === 0 ? 'unavailable' : session.pendingApproval ? 'approval' :
       session.pendingQuestion ? 'question' : session.status === 'running' ? 'running' :
-      session.status === 'idle' ? 'ended' : 'unavailable',
+      session.status === 'idle' ? 'ended' : session.status === 'error' ? 'failed' : 'unavailable',
   }
 }
 
@@ -34,7 +34,7 @@ export class LiveActivityPushManager {
       const r = device.liveActivity
       if (!r) continue
       const state = liveActivityState(this.latest.get(r.sessionId))
-      if (state.phase === 'ended' || state.phase === 'unavailable') {
+      if (state.phase === 'ended' || state.phase === 'failed' || state.phase === 'unavailable') {
         this.devices()?.endLiveActivity(device.deviceId, r.token, state)
       }
     }
