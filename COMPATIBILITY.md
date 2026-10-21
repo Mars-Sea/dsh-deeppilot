@@ -24,6 +24,7 @@ recorded in the release memory.
 | DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name `0.2.0-rc.2 \|\| 0.2.1-alpha.3 \|\| 0.2.1-alpha.4 \|\| 0.2.1-alpha.5 \|\| 0.2.1-rc.2` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2, 0.2.1-alpha.3, and 0.2.1-alpha.4 CLIs, an isolated 0.2.1-alpha.5 host where this plugin now composes, starts, and answers `/phone/health` with 200 on its own LAN listener, and a pre-widening 0.2.1-rc.2 host run where the unchanged declaration is refused at compose time (audits below) |
 | iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
+| Funnel helper platforms | macOS 13 Ventura or later, Linux, and Windows, each on amd64/arm64; built with Go 1.27, which dropped macOS 12 | CI starts the committed helper on a native runner for each of the six targets (`helper-smoke`); no runner covers macOS 13 itself |
 
 ## DSH interfaces used here
 
