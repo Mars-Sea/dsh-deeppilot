@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { ConnectionGate, type AuthenticatedIdentity, type GateHost } from '../src/connection-gate.ts'
+import { AUTH_TIMEOUT_MS } from '../src/connection-policy.ts'
 import { AuthRateLimiter } from '../src/auth-rate-limit.ts'
 import { HostBridge } from '../src/host-bridge.ts'
 import type { ApiProxyLike } from '../src/host-bridge.ts'
@@ -103,6 +104,10 @@ async function makeGate(opts: {
   scopes?: string[]
   limiter?: AuthRateLimiter
   attachTimeoutMs?: number
+  /** 诊断事件收集器：门把 4401 分因 / 4402 超时写进来。 */
+  diagnostics?: { record: (kind: string, reason: string, extra?: any) => unknown }
+  auditLabel?: (value: string) => string
+  attemptId?: string
 } = {}): Promise<Fixture> {
   const dir = await mkdtemp(join(tmpdir(), 'pbb-gate-unit-'))
   const devices = await DeviceStore.load(join(dir, 'devices.json'))
@@ -118,6 +123,9 @@ async function makeGate(opts: {
     limiter: opts.limiter ?? new AuthRateLimiter(),
     log: () => {},
     ...(opts.attachTimeoutMs !== undefined ? { attachTimeoutMs: opts.attachTimeoutMs } : {}),
+    ...(opts.diagnostics !== undefined ? { diagnostics: opts.diagnostics as never } : {}),
+    ...(opts.auditLabel !== undefined ? { auditLabel: opts.auditLabel } : {}),
+    ...(opts.attemptId !== undefined ? { attemptId: opts.attemptId } : {}),
   })
   gate.attach(rec.host)
   const challenge = rec.sent.find((frame) => frame.type === 's2c.auth.challenge')
@@ -366,4 +374,71 @@ test('名额：获取、拒绝与三条释放路径', async (t) => {
       assert.equal(b.admitted, true)
     } finally { await rm(dir, { recursive: true, force: true }).catch(() => {}) }
   })
+})
+
+// ---------- 诊断事件（P0：4401 分因与 4402 对称记录） ----------
+
+test('4401 分因只进诊断事件，wire 仍只回一个 4401', async () => {
+  const events: Array<{ kind: string; reason: string; extra?: any }> = []
+  const f = await makeGate({
+    diagnostics: {
+      record: (kind, reason, extra) => {
+        events.push({ kind, reason, extra })
+        return undefined
+      },
+    },
+    auditLabel: (value) => 'h-' + String(value.length),
+    attemptId: 'try_1',
+  })
+  try {
+    const challenge = f.rec.sent.find((frame) => frame.type === 's2c.auth.challenge')!.payload
+    await f.gate.handleFrame(JSON.stringify({
+      v: 2,
+      type: 'c2s.auth.prove',
+      id: 'auth-x',
+      payload: {
+        // 注册表里没有这个 id：分因应为 unknown-device。
+        deviceId: 'Z'.repeat(43),
+        deviceName: 'unknown phone',
+        appVersion: 'test',
+        nonce: challenge.nonce,
+        audience: challenge.audience,
+        issuedAt: challenge.issuedAt,
+        expiresAt: challenge.expiresAt,
+        signature: 'sig',
+      },
+    }))
+    // wire 行为不变：仍然只有一个 4401，不透露设备是否注册过。
+    assert.deepEqual(f.rec.closes, [{ code: 4401, reason: 'invalid device proof' }])
+    const failure = events.find((entry) => entry.kind === 'auth-failed')
+    assert.ok(failure !== undefined, '失败必须留下诊断事件')
+    assert.equal(failure.reason, 'unknown-device')
+    assert.deepEqual(failure.extra, {
+      source: 'h-11',
+      attemptId: 'try_1',
+      closeCode: 4401,
+    })
+  } finally { await f.cleanup() }
+})
+
+test('4402 认证超时与 4401 对称记录诊断事件', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const events: Array<{ kind: string; reason: string; extra?: any }> = []
+  const f = await makeGate({
+    diagnostics: {
+      record: (kind, reason, extra) => {
+        events.push({ kind, reason, extra })
+        return undefined
+      },
+    },
+    attemptId: 'try_2',
+  })
+  try {
+    t.mock.timers.tick(AUTH_TIMEOUT_MS)
+    assert.deepEqual(f.rec.closes, [{ code: 4402, reason: 'auth timeout' }])
+    const failure = events.find((entry) => entry.kind === 'auth-failed')
+    assert.equal(failure?.reason, 'timeout', '超时也要有一条与 4401 对称的事件')
+    assert.equal(failure?.extra?.closeCode, 4402)
+    assert.equal(failure?.extra?.attemptId, 'try_2')
+  } finally { await f.cleanup() }
 })

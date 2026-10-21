@@ -1,5 +1,6 @@
 import type { LiveActivityState } from './protocol.ts'
 import { MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
+import { formatLogLine } from './diagnostics.ts'
 import { randomBytes } from 'node:crypto'
 import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -122,6 +123,11 @@ export const MAX_DEVICES = 64
 export class DeviceStore {
   private devices = new Map<string, DeviceRecord>()
   private flushTail: Promise<void> = Promise.resolve()
+  /**
+   * 注册表写失败的日志节流：磁盘只读 / 空间不足时每次 flush 都会失败，
+   * 不节流会把「写不进去」变成新的刷屏源。同一条错误 60s 只报一次。
+   */
+  private lastWriteFailureLogAt = 0
 
   private constructor(private readonly filePath: string) {}
 
@@ -142,7 +148,7 @@ export class DeviceStore {
         // A truncated/corrupt registry silently wiping pairings and push
         // registrations would be indistinguishable from "never registered".
         // Make data loss loud so the cause (crash mid-write, disk, …) shows.
-        console.log('[deeppilot] device registry unreadable, starting empty: ' + String(error))
+        console.log(formatLogLine('warn', 'device registry unreadable, starting empty: ' + String(error)))
       }
     }
     return store
@@ -182,6 +188,19 @@ export class DeviceStore {
     const record = this.devices.get(deviceId)
     if (!record?.publicKey || record.revokedAt !== undefined) return undefined
     return record
+  }
+
+  /**
+   * 认证分因用：把「为什么 authorized() 返回 undefined」拆成三种情形。
+   * 只给日志使用，准入判定仍然只走 authorized()——wire 响应不会因为
+   * 这个方法泄露设备是否注册过（4401 仍只有一个码）。
+   */
+  statusOf(deviceId: string): 'active' | 'revoked' | 'unknown' {
+    const record = this.devices.get(deviceId)
+    if (record === undefined) return 'unknown'
+    if (record.revokedAt !== undefined) return 'revoked'
+    if (record.publicKey === undefined) return 'unknown'
+    return 'active'
   }
 
   markAuthenticated(deviceId: string, deviceName: string, appVersion: string, now: number): void {
@@ -360,7 +379,7 @@ export class DeviceStore {
   private flush(): Promise<void> {
     const next = this.flushTail.then(() => this.writeFile())
     this.flushTail = next.catch(() => {
-      // best-effort persistence; the bridge still works without it
+      // 真正的写失败已由 writeFile 自己的 catch 记录（含节流）。
     })
     return next
   }
@@ -385,8 +404,23 @@ export class DeviceStore {
       const temp = `${full}.${randomBytes(6).toString('hex')}.tmp`
       await writeFile(temp, body + '\n', { mode: 0o600 })
       await rename(temp, full)
-    } catch {
-      // best-effort persistence; the bridge still works without it
+    } catch (error) {
+      // best-effort persistence; the bridge still works without it.
+      // 但失败本身必须留一行：注册表静默不落盘时，重启后配对消失会被
+      // 误认为「设备自己掉了」，真正原因（磁盘 / 权限）只有这里可见。
+      this.logWriteFailure(error)
     }
+  }
+
+  /** 写失败日志按 60s 节流：磁盘满时 flush 会被反复触发，不能让它刷屏。 */
+  private logWriteFailure(error: unknown): void {
+    const now = Date.now()
+    if (now - this.lastWriteFailureLogAt < 60_000) return
+    this.lastWriteFailureLogAt = now
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    const message = error instanceof Error ? error.message : String(error)
+    console.log(formatLogLine('warn', 'device registry write failed'
+      + (typeof code === 'string' ? ' code=' + code : '')
+      + ': ' + message.slice(0, 160)))
   }
 }

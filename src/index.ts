@@ -31,8 +31,14 @@ import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
 import { localEndpointURLs } from './local-policy.ts'
-import { closeServer, createPhoneServer, listen } from './phone-server.ts'
+import { closeServer, createPhoneServer, listen, type PhoneServerTransportError } from './phone-server.ts'
 import { loadOrCreateLanTlsIdentity, type LanTlsIdentity } from './lan-tls.ts'
+import {
+  attemptIdFromRequest,
+  buildHealthPayload,
+  createLogger,
+  DiagnosticsStore,
+} from './diagnostics.ts'
 
 /**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
@@ -97,9 +103,9 @@ function readOwnPackageVersion(): string {
 export function apply(ctx: Context, options: unknown): void {
   const cfg = normalizeOptions(options)
 
-  const log = (message: string): void => {
-    console.log('[deeppilot] ' + message)
-  }
+  // 日志唯一出口：统一时间戳 + 级别。失败路径显式传 'warn'；其余 info。
+  // 这是 P0 可观测性基线——用户贴回来的每一行都能对应到具体时刻。
+  const log = createLogger()
   const auditSalt = randomBytes(32)
   const auditLabel = (value: string): string => createHash('sha256')
     .update(auditSalt)
@@ -132,6 +138,33 @@ export function apply(ctx: Context, options: unknown): void {
   // a storage failure degrades the bridge instead of killing the host.
   const dataDir = bridgeDataDir()
 
+  /** 插件启动时刻：`/phone/health` 与设置页报告都读它。 */
+  const startedAt = Date.now()
+
+  /**
+   * 连接诊断事件：内存环形 256 条 + 按天落盘（插件数据目录 diagnostics/，
+   * 保留 7 天、目录上限 5MB）。与 `diagnostics.debug` 完全解耦——失败事件
+   * 无条件记录，否则用户不开调试开关就永远看不到「为什么连不上」。
+   */
+  const diagnostics = new DiagnosticsStore({
+    dir: join(dataDir, 'diagnostics'),
+    write: (line) => { console.log(line) },
+  })
+
+  /**
+   * 传输层错误（TLS 握手失败 / HTTP 报文解析失败）的统一入口。来源先经
+   * auditLabel 哈希再记录；原始 IP 绝不进入事件或日志。
+   */
+  const recordTransportError = (event: PhoneServerTransportError): void => {
+    const code = (event.error as NodeJS.ErrnoException | undefined)?.code
+    diagnostics.record('connection-error', event.kind, {
+      ...(event.remoteAddress !== undefined ? { source: auditLabel(event.remoteAddress) } : {}),
+      detail: typeof code === 'string'
+        ? code
+        : (event.error instanceof Error ? event.error.message : String(event.error)),
+    })
+  }
+
   // ---------- offline push (F-9) ----------
 
   // 推送的全部行为住在 PushGateway：enrollment 与持久化、中继注册、sender
@@ -158,7 +191,7 @@ export function apply(ctx: Context, options: unknown): void {
         const migratedFrom = await migrateLegacyBridgeDataDir()
         if (migratedFrom !== null) log(`migrated legacy plugin state from ${migratedFrom} to ${dataDir}`)
       } catch (error) {
-        log('legacy plugin-state migration skipped: ' + String(error))
+        log('legacy plugin-state migration skipped: ' + String(error), 'warn')
       }
       await ensurePrivateBridgeDataDir()
       auth.audience = await loadOrCreateHostAudience(join(dataDir, 'host-id'))
@@ -174,7 +207,7 @@ export function apply(ctx: Context, options: unknown): void {
       await pushGateway.restore()
     } catch (error) {
       const message = String(error)
-      log('auth material unavailable, bridge degraded: ' + message)
+      log('auth material unavailable, bridge degraded: ' + message, 'warn')
       return { audience: null, devices: null }
     }
     return { audience: auth.audience, devices: auth.devices }
@@ -306,6 +339,20 @@ export function apply(ctx: Context, options: unknown): void {
       local: localStatus(lanAddresses),
       remote: remoteStatus(),
       devices,
+      // 设置页「连接诊断」区块的数据源。只带结构化事实（类型 / 分因 /
+      // 时间 / 来源哈希），不携带 debug 开关状态，也不含任何凭据。
+      diagnostics: {
+        startedAt,
+        recentFailures: diagnostics.recentFailures(20).map((event) => ({
+          ts: event.ts,
+          kind: event.kind,
+          reason: event.reason,
+          ...(event.attemptId !== undefined ? { attemptId: event.attemptId } : {}),
+          ...(event.source !== undefined ? { source: event.source } : {}),
+          ...(event.closeCode !== undefined ? { closeCode: event.closeCode } : {}),
+          ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+        })),
+      },
     }
   }, beginPairing, async (deviceId) => {
     // Settings-page revocation shares the exact path used by the wire-level
@@ -352,20 +399,31 @@ export function apply(ctx: Context, options: unknown): void {
 
   const handlePair = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     res.setHeader('Content-Type', 'application/json')
+    // 来源与 attemptId 在最早处解析：之后的每个拒绝分支都要带上它们。
+    const source = requestClientIdentity(req)
+    const attemptId = attemptIdFromRequest(req)
+    const reportPairRejected = (reason: string): void => {
+      diagnostics.record('pair-rejected', reason, {
+        source: auditLabel(source),
+        ...(attemptId !== undefined ? { attemptId } : {}),
+      })
+    }
     if (!enabledNow()) {
+      reportPairRejected('bridge-disabled')
       res.statusCode = 503
       res.end(JSON.stringify({ ok: false, error: 'bridge disabled' }))
       return
     }
     if (req.method !== 'POST') {
+      reportPairRejected('method-not-allowed')
       res.statusCode = 405
       res.setHeader('Allow', 'POST')
       res.end(JSON.stringify({ ok: false, error: 'POST required' }))
       return
     }
-    const source = requestClientIdentity(req)
     const admission = authRateLimiter.admit(source)
     if (!admission.ok) {
+      reportPairRejected('rate-limited')
       res.statusCode = 429
       res.setHeader('Retry-After', String(Math.max(1, Math.ceil(admission.retryAfterMs / 1_000))))
       res.end(JSON.stringify({ ok: false, error: 'pairing rate limited' }))
@@ -382,12 +440,14 @@ export function apply(ctx: Context, options: unknown): void {
       const appVersion = sanitizeDeviceField(raw.appVersion, MAX_APP_VERSION_CHARS) || 'unknown'
       const deviceId = deviceIdForPublicKey(publicKey)
       if (devices.list().length >= MAX_DEVICES && devices.authorized(deviceId) === undefined) {
+        reportPairRejected('registry-full')
         res.statusCode = 409
         res.end(JSON.stringify({ ok: false, error: 'device registry is full' }))
         return
       }
       if (!pairingCodes.consume(code)) {
         const failure = authRateLimiter.recordFailure(source)
+        reportPairRejected('invalid-code')
         res.statusCode = failure.blocked ? 429 : 401
         if (failure.retryAfterMs > 0) res.setHeader('Retry-After', String(Math.max(1, Math.ceil(failure.retryAfterMs / 1_000))))
         res.end(JSON.stringify({ ok: false, error: failure.blocked ? 'pairing rate limited' : 'pairing code invalid or expired' }))
@@ -415,7 +475,9 @@ export function apply(ctx: Context, options: unknown): void {
         ...(tlsFingerprint ? { tlsFingerprint } : {}),
       }))
     } catch (error) {
-      res.statusCode = error instanceof SyntaxError || error instanceof TypeError ? 400 : 503
+      const badRequest = error instanceof SyntaxError || error instanceof TypeError
+      reportPairRejected(badRequest ? 'bad-request' : 'internal-error')
+      res.statusCode = badRequest ? 400 : 503
       res.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'pairing failed' }))
     } finally {
       admission.release()
@@ -423,14 +485,26 @@ export function apply(ctx: Context, options: unknown): void {
   }
 
   const handleUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
+    // 来源与 attemptId 在 socket 建立之前就确定：任何拒绝分支都必须能回答
+    // 「谁、在什么时候、带着哪次尝试」连进来。来源只以哈希出现。
+    const source = requestClientIdentity(req)
+    const sourceLabel = auditLabel(source)
+    const attemptId = attemptIdFromRequest(req)
+    const reject = (status: number, reason: string): void => {
+      diagnostics.record('upgrade-rejected', reason, {
+        source: sourceLabel,
+        ...(attemptId !== undefined ? { attemptId } : {}),
+      })
+      rejectUpgrade(socket, status, reason)
+    }
     void (async () => {
       try {
         if (!enabledNow()) {
-          rejectUpgrade(socket, 503, 'bridge disabled')
+          reject(503, 'bridge disabled')
           return
         }
         if (connections.size + pendingUpgrades >= MAX_CLIENT_CONNECTIONS) {
-          rejectUpgrade(socket, 429, 'too many connections')
+          reject(429, 'too many connections')
           return
         }
         pendingUpgrades += 1
@@ -439,12 +513,12 @@ export function apply(ctx: Context, options: unknown): void {
         try {
           const { devices, audience } = await ready
           if (!audience || !devices) {
-            rejectUpgrade(socket, 503, 'bridge degraded')
+            reject(503, 'bridge degraded')
             return
           }
           const bridge = state.bridge
           if (!bridge) {
-            rejectUpgrade(socket, 503, 'bridge not ready')
+            reject(503, 'bridge not ready')
             return
           }
           // The gate is created before the ws exists, so the admission slot is
@@ -452,21 +526,28 @@ export function apply(ctx: Context, options: unknown): void {
           // mid-upgrade). Its attach timeout covers that case; once the socket
           // is live, the gate's hello deadline takes over.
           gate = new ConnectionGate({
-            source: requestClientIdentity(req),
+            source,
             devices,
             audience,
             limiter: authRateLimiter,
             log,
             auditLabel,
+            diagnostics,
+            ...(attemptId !== undefined ? { attemptId } : {}),
           })
           if (!gate.admitted) {
-            rejectUpgrade(socket, 429, 'authentication rate limited')
+            reject(429, 'authentication rate limited')
             return
           }
           const live = gate
           wss.handleUpgrade(req, socket, head, (ws) => {
             if (auth.audience !== audience || state.bridge !== bridge) {
               live.markDead()
+              // 认证期间 bridge 被替换：这个 socket 已不可能服务，记录后关。
+              diagnostics.record('upgrade-rejected', 'bridge-changed', {
+                source: sourceLabel,
+                ...(attemptId !== undefined ? { attemptId } : {}),
+              })
               ws.close(1012, 'bridge changed')
               return
             }
@@ -481,6 +562,8 @@ export function apply(ctx: Context, options: unknown): void {
                 source: live.source,
                 rateLimiter: authRateLimiter,
                 auditLabel,
+                diagnostics,
+                ...(attemptId !== undefined ? { attemptId } : {}),
                 onClosed: (closed) => connections.delete(closed),
                 onDeviceAuthenticated: (deviceId) => {
                   log(`device authenticated id=${auditLabel(deviceId)} source=${auditLabel(live.source)}`)
@@ -508,7 +591,12 @@ export function apply(ctx: Context, options: unknown): void {
           pendingUpgrades -= 1
         }
       } catch (error) {
-        log('upgrade failed: ' + String(error))
+        log('upgrade failed: ' + String(error), 'warn')
+        diagnostics.record('upgrade-rejected', 'internal-error', {
+          source: sourceLabel,
+          ...(attemptId !== undefined ? { attemptId } : {}),
+          detail: error instanceof Error ? error.message : String(error),
+        })
         rejectUpgrade(socket, 500, 'internal error')
       }
     })()
@@ -523,14 +611,23 @@ export function apply(ctx: Context, options: unknown): void {
         res.end(JSON.stringify({ ok: false, degraded: true }))
         return
       }
+      // 只加不删：原有字段（ok/enabled/protocolVersion/serverVersion/
+      // dataPlane）语义不变；新增字段描述「此刻为什么连不上」：
+      // LAN 相位与端口、数据面相位、TLS 是否重建、启动时间、最近一次失败。
+      // 刻意不返回 debug 开关状态与地址候选（health 不该成为扫描器的字典）。
+      const local = localTransport.status()
       res.statusCode = 200
-      res.end(JSON.stringify({
-        ok: true,
+      res.end(JSON.stringify(buildHealthPayload({
+        startedAt,
         enabled: enabledNow(),
         protocolVersion: 2,
         serverVersion: SERVER_VERSION,
-        dataPlane: Boolean(state.bridge),
-      }))
+        dataPlaneActive: Boolean(state.bridge),
+        localPhase: local.phase,
+        localPort: local.port,
+        tlsIdentityRegenerated,
+        lastFailure: diagnostics.lastFailureSummary(),
+      })))
     } catch {
       res.statusCode = 500
       res.end(JSON.stringify({ ok: false }))
@@ -557,6 +654,7 @@ export function apply(ctx: Context, options: unknown): void {
     config: currentConfig,
     tls: loadLanTls,
     log,
+    onTransportError: recordTransportError,
   })
   const remoteTransport = createRemoteTransport({
     handlers: phoneHandlers,
@@ -575,7 +673,9 @@ export function apply(ctx: Context, options: unknown): void {
   }
   const remoteStatus = (): RemoteStatus => remoteTransport.status()
 
-  const originServer = createPhoneServer(phoneHandlers)
+  const originServer = createPhoneServer(phoneHandlers, undefined, {
+    onTransportError: recordTransportError,
+  })
   let originURL: string | undefined
   scheduleLocalReconcile = () => localTransport.scheduleReconcile()
   scheduleRemoteReconcile = () => remoteTransport.scheduleReconcile()
@@ -588,7 +688,7 @@ export function apply(ctx: Context, options: unknown): void {
         originURL = `http://127.0.0.1:${address.port}`
         scheduleRemoteReconcile?.()
       }
-    }, (error: unknown) => log('remote origin failed: ' + String(error)))
+    }, (error: unknown) => log('remote origin failed: ' + String(error), 'warn'))
     return async () => {
       scheduleLocalReconcile = undefined
       scheduleRemoteReconcile = undefined
@@ -639,7 +739,7 @@ export function apply(ctx: Context, options: unknown): void {
       try {
         proxy = new DshApiProxy(apiCtx, { shouldSurfaceInteraction: hasPairedPhoneSurface })
       } catch (error) {
-        log('DSH session bridge unavailable: ' + String(error))
+        log('DSH session bridge unavailable: ' + String(error), 'warn')
         return
       }
       const bridge = new HostBridge(
@@ -671,5 +771,7 @@ export function apply(ctx: Context, options: unknown): void {
     await pushGateway.dispose()
     const wssClosed = new Promise<void>((resolve) => wss.close(() => resolve()))
     await Promise.allSettled([wssClosed])
+    // 最后收尾诊断落盘：关闭前那次连接失败必须已经在磁盘上。
+    await diagnostics.dispose()
   }, 'deeppilot: process resources')
 }

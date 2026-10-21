@@ -125,10 +125,24 @@ system-reported name; saving an empty value restores the iPhone-reported
 default.
 
 The settings page's **Testing & troubleshooting** group has a `debug` toggle.
-Turning it on prints handshake and push diagnostics to the DSH host's terminal
+Turning it on prints per-frame and push diagnostics to the DSH host's terminal
 output (for example, the actual capability bits sent in `s2c.welcome`); it
-never prints pairing tokens, APNs tokens, or message content, and takes effect
-immediately without restarting DSH.
+never prints pairing tokens, APNs tokens, or message content. The toggle is
+snapshotted per connection, so an already-open connection only picks up the new
+value after it reconnects.
+
+**Connection failures do not need that toggle.** The plugin always records
+admission rejections, authentication failures (4401 distinguishes an unknown
+device, a revoked device, a bad signature, an expired challenge and clock skew),
+TLS handshake failures and pairing failures. They show up in the terminal as
+`[deeppilot] <time> WARN <event> <reason> src=<source hash> attempt=<attempt ID>`
+and are appended under `diagnostics/` in the plugin data directory (7 days,
+5 MB cap). The settings page's **Connection diagnostics** group lists the most
+recent failures with a copy button, and `/phone/health` additionally returns the
+local transport phase and port, the data-plane phase, whether the TLS identity
+was rebuilt, the start time and the last failure, so the phone can locate the
+cause even while it cannot connect. Records contain only source hashes — never
+raw IPs, pairing codes, keys, APNs tokens or message content.
 
 Offline push is optional. Relay mode sends only the target APNs device token
 and a limited notification payload; full conversation history and live output

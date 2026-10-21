@@ -72,6 +72,11 @@ export function serviceStatus(input: {
   const remote = dotState(input.remoteDot)
   const attention = local.attention || remote.attention
   const online = local.online || remote.online
+  // 「两个传输都关闭」不是「仍在读取」：disabled / stopped 的 phase 本来
+  // 就没有点位（dot 为空串），此前会落到 loading，页面永久显示「正在读取
+  // 状态…」。没有点位且开关就绪时状态已经确定，按未启用展示。
+  const hasSignal = (dot: string | undefined): boolean => dot !== undefined && dot !== ''
+  const anySignal = hasSignal(input.localDot) || hasSignal(input.remoteDot)
   const kind: ServiceStatusKind = !input.switchReady
     ? 'loading'
     : !input.enabled
@@ -80,8 +85,10 @@ export function serviceStatus(input: {
         ? 'attention'
         : online
           ? 'ready'
-          : 'loading'
-  const dot: Dot = !input.enabled
+          : anySignal
+            ? 'loading'
+            : 'off'
+  const dot: Dot = !input.enabled || (!attention && !online && !anySignal)
     ? ''
     : attention
       ? ' pbb-dotBad'

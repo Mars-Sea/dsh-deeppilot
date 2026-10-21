@@ -1,6 +1,6 @@
 import { createElement as h, Fragment, useEffect, useReducer, useRef, useState } from 'react'
 import * as QRCode from 'qrcode/lib/browser.js'
-import type { DeepPilotReport, PairingGrantSnapshot, PushTestResult, RelayTestResult } from '../report-wire.ts'
+import type { DeepPilotReport, PairingGrantSnapshot, PushTestResult, RelayTestResult, ReportDiagnosticFailure } from '../report-wire.ts'
 import { encodePairingLink, selectPairingTargets, type PairingTarget } from '../pairing-qr.ts'
 import { initialPairingPanelState, pairingPanelReduce, pairingPanelView } from './pairing-panel.ts'
 import { translateWith as t } from './i18n.ts'
@@ -148,6 +148,8 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
   const [deviceMessage, setDeviceMessage] = useState('')
   const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null)
   const [deviceNameDraft, setDeviceNameDraft] = useState('')
+  /** 复制诊断信息的结果提示；failed 决定是否染红。 */
+  const [diagnosticsCopy, setDiagnosticsCopy] = useState<{ message: string; failed: boolean }>({ message: '', failed: false })
 
   useEffect(() => {
     if (!can('refresh')) return
@@ -617,6 +619,89 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
   const serviceStatusText = t(props.t, SERVICE_STATUS_KEY[service.kind])
   const serviceDot = service.dot
 
+  // ---------- 连接诊断（P0：最近失败可观测 + 一键复制） ----------
+
+  /** 一条失败事件的单行文本：时间 · 类型 · 分因，附带可选排查字段。 */
+  const diagnosticLine = (failure: ReportDiagnosticFailure): string => {
+    const base = t(props.t, 'diagnostics.item', {
+      time: new Date(failure.ts).toLocaleString(),
+      kind: failure.kind,
+      reason: failure.reason,
+    })
+    const extras: string[] = []
+    if (failure.attemptId !== undefined) extras.push(t(props.t, 'diagnostics.attempt', { id: failure.attemptId }))
+    if (failure.closeCode !== undefined) extras.push(t(props.t, 'diagnostics.closeCode', { code: failure.closeCode }))
+    if (failure.durationMs !== undefined) extras.push(t(props.t, 'diagnostics.duration', { ms: failure.durationMs }))
+    if (failure.source !== undefined) extras.push(t(props.t, 'diagnostics.source', { label: failure.source }))
+    return extras.length === 0 ? base : base + ' · ' + extras.join(' · ')
+  }
+
+  /**
+   * 复制诊断信息：报告里的结构化事实（版本 / 相位 / 连接数 / 最近失败）。
+   * 走既有的 report 通道与 i18n；内容不含配对码、公钥、APNs token 与消息正文。
+   */
+  const copyDiagnostics = (): void => {
+    if (report === null) return
+    const enabledText = report.enabled ? t(props.t, 'diagnostics.on') : t(props.t, 'diagnostics.off')
+    const failures = report.diagnostics?.recentFailures ?? []
+    const lines = [
+      t(props.t, 'diagnostics.reportTitle'),
+      t(props.t, 'diagnostics.reportGeneratedAt') + ': ' + new Date().toLocaleString(),
+      t(props.t, 'diagnostics.reportVersion') + ': v' + report.pluginVersion
+        + ' (' + t(props.t, 'advanced.protocolVersion') + ' v' + String(report.protocolVersion) + ')',
+      t(props.t, 'diagnostics.reportEnabled') + ': ' + enabledText,
+      t(props.t, 'diagnostics.reportLocal') + ': ' + report.local.phase
+        + (report.local.phase === 'online' ? ' :' + String(report.local.port) : ''),
+      t(props.t, 'diagnostics.reportRemote') + ': ' + report.remote.phase,
+      t(props.t, 'diagnostics.reportConnections') + ': ' + String(report.activeConnections),
+    ]
+    if (report.diagnostics !== undefined) {
+      lines.push(t(props.t, 'diagnostics.startedAt', {
+        time: new Date(report.diagnostics.startedAt).toLocaleString(),
+      }))
+    }
+    lines.push(t(props.t, 'diagnostics.reportFailureHeader') + ':')
+    if (failures.length === 0) {
+      lines.push('- ' + t(props.t, 'diagnostics.reportNone'))
+    } else {
+      for (const failure of failures.slice(-5).reverse()) lines.push('- ' + diagnosticLine(failure))
+    }
+    void writeClipboard(props.t, lines.join('\n')).then(() => {
+      setDiagnosticsCopy({ message: t(props.t, 'diagnostics.copied'), failed: false })
+    }, (error: unknown) => {
+      setDiagnosticsCopy({
+        message: t(props.t, 'diagnostics.copyFailed') + (error instanceof Error ? error.message : String(error)),
+        failed: true,
+      })
+    })
+  }
+
+  // 诊断区块放在「测试与故障排查」卡片内：与推送自测同一处，用户排查时不必
+  // 在两块之间来回找。report 为 null（报告未就绪）时整块跳过。
+  const diagnosticsSection = report === null ? null : h('div', { className: 'pbb-helpSection' },
+    h('div', { className: 'pbb-row' },
+      h('div', { className: 'pbb-switchText' },
+        h('span', { className: 'pbb-testTitle' }, t(props.t, 'diagnostics.title')),
+        h('span', { className: 'pbb-testDescription' }, t(props.t, 'diagnostics.description'))),
+      h('button', {
+        type: 'button',
+        className: 'pbb-action',
+        onClick: copyDiagnostics,
+        'data-testid': 'diagnosticsCopy',
+      }, t(props.t, 'diagnostics.copy'))),
+    diagnosticsCopy.message
+      ? h('p', { className: 'pbb-diag' + (diagnosticsCopy.failed ? ' pbb-diagBad' : '') }, diagnosticsCopy.message)
+      : null,
+    report.diagnostics === undefined
+      ? h('p', { className: 'pbb-diag' }, t(props.t, 'diagnostics.staleHost'))
+      : (report.diagnostics.recentFailures.length === 0
+          ? h('p', { className: 'pbb-diag' }, t(props.t, 'diagnostics.empty'))
+          : h('div', null,
+              h('span', { className: 'pbb-label' }, t(props.t, 'diagnostics.recent')),
+              report.diagnostics.recentFailures.slice(-5).reverse().map((failure, index) =>
+                h('p', { className: 'pbb-diag', key: String(index) }, diagnosticLine(failure))))),
+  )
+
   return h('div', { className: 'pbb-section' },
     h('header', { className: 'pbb-pageHeader' },
       h('div', null,
@@ -1008,6 +1093,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
                     + r.outcome + (r.reason ? '（' + r.reason + '）' : '')
                     + (r.tokenFingerprint ? '　token:' + r.tokenFingerprint + '…' : ''))),
             ),
+        diagnosticsSection,
       ),
     ),
     report === null ? null : h('details', { className: 'pbb-card pbb-disclosure' },

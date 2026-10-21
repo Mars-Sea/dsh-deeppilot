@@ -68,6 +68,13 @@ test('serviceStatus 的真值表与迁移前逐行对应', () => {
   // 注意力优先于在线：一端报错、一端在线时按 attention 展示。
   assert.equal(serviceStatus({ ...base, localDot: ' pbb-dotOk', remoteDot: ' pbb-dotBad' }).kind, 'attention')
   assert.equal(serviceStatus({ ...base, localDot: ' pbb-dotOk', remoteDot: ' pbb-dotBad' }).dot, ' pbb-dotBad')
+  // 两个传输都关闭（disabled / stopped 没有点位）时状态已经确定：不能再显示
+  // 「正在读取状态…」，否则页面永远停在加载态。
+  assert.equal(serviceStatus({ ...base, localDot: '', remoteDot: '' }).kind, 'off')
+  assert.equal(serviceStatus({ ...base, localDot: '', remoteDot: '' }).dot, '')
+  assert.equal(serviceStatus({ ...base, localDot: undefined, remoteDot: undefined }).kind, 'off')
+  // 有点位但非在线/报错（starting 的 warn）仍然算「起式中」。
+  assert.equal(serviceStatus({ ...base, localDot: ' pbb-dotWarn', remoteDot: '' }).kind, 'loading')
 })
 
 // ---------- 数字草稿 ----------

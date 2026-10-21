@@ -48,6 +48,7 @@ import type { DispatchJournal } from './dispatch-journal.ts'
 import { pushScopeFor } from './connection-policy.ts'
 import { capabilityBits } from './host-capabilities.ts'
 import { hostFailureOf, wireCodeFor, wireErrorOf, type WireErrorCode } from './wire-errors.ts'
+import { formatLogLine } from './diagnostics.ts'
 
 export {
   MAX_MESSAGE_PROJECTION_BYTES,
@@ -174,7 +175,7 @@ export class HostBridge {
   }
 
   diagnostic(message: string): void {
-    console.log('[deeppilot] ' + message);
+    console.log(formatLogLine('info', message));
   }
 
   currentCursor(): number {

@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, createPublicKey, X509Certificate } from '
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { generate } from 'selfsigned'
+import { formatLogLine } from './diagnostics.ts'
 
 export { LAN_TLS_FINGERPRINT_PATTERN, isLanTlsFingerprint } from './pairing-qr.ts'
 
@@ -48,14 +49,22 @@ export async function loadOrCreateLanTlsIdentity(dir: string, now: number = Date
   const keyPath = join(dir, LAN_TLS_KEY_FILE)
   const certPath = join(dir, LAN_TLS_CERT_FILE)
 
-  let key = await readPem(keyPath)
+  let key = await readPem(keyPath, (error) => {
+    // 读失败（非 ENOENT）会被下面当成「密钥缺失」直接重建：已配对设备的
+    // 固定指纹随即失效、必须重新配对。这个后果必须可见，否则用户只会看到
+    // 手机突然不认证书，而电脑端毫无线索。
+    console.log(formatLogLine('warn', 'LAN TLS private key unreadable, regenerating identity: ' + describeFileError(error)))
+  })
   let regenerated = false
   if (key === undefined || !validPrivateKey(key)) {
     regenerated = true
     key = undefined
   }
 
-  let cert = regenerated ? undefined : await readPem(certPath)
+  let cert = regenerated ? undefined : await readPem(certPath, (error) => {
+    // 证书读失败可以只重签（密钥不变、指纹不变），仍是需要留痕的异常。
+    console.log(formatLogLine('warn', 'LAN TLS certificate unreadable, re-signing with the existing key: ' + describeFileError(error)))
+  })
   let resigned = false
   const existing = key !== undefined && cert !== undefined ? inspectCertificate(cert, key, now) : undefined
   if (existing === undefined) {
@@ -81,16 +90,24 @@ export async function loadOrCreateLanTlsIdentity(dir: string, now: number = Date
   }
 }
 
-async function readPem(path: string): Promise<string | undefined> {
+async function readPem(path: string, onError?: (error: unknown) => void): Promise<string | undefined> {
   try {
     const text = await readFile(path, 'utf8')
     return text.trim().length > 0 ? text : undefined
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-    // Any other read failure is treated like a missing file: the caller
-    // rewrites the identity and the operator sees the "regenerated" signal.
+    // 非 ENOENT 的读取失败交给调用方留痕；随后仍按「文件缺失」重建身份，
+    // 保证插件能起来。错误消息只含路径与 errno，不含密钥内容。
+    onError?.(error)
     return undefined
   }
+}
+
+/** 读失败的安全描述：文件名 + errno，不带文件内容。 */
+function describeFileError(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  const message = error instanceof Error ? error.message : String(error)
+  return (typeof code === 'string' ? 'code=' + code + ' ' : '') + message.slice(0, 140)
 }
 
 function validPrivateKey(pem: string): boolean {

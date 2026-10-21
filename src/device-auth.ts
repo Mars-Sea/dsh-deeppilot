@@ -8,6 +8,7 @@ import {
 } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { formatLogLine } from './diagnostics.ts'
 
 export function getPairingCodeTtlMs(): number {
   return Number(process.env.DEEPPILOT_PAIRING_TTL_MS) || 5 * 60_000
@@ -44,6 +45,10 @@ export async function loadOrCreateHostAudience(path: string): Promise<string> {
   const audience = 'deeppilot:' + randomBytes(16).toString('base64url')
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, audience + '\n', { mode: 0o600 })
+  // 新建 Host 身份意味着 audience 变了：所有此前配对的设备都会在下一步
+  // 认证失败（audience-mismatch）。这是「手机突然全部要重新配对」最直接的
+  // 证据，必须留一行；只记事实与路径，不记 audience 原文（可被冒充）。
+  console.log(formatLogLine('info', 'host identity created: ' + path + ' (previously paired devices must pair again)'))
   return audience
 }
 

@@ -24,6 +24,7 @@ import { PROTOCOL_VERSION } from './protocol.ts'
 import type { AuthProofPayload, Envelope } from './protocol.ts'
 import type { HostBridge } from './host-bridge.ts'
 import type { DeviceStore } from './token.ts'
+import type { DiagnosticsRecorder } from './diagnostics.ts'
 import {
   createAuthChallenge,
   verifyAuthProof,
@@ -55,6 +56,46 @@ import type { WireErrorCode } from './wire-errors.ts'
 
 /** 认证落定的四种结局；与迁移前 index.ts 收到的 reason 一致。 */
 export type SettleReason = 'success' | 'invalid-proof' | 'timeout' | 'closed'
+
+/**
+ * 4401 的七种分因。**只进日志与诊断事件**：wire 响应仍然只有一个 4401
+ * 关闭码，绝不透露设备是否注册过、签名哪一步失败。
+ */
+export type AuthFailureReason =
+  | 'unknown-device'
+  | 'revoked'
+  | 'bad-signature'
+  | 'nonce-mismatch'
+  | 'audience-mismatch'
+  | 'challenge-expired'
+  | 'clock-skew'
+
+/**
+ * 把一次认证失败归一到一个原因。判定顺序就是语义优先级：
+ *
+ * 1. 注册表状态先行——设备不存在 / 已撤销时，后面任何字段都不可信；
+ * 2. nonce / audience 不匹配：挑战对象不是这一次（重放或串线）；
+ * 3. 服务器时钟已过挑战有效期：挑战过期；
+ * 4. 客户端回显的 issuedAt / expiresAt 与挑战不同：客户端时钟或状态偏差；
+ * 5. 其余（签名缺失 / 验签失败）：bad-signature。
+ *
+ * 纯函数，连接门与单测共用同一份判定。
+ */
+export function classifyAuthFailure(input: {
+  device: 'active' | 'revoked' | 'unknown'
+  proof: Partial<AuthProofPayload>
+  challenge: AuthChallenge
+  now: number
+}): AuthFailureReason {
+  if (input.device === 'revoked') return 'revoked'
+  if (input.device === 'unknown') return 'unknown-device'
+  const { proof, challenge, now } = input
+  if (proof.nonce !== challenge.nonce) return 'nonce-mismatch'
+  if (proof.audience !== challenge.audience) return 'audience-mismatch'
+  if (now > challenge.expiresAt) return 'challenge-expired'
+  if (proof.issuedAt !== challenge.issuedAt || proof.expiresAt !== challenge.expiresAt) return 'clock-skew'
+  return 'bad-signature'
+}
 
 /** 认证成功的产物：连接据它发 welcome、注册 sink、决定重放。 */
 export interface AuthenticatedIdentity {
@@ -118,6 +159,10 @@ export interface ConnectionGateOptions {
   log: (message: string) => void
   /** 审计标签函数：把敏感标识变成短哈希，供日志使用。 */
   auditLabel?: (value: string) => string
+  /** 客户端带来的 attemptId；只用于串联日志，不参与任何判定。 */
+  attemptId?: string
+  /** 诊断事件出口；缺省时失败路径不额外记录（行为不变）。 */
+  diagnostics?: DiagnosticsRecorder
   /** 未 attach 的兜底时限：upgrade 回调根本不执行时释放名额。 */
   attachTimeoutMs?: number
 }
@@ -187,6 +232,9 @@ export class ConnectionGate {
       this.helloTimer = undefined
       if (this.authenticated) return
       this.settle(false, 'timeout')
+      // 4402 与 4401 对称：超时同样是「手机握手失败」，没有理由只让认证
+      // 失败有记录、超时无声无息。
+      this.reportAuthFailure('timeout', 4402)
       this.host?.close(4402, 'auth timeout')
     }, AUTH_TIMEOUT_MS)
     this.helloTimer.unref()
@@ -299,18 +347,23 @@ export class ConnectionGate {
     const p = (env.payload ?? {}) as Partial<AuthProofPayload>
     if (!p.deviceId) {
       host.fail(env.id, 'E_PROTOCOL', 'deviceId required')
+      this.reportAuthFailure('device-id-missing', 4403)
       host.close(4403, 'deviceId required')
       return
     }
     const deviceId = sanitizeDeviceField(p.deviceId, MAX_DEVICE_ID_CHARS)
     if (!deviceId) {
       host.fail(env.id, 'E_PROTOCOL', 'deviceId required')
+      this.reportAuthFailure('device-id-missing', 4403)
       host.close(4403, 'deviceId required')
       return
     }
     const deviceName = sanitizeDeviceField(p.deviceName, MAX_DEVICE_NAME_CHARS) || 'unknown'
     const appVersion = sanitizeDeviceField(p.appVersion, MAX_APP_VERSION_CHARS) || 'unknown'
-    const record = this.options.devices.authorized(deviceId)
+    // 注册表状态先行：authorized() 仍是唯一准入判定，statusOf() 只把
+    // 「未知 / 已撤销 / 可认证」拆开，让 4401 在日志里能分因。
+    const deviceState = this.options.devices.statusOf(deviceId)
+    const record = deviceState === 'active' ? this.options.devices.authorized(deviceId) : undefined
     const resumeCursor = typeof p.resumeCursor === 'number' && Number.isInteger(p.resumeCursor) && p.resumeCursor >= 0
       ? p.resumeCursor
       : undefined
@@ -328,7 +381,14 @@ export class ConnectionGate {
         ...this.challenge,
       }, p.signature)
     if (!proofValid || record === undefined) {
+      const reason = classifyAuthFailure({
+        device: deviceState,
+        proof: p,
+        challenge: this.challenge,
+        now: Date.now(),
+      })
       host.fail(env.id, 'E_AUTH', 'device proof missing or invalid')
+      this.reportAuthFailure(reason, 4401)
       this.settle(false, 'invalid-proof')
       host.close(4401, 'invalid device proof')
       return
@@ -351,6 +411,20 @@ export class ConnectionGate {
       resumeCursor: this.widgetClient ? undefined : resumeCursor,
       deviceName,
       appVersion,
+    })
+  }
+
+  /**
+   * 认证失败事件。来源只写 auditLabel 哈希（没有哈希函数时宁可不写，
+   * 也不把原始 IP 落盘）；attemptId 原样带出，便于把同一次握手的
+   * upgrade / auth 两条日志串起来。
+   */
+  private reportAuthFailure(reason: string, closeCode: number): void {
+    const source = this.options.auditLabel?.(this.options.source)
+    this.options.diagnostics?.record('auth-failed', reason, {
+      ...(source !== undefined ? { source } : {}),
+      ...(this.options.attemptId !== undefined ? { attemptId: this.options.attemptId } : {}),
+      closeCode,
     })
   }
 

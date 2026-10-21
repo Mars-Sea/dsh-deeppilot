@@ -192,8 +192,27 @@ test('begin 抛错且有 errorStatus：落 error 状态并记日志', async () =
   assert.deepEqual(logs, ['transport failed: Error: EADDRINUSE'])
 })
 
-test('begin 抛错且无 errorStatus：错误上抛，由 scheduleReconcile 兜住', async () => {
-  const spec = makeSpec({ begin: async () => { throw new Error('boom') } })
+test('failureMessage 收到 target：LAN 失败日志不再把端口写死为 0', async () => {
+  const logs: string[] = []
+  const spec = makeSpec({
+    begin: async () => { throw new Error('EADDRINUSE') },
+    errorStatus: () => ({ phase: 'error', updatedAt: 0 }),
+    // 与 transport-reconciler.ts 里 LAN 行的真实写法一致：端口取自 target。
+    failureMessage: (error, target) => 'local transport failed: local port '
+      + String(target.port) + ' is already in use (' + String((error as Error).message) + ')',
+  })
+  const reconciler = new TransportReconciler(
+    spec,
+    () => config({ enabled: true, port: 4567 }),
+    (message) => logs.push(message),
+    initialStatus,
+  )
+  await reconciler.reconcile()
+  assert.deepEqual(logs, ['local transport failed: local port 4567 is already in use (EADDRINUSE)'])
+  assert.equal(logs[0]?.includes('port 0 '), false, '端口不能恒为 0')
+})
+
+test('begin 抛错且无 errorStatus：错误上抛，由 scheduleReconcile 兜住', async () => {  const spec = makeSpec({ begin: async () => { throw new Error('boom') } })
   const logs: string[] = []
   const reconciler = new TransportReconciler(spec, () => config({ enabled: true }), (m) => logs.push(m), initialStatus)
   reconciler.scheduleReconcile()

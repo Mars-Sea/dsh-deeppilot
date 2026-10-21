@@ -22,7 +22,11 @@
       "phase": "disabled",
       "updatedAt": "<ts>"
     },
-    "devices": []
+    "devices": [],
+    "diagnostics": {
+      "startedAt": "<ts>",
+      "recentFailures": []
+    }
   },
   "reportFieldTypes": {
     "protocolVersion": "number",
@@ -36,7 +40,8 @@
     "lanAddresses": "array",
     "local": "object",
     "remote": "object",
-    "devices": "array"
+    "devices": "array",
+    "diagnostics": "object"
   },
   "dataDirIsolation": true,
   "relayTestNotRelay": {
@@ -107,7 +112,11 @@
       "phase": "disabled",
       "updatedAt": "<ts>"
     },
-    "devices": []
+    "devices": [],
+    "diagnostics": {
+      "startedAt": "<ts>",
+      "recentFailures": []
+    }
   },
   "localSummaryAfterEnabled": {
     "phase": "online",
@@ -149,7 +158,11 @@
       "updatedAt": "<ts>",
       "message": "embedded tunnel helper unavailable: <path>: Error: ENOENT: no such file or directory, access '<path>'"
     },
-    "devices": []
+    "devices": [],
+    "diagnostics": {
+      "startedAt": "<ts>",
+      "recentFailures": []
+    }
   },
   "remoteSummaryAfterEnabled": {
     "provider": "tailscale-funnel",
@@ -168,10 +181,10 @@
     "devicesPathUnderDataDir": true
   },
   "transportLogs": [
-    "[deeppilot] local transport disabled",
-    "[deeppilot] LAN TLS identity created: fingerprint=<fingerprint>; previously paired LAN devices must pair again",
-    "[deeppilot] local transport listening on https://<bind>:<port> (tls fingerprint <fingerprint>)",
-    "[deeppilot] remote Funnel unavailable: embedded tunnel helper unavailable: <path>: Error: ENOENT: no such file or directory, access '<path>'"
+    "[deeppilot] <ts> INFO local transport disabled",
+    "[deeppilot] <ts> INFO LAN TLS identity created: fingerprint=<fingerprint>; previously paired LAN devices must pair again",
+    "[deeppilot] <ts> INFO local transport listening on https://<bind>:<port> (tls fingerprint <fingerprint>)",
+    "[deeppilot] <ts> INFO remote Funnel unavailable: embedded tunnel helper unavailable: <path>: Error: ENOENT: no such file or directory, access '<path>'"
   ],
   "updateCheckBlockedOffline": true,
   "updateFieldsAbsentInReport": true,

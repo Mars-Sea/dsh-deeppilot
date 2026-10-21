@@ -57,8 +57,13 @@ export interface TransportSpec<TInstance, TStatus extends TransportStatus> {
   statusOf(instance: TInstance | undefined): TStatus | undefined
   /** 目标未启用时记的日志；缺省不记。 */
   disabledMessage?: string
-  /** 启动失败时记的日志；缺省由协调器给一句通用的。 */
-  failureMessage?: (error: unknown) => string
+  /**
+   * 启动失败时记的日志；缺省由协调器给一句通用的。
+   * 必须把 target 传进来：LAN 的端口来自配置，硬编码 0 会让所有
+   * EADDRINUSE / EACCES 日志都写「port 0 is already in use」，
+   * 用户无法知道是哪一个端口冲突（P0 端口 bug）。
+   */
+  failureMessage?: (error: unknown, target: TransportTarget) => string
 }
 
 /**
@@ -165,7 +170,7 @@ export class TransportReconciler<TInstance, TStatus extends TransportStatus> {
       this.instance = undefined
       if (partial !== undefined) await this.spec.stop(partial).catch(() => {})
       this.currentStatus = this.spec.errorStatus(error, target)
-      this.log(this.spec.failureMessage?.(error) ?? 'transport failed: ' + String(error))
+      this.log(this.spec.failureMessage?.(error, target) ?? 'transport failed: ' + String(error))
     }
   }
 
@@ -188,6 +193,7 @@ import {
   createPhoneServer,
   listen,
   type PhoneServerHandlers,
+  type PhoneServerTransportError,
 } from './phone-server.ts'
 import {
   localListenError,
@@ -220,6 +226,8 @@ export interface LocalTransportDeps {
   /** 加载（必要时创建）LAN TLS 身份；由 apply() 持有，reconciler 不懂 TLS。 */
   tls: () => Promise<{ key: string; cert: string; fingerprint: string }>
   log: (message: string) => void
+  /** TLS 握手 / HTTP 报文层错误出口；index 负责把来源哈希后记录。 */
+  onTransportError?: (event: PhoneServerTransportError) => void
 }
 
 /**
@@ -245,7 +253,11 @@ export function createLocalTransport(deps: LocalTransportDeps): TransportReconci
       // 被更新的触发取代：不建 listener，状态停在 starting（与迁移前一致）。
       if (!guard.isCurrent() || guard.isDisposed()) return
       const port = instance.port
-      const server = createPhoneServer(deps.handlers, { key: tls.key, cert: tls.cert })
+      const server = createPhoneServer(
+        deps.handlers,
+        { key: tls.key, cert: tls.cert },
+        deps.onTransportError !== undefined ? { onTransportError: deps.onTransportError } : undefined,
+      )
       instance.server = server
       instance.tlsFingerprint = tls.fingerprint
       await listen(server, port, '0.0.0.0')
@@ -278,7 +290,9 @@ export function createLocalTransport(deps: LocalTransportDeps): TransportReconci
       updatedAt: Date.now(),
     }),
     disabledMessage: 'local transport disabled',
-    failureMessage: (error) => 'local transport failed: ' + localListenError(error, 0),
+    // 端口从 target 取，不再硬编码 0：EADDRINUSE 的日志必须能指向用户
+    // 实际配置的那个端口。
+    failureMessage: (error, target) => 'local transport failed: ' + localListenError(error, normalizeLocalPort(target.port)),
     statusOf: (instance) => {
       if (instance === undefined || instance.server === undefined) return undefined
       return {

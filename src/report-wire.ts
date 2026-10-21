@@ -63,6 +63,31 @@ export interface PushTestDeviceResult {
   tokenFingerprint?: string
 }
 
+/**
+ * 设置页「连接诊断」区块展示的一条最近失败。
+ *
+ * 只携带可安全展示的结构化事实：类型、分因、时间、来源哈希（auditLabel
+ * 的 12 位十六进制，绝不是原始 IP）、可选 attemptId / 关闭码 / 耗时。
+ * 配对码、公钥、APNs token、消息正文永远不进入这里。
+ */
+export interface ReportDiagnosticFailure {
+  ts: number
+  kind: string
+  reason: string
+  attemptId?: string
+  source?: string
+  closeCode?: number
+  durationMs?: number
+}
+
+/** 连接诊断快照；不包含 debug 开关状态。 */
+export interface ReportDiagnostics {
+  /** 插件 apply() 的启动时刻。 */
+  startedAt: number
+  /** 最近失败事件（时间升序，最多 20 条）。 */
+  recentFailures: ReportDiagnosticFailure[]
+}
+
 export interface PushTestResult {
   transport: 'apns' | 'relay' | 'none'
   /** sent = at least one accepted delivery; no-targets / not-configured / failed. */
@@ -117,6 +142,11 @@ export interface DeepPilotReport {
     updatedAt: number
   }
   devices: ReportDevice[]
+  /**
+   * 连接诊断。可选：旧 Host 不返回时设置页整块跳过，不当作错误。
+   * 这是「最近失败」的唯一 report 通道（health 只服务手机）。
+   */
+  diagnostics?: ReportDiagnostics
 }
 
 /** The npm package identity both contribution registrations claim. */
@@ -315,6 +345,53 @@ function parsePushTestResult(value: unknown): PushTestResult {
   }
 }
 
+function parseDiagnosticFailure(value: unknown): ReportDiagnosticFailure {
+  const s = rec(value, 'diagnostics.recentFailures[]')
+  // kind / reason 是代码内枚举常量；这里收敛字符集与长度，防止上游把
+  // 任意文本（路径、IP、错误消息）塞进设置页。
+  const kind = str(s, 'kind', 'diagnostics.kind')
+  if (!/^[a-z][a-z0-9-]{0,47}$/.test(kind)) reject('diagnostics.kind')
+  const reason = str(s, 'reason', 'diagnostics.reason')
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(reason)) reject('diagnostics.reason')
+  const attemptId = s.attemptId
+  if (attemptId !== undefined && (typeof attemptId !== 'string' || !/^[A-Za-z0-9_-]{1,16}$/.test(attemptId))) {
+    reject('diagnostics.attemptId')
+  }
+  const source = s.source
+  if (source !== undefined && (typeof source !== 'string' || !/^[0-9a-f]{8,64}$/.test(source))) {
+    reject('diagnostics.source')
+  }
+  const closeCode = s.closeCode
+  if (closeCode !== undefined && (typeof closeCode !== 'number' || !Number.isInteger(closeCode))) {
+    reject('diagnostics.closeCode')
+  }
+  const durationMs = s.durationMs
+  if (durationMs !== undefined && (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs < 0)) {
+    reject('diagnostics.durationMs')
+  }
+  return {
+    ts: int(s, 'ts', 'diagnostics.ts'),
+    kind,
+    reason,
+    ...(typeof attemptId === 'string' ? { attemptId } : {}),
+    ...(typeof source === 'string' ? { source } : {}),
+    ...(typeof closeCode === 'number' ? { closeCode } : {}),
+    ...(typeof durationMs === 'number' ? { durationMs: Math.round(durationMs) } : {}),
+  }
+}
+
+function parseDiagnostics(value: unknown): ReportDiagnostics {
+  const s = rec(value, 'diagnostics')
+  const failures = s.recentFailures
+  if (!Array.isArray(failures)) reject('diagnostics.recentFailures')
+  // 页面上是「最近失败」列表，20 条足够；硬上限防止坏 Host 撑爆 UI。
+  if (failures.length > 20) reject('diagnostics.recentFailures')
+  return {
+    startedAt: int(s, 'startedAt', 'diagnostics.startedAt'),
+    recentFailures: (failures as unknown[]).map(parseDiagnosticFailure),
+  }
+}
+
 function parseReport(value: unknown): DeepPilotReport {
   const s = rec(value, 'report')
   const devices = s.devices
@@ -340,6 +417,8 @@ function parseReport(value: unknown): DeepPilotReport {
     local: parseLocal(s.local),
     remote: parseRemote(s.remote),
     devices: (devices as unknown[]).map(parseDevice),
+    // 旧 Host 没有这个字段：保持可选，设置页整块跳过。
+    ...(s.diagnostics !== undefined ? { diagnostics: parseDiagnostics(s.diagnostics) } : {}),
   }
 }
 

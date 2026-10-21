@@ -39,13 +39,14 @@ class FakeWebSocket {
     this.closes.push({ code, reason: reason ?? '' })
     this.closeOffsets.push(this.sent.length)
     this.readyState = 3
-    this.handlers.get('close')?.()
+    // 与真实 ws 一致：close 事件带关闭码（诊断事件据此区分正常/非正常关闭）。
+    this.handlers.get('close')?.(code)
   }
 
   terminate(): void {
     this.terminated = true
     this.readyState = 3
-    this.handlers.get('close')?.()
+    this.handlers.get('close')?.(1006)
   }
 
   /** Deliver one protocol frame as the ws 'message' event would. */
@@ -96,6 +97,10 @@ async function makeConnection(opts: {
   onAuthenticationSettled?: (ok: boolean, reason: 'success' | 'invalid-proof' | 'timeout' | 'closed') => void
   onPushEnrollKey?: (enrollKey: string) => Promise<void> | void
   onDeviceRevoke?: (deviceId: string, except: BridgeConnection) => Promise<unknown> | unknown
+  /** 诊断事件收集器（P0：连接建立 / 非正常关闭 / socket error）。 */
+  diagnostics?: { record: (kind: string, reason: string, extra?: any) => unknown }
+  auditLabel?: (value: string) => string
+  attemptId?: string
 } = {}): Promise<Harness> {
   const bridge = new HostBridge(makeProxy(opts.proxyOverrides), 100)
   // Each harness gets its own registry file so tests never share state.
@@ -117,6 +122,9 @@ async function makeConnection(opts: {
     ...(opts.onAuthenticationSettled ? { onAuthenticationSettled: opts.onAuthenticationSettled } : {}),
     ...(opts.onPushEnrollKey ? { onPushEnrollKey: opts.onPushEnrollKey } : {}),
     ...(opts.onDeviceRevoke ? { onDeviceRevoke: opts.onDeviceRevoke } : {}),
+    ...(opts.diagnostics !== undefined ? { diagnostics: opts.diagnostics as never } : {}),
+    ...(opts.auditLabel !== undefined ? { auditLabel: opts.auditLabel } : {}),
+    ...(opts.attemptId !== undefined ? { attemptId: opts.attemptId } : {}),
     onClosed: () => {
       void (async () => {
         await store.drain()
@@ -1274,4 +1282,32 @@ test('welcome advertises the deviceRevoke capability', async () => {
   assert.equal(welcome?.payload.capabilities.deviceRevoke, true)
   h.ws.close()
   await h.closed
+})
+
+// ---------- 连接诊断（P0） ----------
+
+test('连接建立 / 非正常关闭事件带来源哈希与 attemptId', async () => {
+  const events: Array<{ kind: string; reason: string; extra?: any }> = []
+  const { ws, connection } = await makeConnection({
+    auditLabel: (value) => 'h-' + String(value.length),
+    attemptId: 'try_9',
+    diagnostics: {
+      record: (kind, reason, extra) => {
+        events.push({ kind, reason, extra })
+        return undefined
+      },
+    },
+  })
+  const opened = events.find((event) => event.kind === 'connection-opened')
+  assert.ok(opened !== undefined, '建连成功必须有事件')
+  assert.equal(opened.extra?.attemptId, 'try_9')
+  assert.equal(opened.extra?.source, 'h-5', '来源只记 auditLabel 哈希（local 长度 5）')
+
+  // 未认证连接被服务端 4401 关闭：非正常关闭事件带关闭码与存活时长。
+  ws.close(4401, 'invalid device proof')
+  const closed = events.find((event) => event.kind === 'connection-closed')
+  assert.ok(closed !== undefined, '非正常关闭必须有事件')
+  assert.equal(closed.extra?.closeCode, 4401)
+  assert.equal(closed.extra?.authenticated, false)
+  assert.equal(typeof closed.extra?.durationMs, 'number')
 })

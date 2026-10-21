@@ -50,6 +50,9 @@ function normalize(value: unknown, opts: NormalizeOptions): unknown {
     if (opts.helperPath !== undefined) out = out.split(opts.helperPath).join('<path>')
     if (opts.dataDir.length > 0) out = out.split(opts.dataDir).join('<dataDir>')
     return out
+      // 插件日志的统一时间戳前缀先归一化：否则下面的端口正则会把 ISO
+      // 时间里的 `01:49:15` 误当成端口遮成 `01:<port>:<port>`。
+      .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g, '<ts>')
       .replace(/sha256:[A-Za-z0-9_-]+/g, '<fingerprint>')
       .replaceAll('0.0.0.0', '<bind>')
       .replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, '<lanIp>')

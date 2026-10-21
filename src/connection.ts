@@ -7,6 +7,7 @@ import type { DeviceScope } from './device-auth.ts'
 import { MAX_OUTBOUND_BUFFER_BYTES } from './connection-policy.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import type { WireErrorCode } from './wire-errors.ts'
+import type { DiagnosticsRecorder } from './diagnostics.ts'
 import { ConnectionGate, type AuthenticatedIdentity, type GateHost } from './connection-gate.ts'
 import type { OpenEventBuffer, S2CType } from './wire-registry.ts'
 
@@ -30,6 +31,10 @@ export interface ConnectionStateDeps {
   rateLimiter?: AuthRateLimiter
   /** 审计标签函数：把客户端身份变成短哈希供日志使用；缺省时直接用原值。 */
   auditLabel?: (value: string) => string
+  /** 诊断事件出口；连接建立 / 非正常关闭 / socket error 各记一条。 */
+  diagnostics?: DiagnosticsRecorder
+  /** 客户端带来的 attemptId（WS 升级 query `at`），只记录不校验。 */
+  attemptId?: string
   /** Called once when the socket closes (cleanly or not). */
   onClosed?: (connection: BridgeConnection) => void
   /**
@@ -82,6 +87,10 @@ export class BridgeConnection implements BridgeSink {
   private pendingLiveActivityId?: string
   private lastActivity = Date.now()
   private readonly streamAbort = new AbortController()
+  /** 建连时刻：关闭事件用它算存活时长。 */
+  private readonly openedAt = Date.now()
+  /** 来源的审计哈希；没有 auditLabel 时留空，绝不记录原始 IP。 */
+  private readonly sourceLabel: string | undefined
 
   /** True when no inbound frame arrived within maxIdleMs. */
   isStale(now: number, maxIdleMs: number): boolean {
@@ -105,9 +114,13 @@ export class BridgeConnection implements BridgeSink {
       limiter: deps.rateLimiter ?? new AuthRateLimiter(),
       log: (message) => deps.log(message),
       ...(deps.auditLabel ? { auditLabel: deps.auditLabel } : {}),
+      ...(deps.diagnostics ? { diagnostics: deps.diagnostics } : {}),
+      ...(deps.attemptId !== undefined ? { attemptId: deps.attemptId } : {}),
     }),
   ) {
     const connection = this
+    const sourceLabel = deps.auditLabel?.(deps.source ?? 'local')
+    this.sourceLabel = sourceLabel
     const host: GateHost = {
       signal: this.streamAbort.signal,
       waitForWritable: async () => {
@@ -161,17 +174,31 @@ export class BridgeConnection implements BridgeSink {
         this.terminate()
       })
     })
-    ws.on('close', () => {
-      this.onClose()
+    ws.on('close', (code?: number) => {
+      this.onClose(code)
       deps.onClosed?.(this)
     })
-    ws.on('error', () => {
-      /* close follows */
+    // socket 层错误此前是空处理：手机只看到「连接断开」，电脑端毫无线索。
+    // 这里只记录事实（错误消息、是否已认证）；close 事件仍会跟上，原有
+    // 「error 之后由 close 收尾」的语义不变。
+    ws.on('error', (error?: unknown) => {
+      this.deps.diagnostics?.record('connection-error', 'socket-error', {
+        ...(this.sourceLabel !== undefined ? { source: this.sourceLabel } : {}),
+        ...(this.deps.attemptId !== undefined ? { attemptId: this.deps.attemptId } : {}),
+        authenticated: this.identity !== undefined,
+        detail: error instanceof Error ? error.message : String(error ?? 'unknown'),
+      })
     })
     // The challenge goes out the moment the socket is live; the hello deadline
     // is the gate's, so an upgrade that never produced a socket still has the
     // attach timeout to release its admission slot.
     gate.attach(host)
+    // 建连成功一行：来源哈希 + attemptId。放在 attach 之后，保证日志顺序
+    // 与线上事件顺序一致（先说挑战，再说连接已建立）。
+    this.deps.diagnostics?.record('connection-opened', 'socket-open', {
+      ...(sourceLabel !== undefined ? { source: sourceLabel } : {}),
+      ...(deps.attemptId !== undefined ? { attemptId: deps.attemptId } : {}),
+    })
   }
 
   /** Hard-drop the socket (server-side stale sweep). */
@@ -272,9 +299,22 @@ export class BridgeConnection implements BridgeSink {
     }
   }
 
-  private onClose(): void {
+  private onClose(code?: number): void {
     if (this.closed) return
     this.closed = true
+    // 非正常关闭（不是 1000 normal / 1001 going-away）各一行：关闭码、
+    // 是否已认证、存活时长与来源哈希。正常关闭不记，避免每次退出都刷屏。
+    // 缺省（没有 close 帧，如底层 socket 直接消失）按 1005 处理。
+    const closeCode = code ?? 1005
+    if (closeCode !== 1000 && closeCode !== 1001) {
+      this.deps.diagnostics?.record('connection-closed', 'abnormal-close', {
+        ...(this.sourceLabel !== undefined ? { source: this.sourceLabel } : {}),
+        ...(this.deps.attemptId !== undefined ? { attemptId: this.deps.attemptId } : {}),
+        closeCode,
+        durationMs: Date.now() - this.openedAt,
+        authenticated: this.identity !== undefined,
+      })
+    }
     this.streamAbort.abort()
     // Unsettled sockets (never proven) settle as 'closed' and give back their
     // admission slot; already-settled ones are a no-op inside the gate.
