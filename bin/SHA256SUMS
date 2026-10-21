@@ -1,6 +1,6 @@
-c70401fd9530f2fae6abe7aec5eacacca239ba315cedc7197db530df8c6f97bd  ./darwin-amd64/dsh-deeppilot-tunnel
-45ff6b53d3e27fe6242e4904055d647d8b220a5c56ca76e542ffcd861ad3bbad  ./darwin-arm64/dsh-deeppilot-tunnel
-8d4937de90564327dcf8392dba6241e4facc30044a48447b22de99f3e62c9808  ./linux-amd64/dsh-deeppilot-tunnel
-cd4638f9aa3e60340d4f446301b2b6f6452f5cb89fc012884e5a893ab8dbd577  ./linux-arm64/dsh-deeppilot-tunnel
-d5435d4e0c02056b3fac39a5f289acb404e6f060dc566e5dea724ee2b86a4296  ./windows-amd64/dsh-deeppilot-tunnel.exe
-7d79c848b2b74286764bd284005edbcfdf539be90ce0b160ea464ae3af70e005  ./windows-arm64/dsh-deeppilot-tunnel.exe
+4e83f82d5c623115d121f58264ca84706e5fc935dadc0747b37ae886d102dc6a  ./darwin-amd64/dsh-deeppilot-tunnel
+7707999a5b745d11afeb4ab1868c85680e4ff5567202d97015d72d810817a134  ./darwin-arm64/dsh-deeppilot-tunnel
+8a83351568cb223854efbe8f54ca9a403fc2b152382d4e7c952d372b0b0cb3e9  ./linux-amd64/dsh-deeppilot-tunnel
+dfa4eb4dd50b386aadf40d9767ac0df8151308b620fa395d0a560498f01eb0cb  ./linux-arm64/dsh-deeppilot-tunnel
+9c734ea42bc6dd5763930991db52f910d5138e9b12df0e826d6964ceb271e215  ./windows-amd64/dsh-deeppilot-tunnel.exe
+e7db4a0e62f04266d97a5bad38e1a21961474440e7231fd5b24980053589faa0  ./windows-arm64/dsh-deeppilot-tunnel.exe
