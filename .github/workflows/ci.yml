@@ -56,3 +56,51 @@ jobs:
       - name: Scan reachable Go vulnerabilities
         working-directory: helper
         run: govulncheck ./...
+      # SHA256SUMS only proves bin/ was not altered, not that it was built from
+      # the current helper/ sources. The build is reproducible on any host, so
+      # rebuilding the full matrix here must leave bin/ untouched; anything else
+      # means the chore/helper-matrix-refresh PR has not been merged yet.
+      # Skipped on pull requests: Dependabot's gomod PRs only bump go.mod and
+      # would otherwise stay red until that separate refresh PR lands.
+      - name: Rebuild helper matrix
+        if: github.event_name == 'push'
+        run: sh scripts/build-all-helpers.sh
+      - name: Verify bin/ matches helper sources
+        if: github.event_name == 'push'
+        run: |
+          if [ -n "$(git status --porcelain -- bin)" ]; then
+            git status --short -- bin
+            echo 'bin/ 与 helper/ 源码不一致：请先合并 chore/helper-matrix-refresh 的刷新 PR，再发布。' >&2
+            exit 1
+          fi
+
+  # Unit tests only check that every bin/<os>-<arch> file exists. This job
+  # starts the committed binary on a native runner for each of the six targets
+  # and checks the stdout event the supervisor parses (scripts/smoke-helper.mts).
+  helper-smoke:
+    name: Helper smoke (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            os: ubuntu-latest
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+          - target: darwin-arm64
+            os: macos-latest
+          - target: darwin-amd64
+            os: macos-15-intel
+          - target: windows-amd64
+            os: windows-latest
+          - target: windows-arm64
+            os: windows-11-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run smoke:helper

@@ -75,6 +75,7 @@
     "build:helper": "sh scripts/build-helper.sh",
     "build:helpers": "sh scripts/build-all-helpers.sh",
     "check:config-schema": "node scripts/check-config-schema.mjs",
+    "smoke:helper": "tsx scripts/smoke-helper.mts",
     "smoke:live": "tsx scripts/smoke-live.mts",
     "prepack": "npm run build",
     "prepublishOnly": "npm test && npm run typecheck",
