@@ -971,7 +971,11 @@ declare class HostBridge {
    * push failures must never block or break the WS data plane.
    */
   private fanOutPush;
-  /** Remember the latest assistant text so notifications can quote it. */
+  /**
+   * Remember the latest assistant text so notifications can quote it. 存完整原文：
+   * 按字符数截尾会从链接地址中间切开（横幅只剩 URL 编码的路径），段落选择与
+   * Markdown 清洗统一留到 emitNotify。条目随 sessions.list / 归档清理。
+   */
   private captureAssistantText;
   /**
    * Replay buffered pushes after the given cursor; false when the gap is

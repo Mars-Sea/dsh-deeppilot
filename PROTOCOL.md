@@ -672,6 +672,9 @@ Web 或另一 Client 先回答时，Gateway cancellation 会让插件发布对�
   客户端应按该字段幂等去重。notify 计入 seq 游标参与重放。
 - `title` / `body` 是可直接展示的回退文本；客户端可按已知 category 使用本地化标题，
   但不得改写动态 body 或依赖 title 文案判断类别。
+- `body` 是单行纯文本：Bridge 出站前去掉 Host 原文的 Markdown 标记（链接只留文字、
+  丢弃代码块与图片、解码残留的 URL 编码），`turn.completed` / `session.error` 取助手
+  最后回复的最后一个非空段落（为空时退回会话标题），审批与提问把原文合成一行，再截断。
 - 可选字段 `toolName`（≤ 80 字符）与 `detail`（≤ 600 字符，Host 给出的审批原因 / 摘要）
   只出现在 `approval.required` 的 `s2c.notify` 与 APNs / Relay 投影中，供长按展开页显示；
   不改变 `body` 的 120 / 200 字符上限，也不用于判断类别。其他类别忽略这两个字段。

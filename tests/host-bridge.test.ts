@@ -818,6 +818,55 @@ test('turn.end notifies only devices not viewing the session', async () => {
   bridge.dispose()
 })
 
+test('turn notify quotes the plain last paragraph, falling back to the session title', async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  const collected: Array<{ type: string; payload: any }> = []
+  bridge.start()
+  bridge.addSink(makeSink(collected))
+  const turn = (sessionId: string, text: string, rpc: string) => {
+    getPush()({
+      type: 'session/event', rpcId: rpc + '-m', sessionId,
+      event: { type: 'assistant/message', seq: 10, data: { message: { role: 'assistant', content: [{ type: 'text', text }] } } },
+    })
+    getPush()({
+      type: 'session/event', rpcId: rpc + '-e', sessionId,
+      event: { type: 'turn/end', seq: 11, data: { reason: { kind: 'completed' } } },
+    })
+  }
+  // 回归：旧实现截原文最后 160 字，正好从链接地址中间切开。
+  turn('session-md', '改动如下。\n\n' + '说明'.repeat(60) + '\n\n记录见 [提交历史.md](code-provider/docs/%E6%8F%90%E4%BA%A4%E5%8E%86%E5%8F%B2.md#L7)。', 'r1')
+  turn('session-code', '```sh\nnpm test\n```', 'r2')
+  await new Promise((r) => setTimeout(r, 20))
+
+  const notifies = collected.filter((x) => x.type === 's2c.notify')
+  assert.equal(notifies.find((x) => x.payload.sessionId === 'session-md')?.payload.body, '记录见 提交历史.md。')
+  // 清洗后为空时退回会话标题；假代理没有会话行，标题为空串。
+  assert.equal(notifies.find((x) => x.payload.sessionId === 'session-code')?.payload.body, '')
+  bridge.dispose()
+})
+
+test('approval and question notify bodies are plain text', async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  const collected: Array<{ type: string; payload: any }> = []
+  bridge.start()
+  bridge.addSink(makeSink(collected))
+  getPush()({
+    type: 'approval/requested', rpcId: 'rpc-md', sessionId: 'session-a', approvalId: 'apr-md',
+    toolName: 'bash', reason: '运行 `npm test`\n\n见 [配置](a/%E9%85%8D.json)',
+  })
+  getPush()({
+    type: 'question/requested', rpcId: 'rq-md', sessionId: 'session-a',
+    questions: [{ question: '**选哪个**方案？' }],
+  })
+  await new Promise((r) => setTimeout(r, 20))
+  const notifies = collected.filter((x) => x.type === 's2c.notify')
+  assert.equal(notifies.find((x) => x.payload.category === 'approval.required')?.payload.body, 'bash: 运行 npm test 见 配置')
+  assert.equal(notifies.find((x) => x.payload.category === 'question.asked')?.payload.body, '选哪个方案？')
+  bridge.dispose()
+})
+
 test('reasoning chunks project to thinking.delta; finals carry thinking; empty steps skipped', async () => {
   const { proxy, getPush } = makeFakeProxy()
   const bridge = new HostBridge(proxy, 100)

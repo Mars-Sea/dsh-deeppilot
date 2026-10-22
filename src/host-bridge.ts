@@ -6,6 +6,7 @@ import {
   type MutationDispatchResult,
 } from './dispatch-journal.ts'
 import { randomUUID } from 'node:crypto'
+import { notificationPlainText } from './notification-text.ts'
 import type { Envelope, MessageProjection, NotifyCategory, PendingSnapshotPayload, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus, SessionUsageStats, WelcomeCapabilities } from './protocol.ts'
 import {
   isSubagentRow,
@@ -231,14 +232,19 @@ export class HostBridge {
     sessionId: string
     category: NotifyCategory
     title: string
+    /** Host 原文（可能是 Markdown），出站前在这里统一转纯文本。 */
     body: string
+    /** body 清洗后为空（如回复只有代码块）时改用的纯文本，例如会话标题。 */
+    fallbackBody?: string
     notificationId: string
     toolName?: string
     detail?: string
   }): void {
-    if ((args.category === 'turn.completed' || args.category === 'session.error') &&
-        this.subagentSessionIds.has(args.sessionId)) return;
-    const body = args.body.length > 120 ? args.body.slice(0, 119) + '…' : args.body;
+    const turnEnd = args.category === 'turn.completed' || args.category === 'session.error';
+    if (turnEnd && this.subagentSessionIds.has(args.sessionId)) return;
+    // 回合结束取回复最后一段（通常是结论）；审批原因与提问原文合成一行。
+    const plain = notificationPlainText(args.body, turnEnd ? 'last' : 'all') || (args.fallbackBody ?? '');
+    const body = plain.length > 120 ? plain.slice(0, 119) + '…' : plain;
     // 展开页所需的工具名与详情只随审批通知下发；正文 120 字的上限不动，详情另有 600 字上限。
     const approvalExtras = args.category === 'approval.required' && args.toolName
       ? { toolName: args.toolName.slice(0, 80), ...(args.detail ? { detail: args.detail.slice(0, 600) } : {}) }
@@ -272,12 +278,12 @@ export class HostBridge {
 
     const row = this.summaries.get(sessionId);
     const title = ok ? '任务完成' : '任务异常结束';
-    const body = this.lastAssistantText.get(sessionId) ?? row?.title ?? '';
     this.emitNotify({
       sessionId,
       category: ok ? 'turn.completed' : 'session.error',
       title,
-      body,
+      body: this.lastAssistantText.get(sessionId) ?? '',
+      fallbackBody: row?.title ?? '',
       notificationId: 'n-' + (this.cursor + 1),
     });
   }
@@ -295,14 +301,15 @@ export class HostBridge {
   }
 
 
-  /** Remember the latest assistant text so notifications can quote it. */
+  /**
+   * Remember the latest assistant text so notifications can quote it. 存完整原文：
+   * 按字符数截尾会从链接地址中间切开（横幅只剩 URL 编码的路径），段落选择与
+   * Markdown 清洗统一留到 emitNotify。条目随 sessions.list / 归档清理。
+   */
   private captureAssistantText(sessionId: string, event: SessionEventLike): void {
-
     if (event.type !== 'assistant/message') return;
-
     const text = messageText(event.data).trim();
-
-    if (text.length > 0) this.lastAssistantText.set(sessionId, text.slice(-160));
+    if (text.length > 0) this.lastAssistantText.set(sessionId, text);
   }
 
   /**
