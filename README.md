@@ -42,7 +42,9 @@ install, so any other host version refuses to activate this plugin. From DSH
 `peerDependencies`; older hosts know only the peer range, so both name the same
 five releases. The package includes Funnel helpers
 for macOS, Linux, and Windows on amd64/arm64; trusted-LAN mode does not require
-the helper.
+the helper. The helper is built with Go 1.27, which requires **macOS 13 Ventura
+or later**: on macOS 12 and earlier, Funnel mode cannot start, while
+trusted-LAN mode keeps working.
 
 The current working tree names exactly those five versions in `engines.dsh` and
 `peerDependencies` and is built/typechecked against `0.2.0-rc.2`. A previously
