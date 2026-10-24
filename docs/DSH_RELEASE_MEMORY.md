@@ -3,7 +3,97 @@
 > This is the durable audit record for DeepPilot's public DSH plugin. Re-audit
 > the next DSH release instead of assuming that an rc upgrade is runtime-safe.
 
-## Current decision — `dsh-v0.2.1-rc.2`
+## Current decision — `dsh-v0.2.1-rc.3`
+
+- **Audited release:** `dsh-v0.2.1-rc.3`, published to the npm registry
+  2026-10-23T07:54:30Z (GitHub Release 2026-10-23T15:26:39Z), and the **`next`**
+  channel release — `next` moved from `0.2.1-rc.2` to it, so this is the second
+  consecutive rc on that line to enter the supported list, each on its own audit.
+  It is **not** `latest`: the registry currently reads `latest = 0.2.1-rc.2`
+  (rc.2, promoted from `next`) and `alpha = 0.2.1-alpha.5`. This audit therefore also
+  corrected the older channel attribution that called `0.2.0-rc.2` the `latest`
+  channel in `AGENTS.md` and both READMEs — the list of six admitted hosts is
+  unchanged by that correction, only its description.
+- **Comparison baseline:** `dsh-v0.2.1-rc.2` (the previous audited tag).
+- **Plugin runtime verdict: no break, and no `src/` change was needed.**
+  Nineteen packages were compared **as whole trees, not by `lib/` alone** —
+  eighteen from the two installed trees plus `dsh-client-ui-slots` (the seventh
+  declared `dsh-*` peer, absent from both) through its registry tarball. Fourteen
+  differ only in `package.json`, three carry one further file each, and
+  `cordis 4.0.5` / `schemastery 3.18.5` are byte-identical including
+  `package.json`. Of 3,302 shared files, 3,275 are byte-identical and 20 differ.
+  The tree count moves 306 → 307 with the new
+  `@deepseek-ai/dsh-client-ui-entry-customization@0.2.1-rc.3`, the More-menu bundle
+  the web-app patch now references; this plugin neither references it nor depends
+  on it. Across 274 modules **no export symbol is added or removed** (18 entry
+  modules compared), so every earlier fix still holds unchanged. The manifest
+  delta over 19 packages covers 585 paths — 17 version bumps and 568
+  dependency-spec moves — with **zero structural differences**.
+- **The three non-`package.json` files are additive or comment-only.**
+  `@deepseek-ai/dsh-api-remotes/lib/client.js` widens the client telemetry event
+  schema (`is_new_session`, `agent_preset`, and the More-menu / agent-preset
+  switch events), data this plugin neither emits nor validates.
+  `@deepseek-ai/dsh-api-session-controller`'s
+  `lib/types/client/sessions/service.d.ts` changes a doc comment only.
+  `@deepseek-ai/dsh-web-app/cordis.patch.yml` gains one hunk inserting the
+  `ui-entry-customization` bundle (the More menus named in the rc.3 release
+  notes); the patch anchor this plugin targets, `id: directory-picker`, is
+  byte-identical on both sides at the same offsets, and neither the new package
+  name nor `entry-customization` appears in this plugin's `cordis.patch.yml` or
+  `package.json`.
+- **Activation verdict: the new release is admitted by both declarations, and the
+  earlier rc stays out.** rc.3, like rc.2, reads a declared `engines.dsh` alone,
+  so before the widening its refusal reported a **single** `engines.dsh`
+  requirement and `exempted: false` — no profile exemption file exists on this
+  machine — and a real rc.3 CLI reproduced it (`skipping profile bundle
+  "dsh-deeppilot"`) while the host itself still booted and served its web port.
+  Widening admits `0.2.1-rc.3` and nothing else: `0.2.1-rc.1` was never audited as
+  its own host, so it stays refused, as do `0.2.1-rc.3.1`, `0.2.1-rc.30`,
+  `0.2.1-RC.3`, `0.2.1`, `0.2.1-rc.2.1`, `0.2.0`, `0.3.0`, and `1.0.0`. Deleting
+  `engines.dsh` from a copy of the manifest falls back to the ten peers and admits
+  the same six hosts, so the short-circuit is unchanged.
+- **Evidence: the published artifacts, the published evaluator, and a real rc.3
+  CLI run — all taken before any declaration changed.**
+  - **Change surface:** `.rc3-verify/CHANGE_SURFACE.md` and
+    `.rc3-verify/AUDIT.md`, with raw logs under `.rc3-verify/logs/`
+    (`master-table.txt`, `file-hash-compare.txt`, `diff-rq.all.txt`,
+    `patch-anchor-check.stdout.txt`), plus `tree-compare.out.json` (the
+    16-package whole-tree comparison), `export-symbol-diff.out.json` (274
+    modules, zero surface deltas), `pkg-manifest-delta.out.json` (585 paths, all
+    version or dependency-spec values) and `patch-anchor-check.out.json` (the one
+    patch-file change and its anchor).
+  - **Activation decision, reproduced against rc.3's own published evaluator
+    before any edit:** `.rc3-verify/evaluator-repro.out.json` shows the unchanged
+    manifest refused with one `engines.dsh` requirement and `exempted: false`, and
+    the worktree manifest admitted; `.rc3-verify/matrix.out.json` projects the
+    widening over 15 candidates — before accepted 5, after accepted 6, **newly
+    accepted exactly `0.2.1-rc.3`, newly rejected 0**.
+  - **Real CLI refusal and real CLI load.** The refusal was captured from the
+    installed rc.3 CLI before the declaration changed; after the widening the same
+    CLI composes the plugin (`--dump-config`, exit 0, no skip line).
+- **Positive load verified this time.** An isolated `0.2.1-rc.3` host — its own
+  `DSH_HOME` in a one-off scratch directory (since deleted), the plugin linked
+  from this working tree, and no other plugin — composed the plugin into the
+  tree, started it, and answered `https://127.0.0.1:3098/phone/health` with `200`:
+  `{"ok":true,"enabled":true,"protocolVersion":2,"serverVersion":"0.9.10","dataPlane":true}`
+  while the isolated home gained `deeppilot/host-id` and `deeppilot/lan-tls/`.
+  Evidence: `.rc3-verify/HOST-BOOT.md` (written after the audit directory was
+  handed over) with the raw log and probe output beside it.
+- **Check set run (nothing published).** `npm test` (609 pass, 0 fail),
+  `typecheck`, `build` (committed `lib/` unchanged), `check:config-schema`, and
+  `smoke:helper` (darwin-arm64). One environment note carries forward: the
+  default npm cache on this machine holds root-owned files, so the
+  `check:config-schema` script's `npx` invocation fails with `EPERM` until
+  `npm_config_cache` points at a writable directory; with that variable set the
+  check passes. No `npm ci`, no commit, no push, no tag, and no npm publish: the
+  release is prepared but not shipped.
+- **Not covered / limits.** No real iPhone run, no Funnel end-to-end, no
+  model-backed turn against this host. `npm ci` and the helper-matrix rebuild
+  steps were skipped because no helper, dependency, or source input changed; CI
+  rebuilds the matrix and fails on any `bin/` drift. The widening is a metadata
+  and documentation change only.
+
+### Previous decision — `dsh-v0.2.1-rc.2`
 
 - **Audited release:** `dsh-v0.2.1-rc.2`, published 2026-10-17T08:36:31.655Z. It is
   **not** `latest`: `latest` still points at `0.2.0-rc.2`, and `alpha` still points

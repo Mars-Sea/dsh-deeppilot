@@ -30,18 +30,20 @@
 
 ## 从 npm 安装
 
-当前源码面向 Node.js 22+ 与带 `web` profile 的**五个已审计 DSH 版本**：
-`0.2.0-rc.2`（`latest` 通道）、`alpha` 通道的 `0.2.1-alpha.3`、
-`0.2.1-alpha.4` 与 `0.2.1-alpha.5`，以及 `0.2.1-rc.2`（`next` 通道）。
+当前源码面向 Node.js 22+ 与带 `web` profile 的**六个已审计 DSH 版本**：
+`0.2.0-rc.2`、`alpha` 通道的 `0.2.1-alpha.3`、
+`0.2.1-alpha.4` 与 `0.2.1-alpha.5`，以及先后两版 `next` 通道的
+`0.2.1-rc.2` 与 `0.2.1-rc.3`（npm 通道会移动：`latest` 现指向由 `next` 转正的
+`0.2.1-rc.2`，`next` 指向 `0.2.1-rc.3`）。
 DSH 在组合 profile 前会校验插件声明的
 兼容要求，且**每次启动都会校验**（不只是安装时），因此其他宿主版本会拒绝
 激活本插件。从 DSH `0.2.1-alpha.4` 起，该校验只读 `engines.dsh` 并忽略
-`peerDependencies`；更早的宿主只认 peer 范围，因此两处列出同一组五个版本。
+`peerDependencies`；更早的宿主只认 peer 范围，因此两处列出同一组六个版本。
 npm 包内置 macOS、Linux、Windows 的 amd64/arm64 Funnel helper；可信局域网
 模式不依赖 helper。helper 用 Go 1.27 编译，要求 **macOS 13 Ventura 或更高版本**：
 macOS 12 及更早版本无法启动 Funnel 模式，可信局域网模式不受影响。
 
-当前工作树的 `engines.dsh` 与 `peerDependencies` 精确列出这五个版本，构建与
+当前工作树的 `engines.dsh` 与 `peerDependencies` 精确列出这六个版本，构建与
 类型检查针对 `0.2.0-rc.2`。从此工作树发布新版本前，已发布的旧插件包仍可能
 带有各自旧的兼容声明。
 

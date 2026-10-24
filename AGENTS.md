@@ -45,10 +45,12 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
 - For any DSH release audit or compatibility decision, read and update
   `docs/DSH_RELEASE_MEMORY.md`; keep install, runtime, and phone-protocol risk
   classified separately.
-- The DSH compatibility declaration names exactly the five releases this branch
-  supports: `0.2.0-rc.2` (the npm `latest` channel), the `alpha` channel releases
-  `0.2.1-alpha.3`, `0.2.1-alpha.4`, and `0.2.1-alpha.5`, and `0.2.1-rc.2` (the
-  npm `next` channel). It lives
+- The DSH compatibility declaration names exactly the six releases this branch
+  supports: `0.2.0-rc.2`, the `alpha` channel releases
+  `0.2.1-alpha.3`, `0.2.1-alpha.4`, and `0.2.1-alpha.5`, and the `next` channel
+  releases `0.2.1-rc.2` and `0.2.1-rc.3`, admitted in that order. The npm
+  channels move: `latest` now points at `0.2.1-rc.2` (rc.2, promoted from
+  `next`) and `next` at `0.2.1-rc.3`. It lives
   in two places that must agree: `package.json` `engines.dsh`, which DSH
   `0.2.1-alpha.4` and later evaluate alone, and `package.json`
   `peerDependencies`, which older hosts still evaluate and npm reads at install

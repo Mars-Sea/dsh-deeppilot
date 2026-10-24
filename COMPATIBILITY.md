@@ -1,9 +1,10 @@
 # Compatibility
 
-This branch targets exactly **five DSH releases**: `0.2.0-rc.2`, which the npm
-`latest` channel points at; `0.2.1-alpha.3`, `0.2.1-alpha.4`, and
-`0.2.1-alpha.5`, which the `alpha` channel has pointed at in turn; and
-`0.2.1-rc.2`, which the `next` channel points at. All five are
+This branch targets exactly **six DSH releases**: `0.2.0-rc.2`; the `alpha`
+channel releases `0.2.1-alpha.3`, `0.2.1-alpha.4`, and `0.2.1-alpha.5`; and the
+`next` channel releases `0.2.1-rc.2` and `0.2.1-rc.3`. The npm channels have
+moved since: `latest` now points at `0.2.1-rc.2`, promoted from `next`, and
+`next` at `0.2.1-rc.3`. All six are
 named in both `engines.dsh` and `peerDependencies`; no other version is accepted.
 DSH evaluates that declaration before composing a profile — on every start, not
 only on install — so a newly published DSH release deactivates this plugin until
@@ -21,7 +22,7 @@ recorded in the release memory.
 | Component | Current contract | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | Package engine and CI |
-| DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name `0.2.0-rc.2 \|\| 0.2.1-alpha.3 \|\| 0.2.1-alpha.4 \|\| 0.2.1-alpha.5 \|\| 0.2.1-rc.2` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2, 0.2.1-alpha.3, and 0.2.1-alpha.4 CLIs, an isolated 0.2.1-alpha.5 host where this plugin now composes, starts, and answers `/phone/health` with 200 on its own LAN listener, and a pre-widening 0.2.1-rc.2 host run where the unchanged declaration is refused at compose time (audits below) |
+| DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name `0.2.0-rc.2 \|\| 0.2.1-alpha.3 \|\| 0.2.1-alpha.4 \|\| 0.2.1-alpha.5 \|\| 0.2.1-rc.2 \|\| 0.2.1-rc.3` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2, 0.2.1-alpha.3, and 0.2.1-alpha.4 CLIs, an isolated 0.2.1-alpha.5 host where this plugin now composes, starts, and answers `/phone/health` with 200 on its own LAN listener, a pre-widening 0.2.1-rc.2 host run where the unchanged declaration is refused at compose time, and an isolated 0.2.1-rc.3 host where the widened declaration composes, starts, and answers `/phone/health` with 200 (audits below) |
 | iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
 | Funnel helper platforms | macOS 13 Ventura or later, Linux, and Windows, each on amd64/arm64; built with Go 1.27, which dropped macOS 12 | CI starts the committed helper on a native runner for each of the six targets (`helper-smoke`); no runner covers macOS 13 itself |
@@ -73,6 +74,77 @@ The verbose-diagnostics field moved from the top-level `debug` to
 carries the old top-level `debug: true` is accepted but that value is ignored:
 verbose logging must be turned on again from the settings page. No other config
 field changed shape, and the old key is not read anywhere in this version.
+
+## 0.2.1-rc.3 audit outcome
+
+The artifact-level audit of `dsh-v0.2.1-rc.3` (published to the npm registry
+2026-10-23T07:54:30Z, the `next` channel release; `latest` points at `0.2.1-rc.2`)
+against `dsh-v0.2.1-rc.2` found **no change that reaches this plugin's call
+surface**. Nineteen packages were compared as whole trees rather than by `lib/`
+alone — eighteen from the two installed trees plus
+`@deepseek-ai/dsh-client-ui-slots` (the seventh declared `dsh-*` peer, absent from
+both trees) through its registry tarball:
+
+- **Fourteen packages differ only in `package.json`** — version and dependency
+  specs — so every file those hosts read at runtime is byte-identical.
+- **Three packages carry one non-`package.json` change each** — `dsh-api-remotes`,
+  `dsh-api-session-controller`, and `dsh-web-app` — detailed below.
+- **`cordis 4.0.5` and `schemastery 3.18.5` are byte-identical including
+  `package.json`**, so the vendor peer ranges need no widening again.
+- **The tree gains one package**: `rc.2` ships 306 packages and `rc.3` 307; the
+  addition is `@deepseek-ai/dsh-client-ui-entry-customization@0.2.1-rc.3`, the
+  bundle behind the More menus. This plugin neither references it nor depends on
+  it through its own patch.
+
+Of 3,302 shared files, 3,275 are byte-identical and 20 differ: 16 `package.json`
+files, the three code/config files above, and the `dsh-client-ui-slots`
+`package.json`. Across 274 analysed modules **no export symbol is added or
+removed** (18 entry modules compared), so every earlier fix still holds
+unchanged. The manifest delta over 19 packages covers 585 paths — 17 version
+bumps and 568 dependency-spec moves, **zero structural differences** — with no
+package added or removed by dependency resolution.
+
+**The one file outside `package.json` that could reach this plugin's patch layer
+is additive.** `@deepseek-ai/dsh-web-app/cordis.patch.yml` gained one hunk that
+inserts the `ui-entry-customization` bundle (the More menus named in the rc.3
+release notes). The patch anchor this plugin targets, `id: directory-picker`, is
+byte-identical on both sides at the same offsets, and neither the new package
+name nor `entry-customization` appears in this plugin's `cordis.patch.yml` or
+`package.json`, so the change cannot reach any patch this plugin applies.
+
+The other two non-`package.json` files are equally out of reach:
+`@deepseek-ai/dsh-api-remotes/lib/client.js` only widens the client telemetry
+event schema (`is_new_session`, `agent_preset`, and the More-menu and
+agent-preset switch events), which this plugin neither emits nor validates, and
+`@deepseek-ai/dsh-api-session-controller`'s
+`lib/types/client/sessions/service.d.ts` changes a doc comment only.
+
+The activation verdict repeats the rc.2 shape: rc.3 also reads `engines.dsh`
+alone. Before the widening, the published rc.3 evaluator refused `0.2.1-rc.3`
+with a single `engines.dsh` requirement and `exempted: false`, and a real rc.3
+CLI reproduced the refusal at compose time (`skipping profile bundle
+"dsh-deeppilot"`) while the host itself still booted and served its web port.
+After the widening, the same evaluator admits exactly `0.2.1-rc.3` and adds no
+other acceptance: the five earlier hosts stay admitted, and `0.2.1-rc.1`,
+`0.2.1-rc.3.1`, `0.2.1-rc.30`, `0.2.1-RC.3`, `0.2.1`, `0.2.1-rc.2.1`, `0.2.0`,
+`0.3.0`, and `1.0.0` remain refused. Deleting `engines.dsh` from a copy of the
+manifest falls back to the ten peers and still admits the same six hosts, so the
+short-circuit is unchanged.
+
+**The positive half is complete this time.** An isolated `0.2.1-rc.3` host — its
+own `DSH_HOME`, the plugin linked from this working tree, and no other plugin —
+composes the plugin into the tree, starts it, and answers `/phone/health` with
+200 on the plugin's own LAN listener (`serverVersion` `0.9.10`, protocol v2),
+while the isolated home gains the plugin's data directory. The same profile run
+with the declaration unchanged shows the skip line instead and no listener,
+which is what makes the pair discriminative.
+
+Evidence: `.rc3-verify/AUDIT.md` and `.rc3-verify/CHANGE_SURFACE.md` with the raw
+logs under `.rc3-verify/logs/`, the evaluator reproduction in
+`.rc3-verify/evaluator-repro.out.json`, the acceptance matrix in
+`.rc3-verify/matrix.out.json`, the export-symbol diff in
+`.rc3-verify/export-symbol-diff.out.json`, and the host run in
+`.rc3-verify/HOST-BOOT.md`.
 
 ## 0.2.1-rc.2 audit outcome
 
