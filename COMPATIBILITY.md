@@ -11,7 +11,7 @@ only on install — so a newly published DSH release deactivates this plugin unt
 the list is widened deliberately. That is the intended trade: a plugin that
 cannot run on an unaudited host fails visibly instead of misbehaving quietly.
 The decision and the reversal it represents are recorded in
-[`docs/决策记录.md`](./docs/决策记录.md) (章节一), with the supporting audit in
+the maintainers' local decision record `docs/adr/0001-dsh-compatibility-policy.md`, with the supporting audit in
 [`docs/DSH_RELEASE_MEMORY.md`](./docs/DSH_RELEASE_MEMORY.md).
 
 The development packages this branch builds and typechecks against stay pinned
@@ -342,7 +342,7 @@ needs a documentation update, not a peer-range widening.
 
 > **Superseded 2026-10-14.** That open-ended range was narrowed back to the two
 > versions actually audited, `0.2.0-rc.2` and `0.2.1-alpha.3`; see the
-> 0.2.1-alpha.3 outcome above and `docs/决策记录.md` (章节一). The paragraphs in
+> 0.2.1-alpha.3 outcome above and `docs/adr/0001-dsh-compatibility-policy.md`. The paragraphs in
 > this historical entry describe the policy as it stood on 2026-09-29.
 > **This note is in turn superseded:** `0.2.1-alpha.4` was added the next day by
 > the same deliberate audit step, `0.2.1-alpha.5` on 2026-10-16, and

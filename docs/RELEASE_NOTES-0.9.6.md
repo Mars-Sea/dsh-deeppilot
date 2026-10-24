@@ -28,4 +28,4 @@
 4. 兼容性判定使用两个宿主各自**已发布**的 `evaluatePluginCompatibility` 复现，而非推断：改动前两个宿主都放行 `0.2.0-rc.2` 与 `0.2.1-alpha.3` 并拒绝 `0.2.1-alpha.4`（列出全部十个 peer 未满足）；改动后三个已审计版本全部放行，`0.2.1-alpha.2`、`0.2.1-alpha.5`、`0.2.1` 与 `0.3.0` 仍被拒绝。
 5. 在已发布的 alpha.4 CLI 上做安装 A/B：未改动的包被拒（`installation rejected ... requirements {...}`，退出码 1，未安装任何内容），修复后的包安装成功并链接进 profile；组合树从 153 行变为 162 行，插件三行就位；Web 模板 profile 真实启动，插件数据面与本地传输均正常，且未出现 alpha.3 那次的交互客户端诊断。
 6. 本次范围是公开插件；未进行 iPhone 真机、Funnel 通道与真实模型轮次的验证。手机协议零变化属源码级结论，不是设备实测。
-7. 完整审计过程、证据与局限记录在 `docs/DSH_RELEASE_MEMORY.md` 的 `2026-10-15 — audit of dsh-v0.2.1-alpha.4` 小节；策略决策记录在 `docs/决策记录.md`（章节一，条目3）。
+7. 完整审计过程、证据与局限记录在 `docs/DSH_RELEASE_MEMORY.md` 的 `2026-10-15 — audit of dsh-v0.2.1-alpha.4` 小节；策略决策记录在 `docs/adr/0001-dsh-compatibility-policy.md`（第 3 条）。

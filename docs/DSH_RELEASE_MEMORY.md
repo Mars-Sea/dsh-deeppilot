@@ -183,7 +183,7 @@
   0.2.1-alpha.3 || 0.2.1-alpha.4 || 0.2.1-alpha.5 || 0.2.1-rc.2`, mirrored in
   `tests/compatibility-metadata.test.ts`, `package-lock.json` (root entry only),
   both READMEs, `COMPATIBILITY.md`, `AGENTS.md`, and the local
-  `docs/决策记录.md` (章节一, 条目5). The tests now also pin `0.2.1-rc.1` and
+  `docs/adr/0001-dsh-compatibility-policy.md` (item 5). The tests now also pin `0.2.1-rc.1` and
   `0.2.1-rc.3` as negative probes, so neither the skipped rc nor the next rc can be
   admitted by accident. The dev pins and `DSH_BASELINE` stay at the exact
   `0.2.0-rc.2` this branch builds and typechecks against.
@@ -308,7 +308,7 @@
   0.2.1-alpha.3 || 0.2.1-alpha.4 || 0.2.1-alpha.5`, mirrored in
   `tests/compatibility-metadata.test.ts`, `package-lock.json` (root entry only),
   both READMEs, `COMPATIBILITY.md`, `AGENTS.md`, and the local
-  `docs/决策记录.md` (章节一, 条目4). The dev pins and `DSH_BASELINE` stay at the
+  `docs/adr/0001-dsh-compatibility-policy.md` (item 4). The dev pins and `DSH_BASELINE` stay at the
   exact `0.2.0-rc.2` this branch builds and typechecks against.
 - **Protocol verdict: no phone-protocol change.** Protocol v2, pairing state, and
   device records are untouched by this release; no phone needs to re-pair.
@@ -393,8 +393,8 @@
   `engines.dsh` and all ten `@deepseek-ai/dsh*` peers named `0.2.0-rc.2 ||
   0.2.1-alpha.3 || 0.2.1-alpha.4`, mirrored in
   `tests/compatibility-metadata.test.ts`, `package-lock.json`, both
-  READMEs, `COMPATIBILITY.md`, `AGENTS.md`, and the local `docs/决策记录.md`
-  (章节一, 条目3). The dev pins and `DSH_BASELINE` stay at the exact
+  READMEs, `COMPATIBILITY.md`, `AGENTS.md`, and the local `docs/adr/0001-dsh-compatibility-policy.md`
+  (item 3). The dev pins and `DSH_BASELINE` stay at the exact
   `0.2.0-rc.2` this branch builds and typechecks against. **Historical note:**
   `0.2.1-alpha.5` was appended to both lists on 2026-10-16 by the audit above,
   which now owns the current list; the four documentation mirrors that still
@@ -462,8 +462,8 @@
   across all ten `@deepseek-ai/dsh*` peers, and the two vendor peers widened to
   `~4.0.4 || ~4.0.5-alpha.1` and `~3.18.4 || ~3.18.5-alpha.1`. Because DSH
   evaluates that range on every start, the next DSH release deactivates this
-  plugin until the list is widened deliberately — see `docs/决策记录.md`
-  (章节一, 条目2), which records this as a reversal of the 2026-09-29 policy.
+  plugin until the list is widened deliberately — see `docs/adr/0001-dsh-compatibility-policy.md`
+  (item 2), which records this as a reversal of the 2026-09-29 policy.
   The published CLI composed the plugin's patch cleanly before the change (see
   the 2026-10-14 entry). The plugin's own `lib/client.js` shape was not
   re-verified against the alpha.3 client-modules scanner.
@@ -715,7 +715,7 @@
   page instead of gating installability on it. The re-audit obligation below
   is unchanged: still source-diff and record every new DSH release; a `0.3.x`
   line still requires its own audit and its own range widening before it
-  installs. Recorded in `docs/决策记录.md` (章节一, 条目1).
+  installs. Recorded in `docs/adr/0001-dsh-compatibility-policy.md` (item 1).
 - **Install/deployment verdict:** the peer range, the compatibility assertions,
   the registry lockfile, and generated `lib/` are updated for rc.2. `npm ci`,
   unit tests (304 passing), typecheck, build, the config-schema check against a
@@ -1077,7 +1077,7 @@ either host. `devDependencies` stay pinned to `0.2.0-rc.2`.
 The consequence is deliberate: `evaluatePluginCompatibility` runs before a
 profile is composed on every start, so the next DSH release will refuse to
 activate this plugin until the list is widened by an audit. That reversal of the
-2026-09-29 policy is recorded in `docs/决策记录.md` (章节一, 条目2).
+2026-09-29 policy is recorded in `docs/adr/0001-dsh-compatibility-policy.md` (item 2).
 `tests/compatibility-metadata.test.ts` now asserts both admissions, fifteen
 rejections, and the two vendor ranges.
 

@@ -39,7 +39,7 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
   so CI (on `main`) and `publish.yml` rebuild the full matrix and fail if `bin/`
   changes; merge the `chore/helper-matrix-refresh` PR before tagging a release.
   CI's `helper-smoke` job starts the committed binary on all six platforms.
-  Both choices are recorded in `docs/决策记录.md` (章节八).
+  Both choices are recorded in `docs/adr/0008-funnel-helper-freshness.md`.
 - Release candidates: run the full checklist below. Use `npm ci` for a clean
   dependency install or after lockfile changes; it is not needed for every edit.
 - For any DSH release audit or compatibility decision, read and update
@@ -60,7 +60,7 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
   it, record it in `docs/DSH_RELEASE_MEMORY.md`, then add the version in both
   declarations, in `tests/compatibility-metadata.test.ts`, in
   `package-lock.json`, and in both READMEs. The policy and the reversal it
-  represents are recorded in `docs/决策记录.md` (章节一).
+  represents are recorded in `docs/adr/0001-dsh-compatibility-policy.md`.
 
 ### Authorization and completion
 
@@ -116,10 +116,20 @@ release commit, npm package, Git tag, and GitHub Release must all agree.
 4. 获授权后，在匹配的版本标签上手动运行 `.github/workflows/publish.yml`，
    通过 OIDC 身份认证完成 npm 可信发布并生成来源证明（Provenance）。
    稳定版使用 `latest`（稳定分发标签），预发布版使用 `alpha`（预发布分发标签）；
-   npm 绑定与操作步骤见 `docs/NPM_PUBLISHING.md`，决策见 `docs/决策记录.md` 三之2。
+   npm 绑定与操作步骤见 `docs/NPM_PUBLISHING.md`，决策见 `docs/adr/0003-release-and-repo-visibility.md` 第 2 条。
    不在 `main` 上运行后另行检出标签，以免来源证明的提交与实际源码不同。
    若用户保留自行发布，提供该文档中的已核对手动命令。
 5. Verify the registry version, dist-tag, package metadata, and a clean DSH
    profile install. Publish the prepared GitHub Release only after npm is
    installable, so the in-app update link never leads users to an unavailable
    package version.
+
+## Agent skills
+
+### Issue tracker
+
+Issue 放在本仓库的 GitHub Issues（公开），用 `gh` CLI 操作。See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+single-context（单上下文）：根目录 `GLOSSARY.md` + `docs/adr/`（被 gitignore，仅本地）。See `docs/agents/domain.md`.
