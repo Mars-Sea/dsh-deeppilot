@@ -110,13 +110,13 @@
     "react": "^19.2.8"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/cordis": "4.0.5",
     "@deepseek-ai/dsh-api-gateway": "0.2.0-rc.2",
     "@deepseek-ai/dsh-client-connection": "0.2.0-rc.2",
     "@deepseek-ai/dsh-settings": "0.2.0-rc.2",
     "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
     "@deepseek-ai/dsh-typert-registry": "0.2.0-rc.2",
-    "@deepseek-ai/schemastery": "3.18.4",
+    "@deepseek-ai/schemastery": "3.18.5",
     "@types/node": "^26.4.0",
     "@types/qrcode": "1.5.6",
     "@types/react": "^19.2.18",
@@ -124,7 +124,7 @@
     "@types/ws": "^8.5.10",
     "react": "^19.2.8",
     "semver": "^7.8.5",
-    "tsdown": "^0.22.2",
+    "tsdown": "^0.23.1",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   },
