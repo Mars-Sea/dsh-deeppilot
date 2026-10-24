@@ -136,6 +136,25 @@
    端口而失败，属环境冲突，不是插件问题。GitHub Release 在这一步通过后才公开并标记
    Latest。是否再放宽核对窗口，留待下次发布前决定，本次未改工作流。
 
+10. `0.9.11` 的实际发布结果（2026-10-24）：附注标签 `v0.9.11` 指向
+    `a12750c84f1c2ecd579f87f3b5d60507fa3a7112`，该提交的 CI（运行号 `40055850654`，
+    4 分 42 秒）与 CodeQL（运行号 `40055850739`，2 分 20 秒）均为绿。`publish.yml`
+    在该标签上运行（运行号 `40056208123`），**24 个步骤全部成功**，包含最后的
+    「核对发布版本、包完整性与来源证明」——这一步在 `0.9.5`～`0.9.9` 多次因注册表
+    可见性延迟而失败，本次一次通过。注册表核验：`latest = 0.9.11`；tarball SHA1
+    `0a3e29b32beb393c7324d741602b5be1dc495d87`、SHA512 与来源证明主体一致、共
+    68 个条目、解包 131,040,038 字节（与发布前 `npm pack --dry-run` 的
+    `unpackedSize` 完全一致）；来源证明类型为 `https://slsa.dev/provenance/v1`，
+    `gitCommit` 正是该发布提交，工作流引用 `refs/tags/v0.9.11`。
+    **注册表可见性延迟仍然存在**：发布后约 3 分钟内
+    `dsh-deeppilot-0.9.11.tgz` 持续返回 `HTTP 404`（第 10 次探测才变 200），
+    因此用它做安装验证必须带重试。随后在全新隔离 `DSH_HOME`
+    （`npm install dsh-deeppilot@0.9.11`，不是 link）中用真实 `0.2.1-rc.3` 宿主
+    启动，插件日志出现 4 条 `[deeppilot]`，自有端口
+    `https://127.0.0.1:3098/phone/health` 返回 200 且 `serverVersion` 为 `0.9.11`；
+    GitHub Release 在这一步通过后才公开，并标记 Latest。
+    **遗留：** `0.9.10` 的 GitHub Release 仍是 Draft，本轮未处理。
+
 ## 五、官方资料
 
 1. [npm 可信发布配置与限制](https://docs.npmjs.com/trusted-publishers/)

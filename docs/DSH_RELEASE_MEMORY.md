@@ -85,8 +85,20 @@
   default npm cache on this machine holds root-owned files, so the
   `check:config-schema` script's `npx` invocation fails with `EPERM` until
   `npm_config_cache` points at a writable directory; with that variable set the
-  check passes. No `npm ci`, no commit, no push, no tag, and no npm publish: the
-  release is prepared but not shipped.
+  check passes.
+- **Shipped as `dsh-deeppilot@0.9.11`.** Release commit
+  `a12750c84f1c2ecd579f87f3b5d60507fa3a7112`, annotated tag `v0.9.11`; CI
+  (`40055850654`) and CodeQL (`40055850739`) are green, and `publish.yml` run
+  `40056208123` completed all 24 steps — including the final version, integrity
+  and provenance check that several earlier releases failed on. Registry reads
+  `latest = 0.9.11`, 68 entries, 131,040,038 unpacked bytes, and SLSA provenance
+  of type `https://slsa.dev/provenance/v1` whose `gitCommit` is that release
+  commit at `refs/tags/v0.9.11`. The tarball answered `HTTP 404` for roughly
+  three minutes after publication, so an install check needs retries. A clean
+  isolated `DSH_HOME` then installed the published package **from npm** (not from
+  the working tree) and a real `0.2.1-rc.3` host loaded it and answered
+  `/phone/health` with 200 and `serverVersion: "0.9.11"`; the GitHub Release was
+  made public and marked Latest only after that check.
 - **Not covered / limits.** No real iPhone run, no Funnel end-to-end, no
   model-backed turn against this host. `npm ci` and the helper-matrix rebuild
   steps were skipped because no helper, dependency, or source input changed; CI
