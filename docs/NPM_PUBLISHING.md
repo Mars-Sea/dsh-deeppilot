@@ -153,7 +153,8 @@
     启动，插件日志出现 4 条 `[deeppilot]`，自有端口
     `https://127.0.0.1:3098/phone/health` 返回 200 且 `serverVersion` 为 `0.9.11`；
     GitHub Release 在这一步通过后才公开，并标记 Latest。
-    **遗留：** `0.9.10` 的 GitHub Release 仍是 Draft，本轮未处理。
+    **遗留处理：** `0.9.10` 的 GitHub Release 原为 Draft，按用户决定于本轮**删除**
+    （远端标签 `v0.9.10` 与 npm 上的 `0.9.10` 包均保留，未做任何版本删除或回撤）。
 
 ## 五、官方资料
 
