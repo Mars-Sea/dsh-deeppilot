@@ -209,6 +209,9 @@ const TABLES: LocaleTables = {
     'advanced.summary': '高级信息',
     'advanced.protocolVersion': '协议版本',
     'advanced.serverVersion': '服务器版本',
+    // 内嵌 Funnel helper 自报的 tailscale.com 版本；未上报时显示未获取。
+    'advanced.tailscaleVersion': 'Tailscale 版本',
+    'advanced.tailscaleVersionUnknown': '未获取',
     'advanced.tokenPath': 'Token 路径',
     'advanced.identityPath': '设备注册表路径',
     'advanced.bufferMax': '重放缓冲上限',
@@ -485,6 +488,8 @@ const TABLES: LocaleTables = {
     'advanced.summary': 'Advanced info',
     'advanced.protocolVersion': 'Protocol version',
     'advanced.serverVersion': 'Server version',
+    'advanced.tailscaleVersion': 'Tailscale version',
+    'advanced.tailscaleVersionUnknown': 'Not reported',
     'advanced.tokenPath': 'Token path',
     'advanced.identityPath': 'Device registry path',
     'advanced.bufferMax': 'Replay buffer cap',

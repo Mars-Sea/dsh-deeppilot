@@ -10,6 +10,7 @@
  */
 
 import type { InvocationDescriptor, TypertCodec, TypertRemoteContribution, TypertSchema } from '@deepseek-ai/dsh-typert-protocol'
+import { isTailscaleVersion } from './tailscale-version.ts'
 import { DEVICE_SCOPES, normalizeDeviceScopes, type DeviceScope } from './device-auth.ts'
 
 export interface PairingGrantSnapshot {
@@ -139,6 +140,12 @@ export interface DeepPilotReport {
     publicURL?: string
     authURL?: string
     message?: string
+    /**
+     * 内嵌 helper 自报的 tailscale.com 模块版本（如 `v1.104.2`）。可选：
+     * 远程连接未启用、helper 缺失或尚未启动时 Host 不带这个字段，设置页
+     * 显示「未获取」；旧 Host 同样不带，页面不能因此报错。
+     */
+    tailscaleVersion?: string
     updatedAt: number
   }
   devices: ReportDevice[]
@@ -238,15 +245,20 @@ function parseRemote(value: unknown): DeepPilotReport['remote'] {
   const publicURL = s.publicURL
   const authURL = s.authURL
   const message = s.message
+  const tailscaleVersion = s.tailscaleVersion
   if (publicURL !== undefined && typeof publicURL !== 'string') reject('remote.publicURL')
   if (authURL !== undefined && typeof authURL !== 'string') reject('remote.authURL')
   if (message !== undefined && typeof message !== 'string') reject('remote.message')
+  // 页面直接渲染这个字符串：只接受 Go 模块版本形态，坏值拒绝整份报告，
+  // 而不是把任意文本带进设置页。
+  if (tailscaleVersion !== undefined && !isTailscaleVersion(tailscaleVersion)) reject('remote.tailscaleVersion')
   return {
     provider,
     phase: phase as DeepPilotReport['remote']['phase'],
     ...(typeof publicURL === 'string' ? { publicURL } : {}),
     ...(typeof authURL === 'string' ? { authURL } : {}),
     ...(typeof message === 'string' ? { message } : {}),
+    ...(typeof tailscaleVersion === 'string' ? { tailscaleVersion } : {}),
     updatedAt: int(s, 'updatedAt', 'remote.updatedAt'),
   }
 }

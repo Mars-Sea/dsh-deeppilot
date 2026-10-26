@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,6 +31,10 @@ type event struct {
 	PublicURL string `json:"publicURL,omitempty"`
 	AuthURL   string `json:"authURL,omitempty"`
 	Message   string `json:"message,omitempty"`
+	// TailscaleVersion is the tailscale.com module version this helper was
+	// built against. The host plugin shows it in the settings page's system
+	// information card, so it must describe the running binary, not go.mod.
+	TailscaleVersion string `json:"tailscaleVersion,omitempty"`
 }
 
 var (
@@ -193,6 +198,25 @@ func emit(value event) {
 	_ = json.NewEncoder(os.Stdout).Encode(value)
 }
 
+// embeddedTailscaleVersion reports the tailscale.com module version compiled
+// into this helper, read from the Go build info. tailscale.com/version cannot
+// be used instead: release builds pass -buildvcs=false for reproducible bytes,
+// and that package degrades to "<version>-ERR-BuildInfo" when the VCS stamps
+// are missing. The module list survives -trimpath and -buildvcs=false, so this
+// is the exact dependency version the binary runs.
+func embeddedTailscaleVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, dep := range info.Deps {
+		if dep.Path == "tailscale.com" {
+			return dep.Version
+		}
+	}
+	return ""
+}
+
 func main() {
 	originFlag := flag.String("origin", "", "loopback HTTP origin")
 	hostnameFlag := flag.String("hostname", "dsh-deeppilot", "tailnet node hostname")
@@ -221,7 +245,9 @@ func main() {
 		fail("cannot secure state directory: " + err.Error())
 	}
 
-	emit(event{Phase: "starting"})
+	// The version travels with the first event so the host can surface it as
+	// soon as the helper is alive, before any Tailscale authorization.
+	emit(event{Phase: "starting", TailscaleVersion: embeddedTailscaleVersion()})
 	srv := &tsnet.Server{
 		Dir:      filepath.Clean(*stateDirFlag),
 		Hostname: sanitizeHostname(*hostnameFlag),

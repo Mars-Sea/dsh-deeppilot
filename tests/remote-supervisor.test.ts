@@ -63,6 +63,35 @@ test('remote helper IPC accepts only known structured phases', () => {
   assert.equal(parseHelperEvent('not json'), null)
 })
 
+test('remote helper IPC forwards a well-formed Tailscale version and drops junk', () => {
+  // 版本只在第一个 starting 事件里出现；格式不对就丢弃，不能让 helper 的
+  // stdout 把任意文本送进设置页。
+  assert.deepEqual(parseHelperEvent('{"phase":"starting","tailscaleVersion":"v1.104.2"}'), {
+    phase: 'starting',
+    tailscaleVersion: 'v1.104.2',
+  })
+  assert.deepEqual(parseHelperEvent('{"phase":"starting","tailscaleVersion":42}'), { phase: 'starting' })
+  assert.deepEqual(parseHelperEvent('{"phase":"starting","tailscaleVersion":"<img src=x onerror=1>"}'), {
+    phase: 'starting',
+  })
+})
+
+test('remote status keeps the reported Tailscale version across later phases', () => {
+  const supervisor = new RemoteSupervisor({
+    enabled: true,
+    hostname: 'test-phone',
+    statePath: '/tmp/deeppilot-remote-test-state',
+    log: () => {},
+  })
+  const acceptLine = (supervisor as unknown as { acceptLine: (line: string) => void }).acceptLine.bind(supervisor)
+  acceptLine('{"phase":"starting","tailscaleVersion":"v1.104.2"}')
+  assert.equal(supervisor.status().tailscaleVersion, 'v1.104.2')
+  // 后续事件不带版本字段时不能把它清掉：设置页在任何相位都应能读到。
+  acceptLine('{"phase":"online","publicURL":"https://test.ts.net"}')
+  assert.equal(supervisor.status().phase, 'online')
+  assert.equal(supervisor.status().tailscaleVersion, 'v1.104.2')
+})
+
 test('remote helper IPC bounds diagnostic text', () => {
   const event = parseHelperEvent(JSON.stringify({ phase: 'error', message: 'x'.repeat(800) }))
   assert.equal(event?.message?.length, 500)

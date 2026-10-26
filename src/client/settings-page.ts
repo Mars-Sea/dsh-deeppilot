@@ -1108,6 +1108,12 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
           h('div', { className: 'pbb-runtimeRow' },
             h('span', { className: 'pbb-label' }, 'DeepPilot'),
             h('span', { className: 'pbb-value' }, 'v' + report.pluginVersion)),
+          // 内嵌 helper 自报的 Tailscale 版本：远程连接从未启动（或 helper 缺失）
+          // 时 Host 不带该字段，这里显示「未获取」而不是从 go.mod 猜一个值。
+          h('div', { className: 'pbb-runtimeRow' },
+            h('span', { className: 'pbb-label' }, t(props.t, 'advanced.tailscaleVersion')),
+            h('span', { className: 'pbb-value' },
+              report.remote.tailscaleVersion ?? t(props.t, 'advanced.tailscaleVersionUnknown'))),
           advancedRows,
           report.updateAvailable === true
             ? h('div', { className: 'pbb-updateRow' },

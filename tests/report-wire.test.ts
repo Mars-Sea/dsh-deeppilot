@@ -44,6 +44,36 @@ test('reportSchema accepts a healthy report', () => {
   assert.equal(parsed.local.tlsIdentityRegenerated, undefined)
 })
 
+test('reportSchema carries the helper-reported Tailscale version and rejects junk', () => {
+  // 设置页逐字渲染这个字符串；合法来源是 helper 的 Go 模块版本。旧 Host 不带
+  // 该字段时保持 undefined，页面显示「未获取」，不能因此判整份报告非法。
+  const parsed = reportSchema.parse(validReport({
+    remote: {
+      provider: 'tailscale-funnel',
+      phase: 'online',
+      publicURL: 'https://phone.example.ts.net',
+      tailscaleVersion: 'v1.104.2',
+      updatedAt: 0,
+    },
+  }))
+  assert.equal(parsed.remote.tailscaleVersion, 'v1.104.2')
+  assert.equal(reportSchema.parse(validReport()).remote.tailscaleVersion, undefined)
+
+  // 预发布/伪版本形态同样合法。
+  assert.equal(reportSchema.parse(validReport({
+    remote: {
+      provider: 'tailscale-funnel', phase: 'online',
+      tailscaleVersion: 'v1.104.2-pre.1', updatedAt: 0,
+    },
+  })).remote.tailscaleVersion, 'v1.104.2-pre.1')
+
+  for (const tailscaleVersion of [42, '1.104', 'v1.104.2 </span>', 'v' + '1'.repeat(90)]) {
+    assert.throws(() => reportSchema.parse(validReport({
+      remote: { provider: 'tailscale-funnel', phase: 'disabled', tailscaleVersion, updatedAt: 0 },
+    })), /remote\.tailscaleVersion/)
+  }
+})
+
 test('reportSchema carries the optional custom device name and rejects malformed labels', () => {
   const parsed = reportSchema.parse(validReport({
     devices: [{

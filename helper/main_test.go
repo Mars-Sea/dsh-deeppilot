@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"net/netip"
+	"regexp"
 	"testing"
 	"time"
 
@@ -12,6 +13,16 @@ import (
 type wrappedConn struct{ net.Conn }
 
 func (c wrappedConn) NetConn() net.Conn { return c.Conn }
+
+func TestEmbeddedTailscaleVersion(t *testing.T) {
+	// The settings page shows this string verbatim, so the helper must always
+	// report a real module version: an empty value would make the page fall
+	// back to "未获取" even though the binary does embed Tailscale.
+	version := embeddedTailscaleVersion()
+	if !regexp.MustCompile(`^v\d+\.\d+\.\d+`).MatchString(version) {
+		t.Fatalf("embeddedTailscaleVersion() = %q, want a vX.Y.Z module version", version)
+	}
+}
 
 func TestSanitizeHostname(t *testing.T) {
 	tests := map[string]string{

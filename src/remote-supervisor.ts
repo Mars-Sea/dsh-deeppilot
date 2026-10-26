@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expandHome } from './token.ts'
 import { normalizeFunnelConnectionLimit } from './funnel-policy.ts'
+import { isTailscaleVersion } from './tailscale-version.ts'
 
 export type RemotePhase =
   | 'disabled'
@@ -22,6 +23,13 @@ export interface RemoteStatus {
   publicURL?: string
   authURL?: string
   message?: string
+  /**
+   * tailscale.com module version embedded in the helper, reported with its
+   * first `starting` event. Undefined until a helper has started in this
+   * plugin process — a disabled remote connection never spawns one, so the
+   * settings page shows「未获取」rather than guessing from go.mod.
+   */
+  tailscaleVersion?: string
   updatedAt: number
 }
 
@@ -40,6 +48,7 @@ interface HelperEvent {
   publicURL?: string
   authURL?: string
   message?: string
+  tailscaleVersion?: string
 }
 
 const RESTART_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
@@ -271,6 +280,10 @@ export function parseHelperEvent(line: string): HelperEvent | null {
       ...(typeof value.publicURL === 'string' ? { publicURL: value.publicURL } : {}),
       ...(typeof value.authURL === 'string' ? { authURL: value.authURL } : {}),
       ...(typeof value.message === 'string' ? { message: value.message.slice(0, 500) } : {}),
+      // The version is rendered on the settings page, so the helper's stdout
+      // stays untrusted input: a shape that is not a Go module version is
+      // dropped instead of forwarded.
+      ...(isTailscaleVersion(value.tailscaleVersion) ? { tailscaleVersion: value.tailscaleVersion } : {}),
     }
   } catch {
     return null

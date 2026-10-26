@@ -27,6 +27,8 @@
   "advanced.identityPath",
   "advanced.protocolVersion",
   "advanced.serverVersion",
+  "advanced.tailscaleVersion",
+  "advanced.tailscaleVersionUnknown",
   "clipboard.rejected",
   "connection.description",
   "connection.optionsSummary",
