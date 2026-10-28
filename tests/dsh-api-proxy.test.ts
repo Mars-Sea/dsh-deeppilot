@@ -97,6 +97,101 @@ test('rc.2 history adapter preserves sequence pagination while wrapping events',
   })
 })
 
+test('alpha.2 history reads the host page when the controller has no inspect', async () => {
+  // DSH 0.2.2-alpha.2 removed SessionController.inspect; page is the only history
+  // read left. Records arrive as `{type:'event', event}` envelopes and must be
+  // unwrapped to the bridge's `{event}` contract.
+  const records = [
+    { type: 'event', event: { type: 'user/message', seq: 1, data: { content: [], source: { kind: 'user' } } } },
+    { type: 'event', event: { type: 'assistant/message', seq: 2, data: { message: { content: [{ type: 'text', text: 'answer' }] } } } },
+  ]
+  const calls: Array<Record<string, unknown>> = []
+  const sessionController = {
+    page: async (request: Record<string, unknown>) => {
+      calls.push(request)
+      return { records, hasMore: true }
+    },
+  }
+  const ctx = {
+    get: (key: string) => key === 'sessionController' ? sessionController : undefined,
+  }
+  const proxy = new DshApiProxy(ctx as never)
+
+  const response = await proxy.sessions.history({
+    payload: { sessionId: 'session-1', beforeSeq: 7, maxMessages: 2 },
+  })
+
+  // The phone sends an exclusive seq; the host cut is an inclusive one.
+  assert.deepEqual(calls, [{
+    address: { kind: 'session', sessionId: 'session-1' },
+    throughSeq: 6,
+    maxMessages: 2,
+  }])
+  assert.deepEqual(response, {
+    result: {
+      ok: true,
+      value: {
+        events: records.map((record) => ({ event: record.event })),
+        hasMore: true,
+      },
+    },
+  })
+})
+
+test('alpha.2 history omits the cut when the phone asks for the newest page', async () => {
+  const calls: Array<Record<string, unknown>> = []
+  const sessionController = {
+    page: async (request: Record<string, unknown>) => {
+      calls.push(request)
+      return { records: [], hasMore: false }
+    },
+  }
+  const ctx = {
+    get: (key: string) => key === 'sessionController' ? sessionController : undefined,
+  }
+  const proxy = new DshApiProxy(ctx as never)
+
+  await proxy.sessions.history({ payload: { sessionId: 'session-1' } })
+
+  assert.deepEqual(calls, [{
+    address: { kind: 'session', sessionId: 'session-1' },
+    maxMessages: 100,
+  }])
+})
+
+test('hosts that still expose inspect keep the whole-log window path', async () => {
+  // page exists on every admitted host, so the branch must key off inspect:
+  // using page here would change the window semantics of seven supported hosts.
+  const rawEvents = [
+    { type: 'user/message', seq: 1, data: { content: [], source: { kind: 'user' } } },
+    { type: 'assistant/message', seq: 2, data: { message: { content: [{ type: 'text', text: 'answer' }] } } },
+  ]
+  let pageCalls = 0
+  const sessionController = {
+    inspect: async () => ({ events: rawEvents }),
+    page: async () => {
+      pageCalls += 1
+      return { records: [], hasMore: false }
+    },
+  }
+  const ctx = {
+    get: (key: string) => key === 'sessionController' ? sessionController : undefined,
+  }
+  const proxy = new DshApiProxy(ctx as never)
+
+  const response = await proxy.sessions.history({
+    payload: { sessionId: 'legacy-session', maxMessages: 5 },
+  })
+
+  assert.equal(pageCalls, 0, 'inspect hosts must not touch page')
+  assert.deepEqual(response, {
+    result: {
+      ok: true,
+      value: { events: rawEvents.map((event) => ({ event })), hasMore: false },
+    },
+  })
+})
+
 test('projection baseline reads pass the AbortSignal the Host now requires', async () => {
   // DSH 0.2.1-alpha.2 aborts projections before it reads anything, so an omitted
   // signal loses the entire baseline instead of returning values.
@@ -546,6 +641,26 @@ test('restore capability reflects whether the optional workspace service is pres
     } as never)
     const bridge = new HostBridge(proxy, 100)
     assert.equal(bridge.capabilities.sessionRestore, available)
+    bridge.dispose()
+  }
+})
+
+test('prompt queue capability reflects whether the session controller has updateQueue', async () => {
+  for (const available of [false, true]) {
+    const calls: unknown[] = []
+    const controller = available
+      ? { updateQueue: async (request: unknown) => { calls.push(request); return { accepted: true } } }
+      : {}
+    const proxy = new DshApiProxy({ get: (key: string) =>
+      key === 'sessionController' ? controller : undefined,
+    } as never)
+    const bridge = new HostBridge(proxy, 100)
+    assert.equal(bridge.capabilities.promptQueue, available)
+    if (available) {
+      const request = { sessionId: 's', itemId: 'm', action: { kind: 'remove' as const } }
+      assert.deepEqual(await proxy.sessions.updateQueue!({ rpcId: 'r', payload: request }), { result: { ok: true, value: { accepted: true } } })
+      assert.deepEqual(calls, [request])
+    }
     bridge.dispose()
   }
 })

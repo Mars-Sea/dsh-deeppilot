@@ -7,7 +7,7 @@ import {
 } from './dispatch-journal.ts'
 import { randomUUID } from 'node:crypto'
 import { notificationPlainText } from './notification-text.ts'
-import type { Envelope, MessageProjection, NotifyCategory, PendingSnapshotPayload, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus, SessionUsageStats, WelcomeCapabilities } from './protocol.ts'
+import type { Envelope, MessageProjection, NotifyCategory, PendingSnapshotPayload, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus, SessionQueueItem, SessionUsageStats, WelcomeCapabilities } from './protocol.ts'
 import {
   isSubagentRow,
   unwrapStreamItem,
@@ -48,6 +48,7 @@ import { documentPromptBlock, type PromptDocument } from './document-payload.ts'
 import type { DispatchJournal } from './dispatch-journal.ts'
 import { pushScopeFor } from './connection-policy.ts'
 import { capabilityBits } from './host-capabilities.ts'
+import { projectQueue, promptRequestId } from './prompt-queue.ts'
 import { hostFailureOf, wireCodeFor, wireErrorOf, type WireErrorCode } from './wire-errors.ts'
 import { formatLogLine } from './diagnostics.ts'
 
@@ -107,6 +108,11 @@ export class HostBridge {
    * and restore them. Excluded from `summaries` and from the live broadcast. */
   private archivedSummaries = new Map<string, SessionSummary>()
   private subagentSessionIds = new Set<string>()
+  /**
+   * 每个会话最近一次已知的队列（inbox 投影的折叠结果）及其指纹。来源是实时
+   * 投影通知或打开会话时读到的基线；指纹用来丢掉内容没变的重复通知。
+   */
+  private queues = new Map<string, { items: SessionQueueItem[]; fingerprint: string }>()
   private sinks = new Set<BridgeSink>()
   private ring: Array<{ seq: number; type: string; payload: unknown }> = []
   private cursor = 0;
@@ -489,6 +495,7 @@ export class HostBridge {
           // 当前选择来自实时投影；目录缓存不能让其他客户端的模型切换长期滞留。
           this.record('s2c.models.changed', { sessionId: p.sessionId, ...(current ? { current } : {}) });
         }
+        if (p.key === 'inbox') this.applyInbox(p.sessionId, p.value, 'live');
         this.applyProjection(p.sessionId, String(p.key ?? ''), p.value);
         break;
       }
@@ -684,6 +691,40 @@ export class HostBridge {
     this.pushSummary(row);
   }
 
+  /**
+   * 折叠一次 inbox 投影。只有实时变化才广播 s2c.session.queue；基线只补缓存，
+   * 打开会话的那台设备另由 pushQueueSnapshot 点对点拿到快照。
+   *
+   * 基线只补缺不覆盖：实时通知带的是完整投影值，收到过就以它为准；基线读取与
+   * 实时变化并发时，较早算出的基线不得盖掉较新的实时值。
+   */
+  private applyInbox(sessionId: string, value: unknown, origin: 'live' | 'baseline'): void {
+    if (this.capabilities.promptQueue !== true) return;
+    // 子代理会话由父会话路由，不向手机提供队列。
+    if (this.subagentSessionIds.has(sessionId)) return;
+    if (origin === 'baseline' && this.queues.has(sessionId)) return;
+    const items = projectQueue(value);
+    // 读不懂的值不当作空队列：客户端会把消失的项当成已发出。
+    if (items === undefined) return;
+    const fingerprint = JSON.stringify(items);
+    const previous = this.queues.get(sessionId);
+    this.queues.set(sessionId, { items, fingerprint });
+    if (origin === 'live' && previous?.fingerprint !== fingerprint) {
+      this.record('s2c.session.queue', { sessionId, items });
+    }
+  }
+
+  /**
+   * 打开会话时补发的快照：不占 seq，与 tail 同属打开响应。还没读到过该会话的
+   * 投影（基线失败、Host 不提供或子代理会话）时不发，因为未知不等于空队列。
+   */
+  private pushQueueSnapshot(sink: BridgeSink, sessionId: string): void {
+    if (this.disposed) return;
+    const queue = this.queues.get(sessionId);
+    if (queue === undefined) return;
+    sink.push('s2c.session.queue', { sessionId, items: queue.items });
+  }
+
   private applyProjection(sessionId: string, key: string, value: unknown): void {
     const row = this.summaries.get(sessionId);
     if (!row) return;
@@ -821,7 +862,9 @@ export class HostBridge {
       // DSH exposes a complete per-session projection baseline; fold it
       // into the summary row when the phone opens a session so the first paint
       // does not depend on list-row hints or frames missed while offline.
-      void this.refreshProjections(sessionId);
+      // The queue snapshot follows the baseline because a bridge that has not
+      // yet seen a live inbox change for this session only learns it there.
+      void this.refreshProjections(sessionId).then(() => this.pushQueueSnapshot(sink, sessionId));
       return true;
     } catch {
       return false;
@@ -848,8 +891,12 @@ export class HostBridge {
         return;
       }
       const baseline = result.value;
-      if (baseline === null || baseline === undefined) return;
+      if (baseline === null || baseline === undefined) {
+        this.queues.delete(sessionId);
+        return;
+      }
       for (const [key, value] of Object.entries(baseline.values ?? {})) {
+        if (key === 'inbox') this.applyInbox(sessionId, value, 'baseline');
         this.applyProjection(sessionId, key, value);
       }
     } catch (error) {
@@ -1069,6 +1116,32 @@ export class HostBridge {
       // session back to the client's live list.
       await this.refreshSummaries()
       return { ok: true, value: true }
+    } catch (error) {
+      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+    }
+  }
+
+  /**
+   * 删除或转向一条排队项。ack 只表示 Host 已提交变更，真实状态以随后的
+   * s2c.session.queue 为准；不做幂等，项已消失时 Host 回 queue-item-not-found。
+   */
+  async updateQueue(
+    sessionId: string,
+    itemId: string,
+    action: 'remove' | 'steer',
+  ): Promise<SessionManagementResult<{ sessionId: string; itemId: string }>> {
+    const update = this.apiProxy.sessions.updateQueue
+    if (typeof update !== 'function') {
+      return { ok: false, code: 'E_UNSUPPORTED', message: 'prompt queue unavailable on this host version' }
+    }
+    try {
+      const response = await update.call(this.apiProxy.sessions, {
+        rpcId: randomUUID(),
+        payload: { sessionId, itemId, action: { kind: action } },
+      })
+      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'queue update returned no result' }
+      if (!response.result.ok) return wireErrorOf('queue', response.result.error)
+      return { ok: true, value: { sessionId, itemId } }
     } catch (error) {
       return { ok: false, code: 'E_INTERNAL', message: String(error) }
     }
@@ -1342,6 +1415,7 @@ export class HostBridge {
     text: string,
     images: Array<{ mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string; name?: string }> = [],
     documents: PromptDocument[] = [],
+    options: { mode?: 'queue' | 'steer'; clientSendId?: string } = {},
   ): Promise<SessionManagementResult<number>> {
     try {
       const content: PromptArgs['content'] = [];
@@ -1349,10 +1423,12 @@ export class HostBridge {
       for (const image of images) content.push({ type: 'image', ...image });
       for (const document of documents) content.push({ type: 'text', text: documentPromptBlock(document) });
       const response = await this.apiProxy.sessions.prompt({
-        rpcId: randomUUID(),
+        // rpcId 即 Host requestId：带 clientSendId 时用确定值，日志崩溃后的重新派发
+        // 由 Host 按 requestId 去重；队列快照也靠它把项还原成 clientSendId。
+        rpcId: options.clientSendId !== undefined ? promptRequestId(options.clientSendId) : randomUUID(),
         payload: {
           sessionId,
-          mode: 'queue',
+          mode: options.mode ?? 'queue',
           content,
           clientTimeZone: localTimeZone(),
         },

@@ -25,6 +25,7 @@ import type {
   PhoneSessionRow,
   ScheduleHistoryViewLike,
   ScheduleTaskViewLike,
+  SessionEventLike,
   WorkspaceViewLike,
 } from './host-api.ts'
 
@@ -34,7 +35,27 @@ type RpcResult<T> = RpcOk<T> | RpcErr
 
 interface SessionControllerLike {
   list(request: { cursor?: string }, signal: AbortSignal): Promise<{ items: readonly unknown[] }>
-  inspect(sessionId: string, signal?: AbortSignal): Promise<{ events: readonly unknown[] }>
+  /**
+   * Whole-log read used by `sessions.history`.
+   *
+   * DSH 0.2.2-alpha.2 removed this method in favour of `page`. The seven earlier
+   * admitted hosts still have it and cannot be served by `page` instead: their
+   * `SessionPageRequest.throughSeq` is mandatory and validated, while this
+   * adapter has no log cursor to pass. `sessions.history` therefore branches on
+   * the presence of `inspect` rather than switching every host to one path.
+   */
+  inspect?(sessionId: string, signal?: AbortSignal): Promise<{ events: readonly unknown[] }>
+  /**
+   * One message-aligned history page; present on every admitted host.
+   *
+   * Its `beforeSeq` is a log offset, not the seq the phone sends, so a backward
+   * cut has to travel as the inclusive `throughSeq` instead.
+   */
+  page?(request: {
+    address: { kind: 'session'; sessionId: string }
+    throughSeq?: number
+    maxMessages?: number
+  }, signal: AbortSignal): Promise<{ records: readonly unknown[]; hasMore: boolean }>
   create(request: Record<string, unknown>): Promise<{ sessionId: string; agentPreset?: string }>
   fork(request: { sessionId: string; atSeq?: number }): Promise<{ sessionId: string }>
   modelCatalog(): Promise<unknown>
@@ -43,6 +64,8 @@ interface SessionControllerLike {
   prompt(request: Record<string, unknown>, signal: AbortSignal): Promise<{ accepted: true }>
   attachment(request: { sessionId: string; attachmentId: string }): Promise<{ attachment: { mediaType?: string }; data: string }>
   cancel(request: { sessionId: string }): { accepted: true }
+  /** Absent on hosts that predate DSH's pending-queue RPC. */
+  updateQueue?(request: { sessionId: string; itemId: string; action: { kind: string } }): Promise<{ accepted: true }>
   /**
    * Non-activating projection baseline for one session.
    *
@@ -123,6 +146,8 @@ export class DshApiProxy implements ApiProxyLike {
     // A profile without the optional workspace service cannot restore a
     // session; keep the phone capability bit honest.
     if (this.workspaceController === undefined) delete this.workspace?.unarchiveSession
+    // 同理：Host 没有 updateQueue 时撤掉入口，promptQueue 能力位随之为 false。
+    if (typeof this.session.updateQueue !== 'function') delete this.sessions.updateQueue
     this.directoryPicker = ctx.get('directoryPickerController') as DirectoryPickerControllerLike | undefined
     this.shouldSurfaceInteraction = options.shouldSurfaceInteraction ?? (() => true)
     this.resolveSchedule()
@@ -230,9 +255,33 @@ export class DshApiProxy implements ApiProxyLike {
     }),
     history: async (request) => this.call(async () => {
       const sessionId = request.payload!.sessionId
+      const beforeSeq = request.payload?.beforeSeq
+      const limit = normalizePageLimit(request.payload?.maxMessages)
+      const inspect = this.session.inspect
+      // DSH 0.2.2-alpha.2 dropped `inspect`; the host's own `page` covers the same
+      // read with message-aligned windowing. Keep the old path for every host that
+      // still has it, because those hosts' `page` demands a log cursor.
+      if (inspect === undefined) {
+        const page = await this.session.page!({
+          address: { kind: 'session', sessionId },
+          // `beforeSeq` is exclusive and expressed in seqs; `throughSeq` is an
+          // inclusive seq cut, so shift by one. -1 is the host's empty page.
+          ...(beforeSeq === undefined ? {} : { throughSeq: beforeSeq - 1 }),
+          maxMessages: limit,
+        }, new AbortController().signal)
+        // Records are `{type:'event', event}` envelopes; the bridge contract is
+        // `{event}`. host-bridge re-checks the seq boundary itself, so the
+        // inclusive cut cannot make a client loop on the same page.
+        return {
+          events: page.records.map((record) => ({
+            event: (record as { event: SessionEventLike }).event,
+          })),
+          hasMore: page.hasMore,
+        }
+      }
       let inspected: { events: readonly unknown[] }
       try {
-        inspected = await this.session.inspect(sessionId)
+        inspected = await inspect.call(this.session, sessionId)
       } catch (error) {
         // No message data is logged: only the opaque session id and Host's
         // safe error chain, enough to distinguish an unsupported legacy log
@@ -243,8 +292,8 @@ export class DshApiProxy implements ApiProxyLike {
       // 分页窗口的策略住在 host-event-projection（与它依赖的投影规则同处）；
       // 适配器只负责拉全量事件、把窗口映射成 HistoryResult。
       const window = historyWindow(inspected.events, {
-        beforeSeq: request.payload?.beforeSeq,
-        limit: normalizePageLimit(request.payload?.maxMessages),
+        beforeSeq,
+        limit,
       })
       return { events: window.events as HistoryResult['events'], hasMore: window.hasMore }
     }),
@@ -262,6 +311,7 @@ export class DshApiProxy implements ApiProxyLike {
     selectModel: async (request) => this.call(() => this.session.selectModel(request.payload ?? {})),
     rename: async (request) => this.call(() => this.session.rename(request.payload!)),
     cancel: async (request) => this.call(() => this.session.cancel(request.payload!)),
+    updateQueue: async (request) => this.call(() => this.session.updateQueue!(request.payload!)),
     attachment: async (request) => this.call(() => this.session.attachment(request.payload!)),
     projections: async (request) => this.call(() => this.session.projections(request.payload!, new AbortController().signal)),
   }

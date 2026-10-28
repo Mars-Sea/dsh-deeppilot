@@ -44,6 +44,9 @@ interface SessionsApiLike {
   /** Reads one durable image back after the host verifies the session log references its id. */
   attachment?(req: RpcRequestLike<{ sessionId: string; attachmentId: string }>):
     Promise<RpcResponseLike<{ attachment: { mediaType?: string }; data: string }>>
+  /** Remove or steer one pending inbox item. Absent on hosts without the
+   * DSH session.updateQueue RPC; the promptQueue capability bit probes it. */
+  updateQueue?(req: RpcRequestLike<QueueUpdateArgs>): Promise<RpcResponseLike<{ accepted: true }>>
   /** Complete projection baseline for one session; null when it is gone. */
   projections(req: RpcRequestLike<{ sessionId: string }>):
     Promise<RpcResponseLike<{ asOfSeq: number; values: Record<string, unknown> } | null>>
@@ -181,6 +184,13 @@ export interface PromptArgs {
     | { type: 'image'; mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string; name?: string }
   >
   clientTimeZone?: string
+}
+
+/** DSH session.updateQueue request; `edit` is reserved on the wire and never sent. */
+export interface QueueUpdateArgs {
+  sessionId: string
+  itemId: string
+  action: { kind: 'remove' } | { kind: 'steer' }
 }
 
 export interface PhoneSessionRow {

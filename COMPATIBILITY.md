@@ -1,10 +1,11 @@
 # Compatibility
 
-This branch targets exactly **six DSH releases**: `0.2.0-rc.2`; the `alpha`
-channel releases `0.2.1-alpha.3`, `0.2.1-alpha.4`, and `0.2.1-alpha.5`; and the
-`next` channel releases `0.2.1-rc.2` and `0.2.1-rc.3`. The npm channels have
-moved since: `latest` now points at `0.2.1-rc.2`, promoted from `next`, and
-`next` at `0.2.1-rc.3`. All six are
+This branch targets exactly **eight DSH releases**: `0.2.0-rc.2`; the `alpha`
+channel releases `0.2.1-alpha.3`, `0.2.1-alpha.4`, `0.2.1-alpha.5`, and
+`0.2.2-alpha.2`; and the `next` channel releases `0.2.1-rc.2`, `0.2.1-rc.3`, and
+`0.2.1-rc.4`. The npm channels have
+moved since: `latest` now points at `0.2.1-rc.2`, promoted from `next`, `next`
+at `0.2.1-rc.4`, and `alpha` at `0.2.2-alpha.2`. All eight are
 named in both `engines.dsh` and `peerDependencies`; no other version is accepted.
 DSH evaluates that declaration before composing a profile — on every start, not
 only on install — so a newly published DSH release deactivates this plugin until
@@ -22,7 +23,8 @@ recorded in the release memory.
 | Component | Current contract | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | Package engine and CI |
-| DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name `0.2.0-rc.2 \|\| 0.2.1-alpha.3 \|\| 0.2.1-alpha.4 \|\| 0.2.1-alpha.5 \|\| 0.2.1-rc.2 \|\| 0.2.1-rc.3` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2, 0.2.1-alpha.3, and 0.2.1-alpha.4 CLIs, an isolated 0.2.1-alpha.5 host where this plugin now composes, starts, and answers `/phone/health` with 200 on its own LAN listener, a pre-widening 0.2.1-rc.2 host run where the unchanged declaration is refused at compose time, and an isolated 0.2.1-rc.3 host where the widened declaration composes, starts, and answers `/phone/health` with 200 (audits below) |
+| DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name `0.2.0-rc.2 \|\| 0.2.1-alpha.3 \|\| 0.2.1-alpha.4 \|\| 0.2.1-alpha.5 \|\| 0.2.1-rc.2 \|\| 0.2.1-rc.3 \|\| 0.2.1-rc.4 \|\| 0.2.2-alpha.2` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2, 0.2.1-alpha.3, and 0.2.1-alpha.4 CLIs, an isolated 0.2.1-alpha.5 host where this plugin now composes, starts, and answers `/phone/health` with 200 on its own LAN listener, a pre-widening 0.2.1-rc.2 host run where the unchanged declaration is refused at compose time, an isolated 0.2.1-rc.3 host where the widened declaration composes, starts, and answers `/phone/health` with 200, and isolated 0.2.1-rc.4 and 0.2.2-alpha.2 hosts where the eight-release declaration does the same (audits below) |
+| DSH history read | `SessionController.inspect` when the host has it, `SessionController.page` otherwise | DSH 0.2.2-alpha.2 removed `inspect`; the adapter branches on its presence and maps the host page's `{type:'event',event}` records onto the bridge's `{event}` contract, expressing the phone's exclusive `beforeSeq` as the inclusive `throughSeq` cut. Unit tests cover both branches (audits below) |
 | iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
 | Funnel helper platforms | macOS 13 Ventura or later, Linux, and Windows, each on amd64/arm64; built with Go 1.27, which dropped macOS 12 | CI starts the committed helper on a native runner for each of the six targets (`helper-smoke`); no runner covers macOS 13 itself |
@@ -74,6 +76,65 @@ The verbose-diagnostics field moved from the top-level `debug` to
 carries the old top-level `debug: true` is accepted but that value is ignored:
 verbose logging must be turned on again from the settings page. No other config
 field changed shape, and the old key is not read anywhere in this version.
+
+## 0.2.2-alpha.2 audit outcome
+
+The artifact-level audit of `dsh-v0.2.2-alpha.2` (published to the npm registry
+2026-10-28T02:50:54Z, the `alpha` channel release; `latest` is still
+`0.2.1-rc.2` and `next` moved to `0.2.1-rc.4`) against `dsh-v0.2.1-rc.3` found
+**one break, confined to the history read**. The tree grows 307 → 332 packages.
+
+- **The break.** `@deepseek-ai/dsh-api-session-controller` removed
+  `SessionController.inspect(sessionId, signal?)` — absent from both
+  `lib/types/index.d.ts` and the runtime `lib/index.js`. `sessions.history`
+  called it to read a whole log, so on this host the phone's history pagination
+  threw `TypeError`, while pairing, listing, prompting, the settings page, and
+  the plugin page kept working. The phone protocol itself is unchanged: the
+  `HistoryResult` shape is identical, only the host-side source moved.
+- **The fix, one file.** `src/dsh-api-proxy.ts` now treats `inspect` as optional
+  and falls back to `SessionController.page`. The branch keys off `inspect`, not
+  off `page`: `page` exists on all eight admitted hosts, but its
+  `SessionPageRequest.throughSeq` is mandatory and validated on the seven older
+  ones, and this adapter has no log cursor to pass. On the `page` path the
+  phone's exclusive `beforeSeq` travels as the inclusive `throughSeq`, and the
+  host's `{type:'event',event}` records are unwrapped to the bridge's `{event}`.
+- **Nothing else reaches this plugin.** 24 packages and 358 modules were
+  compared; 20 modules changed export surfaces, but only two at entry level
+  (`dsh-api-session-controller` dropping `buildModelCatalog`, `dsh-app-boot`
+  dropping five bundle-list constants and adding three platform helpers), and a
+  repo-wide grep shows the plugin uses none of them. The three packages the
+  plugin actually imports (`cordis`, `dsh-typert-protocol`, `schemastery`) have
+  unchanged export surfaces.
+- **Patch anchor still valid.** The upstream `dsh-web-app/cordis.patch.yml`
+  gained and lost three ids, and the block this plugin disables
+  (`directory-picker`) moved from line 113 to 105 and byte 4664 to 4309, but the
+  block itself is byte-identical and the shared id order is unchanged; both
+  hosts' `loadOverlayPatches` resolve this plugin's patch to the same fields.
+- **Vendor peers.** This host vendors `cordis 4.0.6-alpha.1` and
+  `schemastery 3.18.6-alpha.1`, which the previous ranges did not admit under
+  npm's default prerelease rule. The ranges now append `~4.0.6-alpha.1` and
+  `~3.18.6-alpha.1` rather than replacing the GA clauses, because every earlier
+  admitted host still vendors `4.0.5` / `3.18.5`. DSH's compatibility evaluator
+  ignores both peers; only npm's install-time resolution reads them.
+- **Activation.** Before the widening this host refused the plugin with a single
+  `engines.dsh` requirement and skipped the whole bundle; after it the matrix
+  accepts exactly `0.2.2-alpha.2` with no new rejection, while `0.2.2-alpha.1`,
+  `0.2.2-alpha.3`, `0.2.2`, `0.2.2-rc.1`, `0.2.1`, and `0.3.0` stay refused.
+- **One install-side prerequisite.** This host's `dsh` package raised
+  `engines.node` to `>= 24.9.0`; the plugin's own `engines.node` stays `>=22`.
+
+## 0.2.1-rc.4 audit outcome
+
+The artifact-level audit of `dsh-v0.2.1-rc.4` (published 2026-10-28T02:49:58Z,
+the `next` channel release) against `dsh-v0.2.1-rc.3` found **no change that
+reaches this plugin**: 307 packages on both sides, 42,415 of 42,731 shared files
+byte-identical, and 316 differing paths made of 296 `package.json` files plus 20
+files in eight packages (MCP capability gating, one log call moved to stderr, one
+View tooltip, four version strings, and documentation) — none of them in this
+plugin's declaration or call surface. Export surfaces are unchanged across 3,271
+modules, the evaluator is the same file as rc.3, and the patch anchor file is
+byte-identical. The declaration admits exactly `0.2.1-rc.4` more and nothing
+else.
 
 ## 0.2.1-rc.3 audit outcome
 

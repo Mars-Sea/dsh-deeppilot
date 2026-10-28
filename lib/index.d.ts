@@ -30,6 +30,7 @@ declare const ERROR_CODES: {
   readonly E_BUSY: 'session is busy';
   readonly E_UNSUPPORTED: 'protocol version or capability unsupported';
   readonly E_INTERNAL: 'internal error';
+  readonly E_STEER_UNAVAILABLE: 'queued item can no longer steer the current turn';
 };
 type WireErrorCode = keyof typeof ERROR_CODES;
 //#endregion
@@ -276,6 +277,10 @@ interface WelcomeCapabilities {
    * deleting its local credentials. Absent on older bridges; older clients
    * ignore the extra field. */
   deviceRevoke?: boolean;
+  /** Host exposes DSH session.updateQueue and the inbox projection: running
+   * sessions accept mode:"steer", s2c.session.queue snapshots are pushed and
+   * c2s.session.queue.update is served. Absent ⇒ running sessions only stop. */
+  promptQueue?: boolean;
 }
 type SessionStatus = "running" | "idle" | "error" | "unknown";
 /**
@@ -549,6 +554,11 @@ interface SessionsApiLike {
     };
     data: string;
   }>>;
+  /** Remove or steer one pending inbox item. Absent on hosts without the
+   * DSH session.updateQueue RPC; the promptQueue capability bit probes it. */
+  updateQueue?(req: RpcRequestLike<QueueUpdateArgs>): Promise<RpcResponseLike<{
+    accepted: true;
+  }>>;
   /** Complete projection baseline for one session; null when it is gone. */
   projections(req: RpcRequestLike<{
     sessionId: string;
@@ -749,6 +759,16 @@ interface PromptArgs {
   }>;
   clientTimeZone?: string;
 }
+/** DSH session.updateQueue request; `edit` is reserved on the wire and never sent. */
+interface QueueUpdateArgs {
+  sessionId: string;
+  itemId: string;
+  action: {
+    kind: 'remove';
+  } | {
+    kind: 'steer';
+  };
+}
 interface PhoneSessionRow {
   sessionId: string;
   updatedAt: number;
@@ -916,6 +936,11 @@ declare class HostBridge {
    * and restore them. Excluded from `summaries` and from the live broadcast. */
   private archivedSummaries;
   private subagentSessionIds;
+  /**
+   * 每个会话最近一次已知的队列（inbox 投影的折叠结果）及其指纹。来源是实时
+   * 投影通知或打开会话时读到的基线；指纹用来丢掉内容没变的重复通知。
+   */
+  private queues;
   private sinks;
   private ring;
   private cursor;
@@ -1000,6 +1025,19 @@ declare class HostBridge {
   private deriveTitleFallback;
   private captureActivity;
   private noteActivity;
+  /**
+   * 折叠一次 inbox 投影。只有实时变化才广播 s2c.session.queue；基线只补缓存，
+   * 打开会话的那台设备另由 pushQueueSnapshot 点对点拿到快照。
+   *
+   * 基线只补缺不覆盖：实时通知带的是完整投影值，收到过就以它为准；基线读取与
+   * 实时变化并发时，较早算出的基线不得盖掉较新的实时值。
+   */
+  private applyInbox;
+  /**
+   * 打开会话时补发的快照：不占 seq，与 tail 同属打开响应。还没读到过该会话的
+   * 投影（基线失败、Host 不提供或子代理会话）时不发，因为未知不等于空队列。
+   */
+  private pushQueueSnapshot;
   private applyProjection;
   private bumpPendingFlags;
   private pushSummary;
@@ -1048,6 +1086,14 @@ declare class HostBridge {
   renameSession(sessionId: string, title: string): Promise<SessionManagementResult<string>>;
   archiveSession(sessionId: string): Promise<SessionManagementResult<true>>;
   unarchiveSession(sessionId: string): Promise<SessionManagementResult<true>>;
+  /**
+   * 删除或转向一条排队项。ack 只表示 Host 已提交变更，真实状态以随后的
+   * s2c.session.queue 为准；不做幂等，项已消失时 Host 回 queue-item-not-found。
+   */
+  updateQueue(sessionId: string, itemId: string, action: 'remove' | 'steer'): Promise<SessionManagementResult<{
+    sessionId: string;
+    itemId: string;
+  }>>;
   cancelSession(sessionId: string): Promise<SessionManagementResult<true>>;
   listWorkspaces(): Promise<SessionManagementResult<Array<{
     id: string;
@@ -1104,7 +1150,10 @@ declare class HostBridge {
     mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
     data: string;
     name?: string;
-  }>, documents?: PromptDocument[]): Promise<SessionManagementResult<number>>;
+  }>, documents?: PromptDocument[], options?: {
+    mode?: 'queue' | 'steer';
+    clientSendId?: string;
+  }): Promise<SessionManagementResult<number>>;
   respondApproval(requestId: string, decision: 'allow' | 'deny', reason?: string): Promise<PendingResponseOutcome>;
   respondQuestion(requestId: string, answers: unknown): Promise<PendingResponseOutcome>;
 }

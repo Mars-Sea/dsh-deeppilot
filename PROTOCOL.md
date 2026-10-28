@@ -193,7 +193,7 @@ scope 与操作映射：
 | scope | 允许的操作 |
 |---|---|
 | `sessions.read` | 会话/工作区/目录读取、会话打开与历史、模型目录读取、`c2s.session.skills` 技能目录，以及 `c2s.session.commands`、`c2s.session.permissions`、`c2s.session.export` |
-| `prompt.send` | `c2s.session.sendPrompt`、`c2s.session.command`、`c2s.session.feedback` |
+| `prompt.send` | `c2s.session.sendPrompt`、`c2s.session.command`、`c2s.session.feedback`、`c2s.session.queue.update` |
 | `sessions.manage` | 创建/重命名/归档/取消会话，创建工作区，切换模型 |
 | `interactions.respond` | pending 快照、回答 approval 与 question |
 | `notifications.register` | 注册 APNs token 与通知偏好 |
@@ -211,7 +211,7 @@ scope 同样约束服务端**推送**给已认证连接的内容。桥在每次�
 
 | 下行帧类型 | 需要的 scope |
 |---|---|
-| `s2c.models.changed`、`s2c.commands.changed`、`s2c.skills.changed`、`s2c.session.event`、`s2c.sessions.delta`、`s2c.session.tail`、`s2c.history.page` | `sessions.read` |
+| `s2c.models.changed`、`s2c.commands.changed`、`s2c.skills.changed`、`s2c.session.event`、`s2c.sessions.delta`、`s2c.session.tail`、`s2c.history.page`、`s2c.session.queue` | `sessions.read` |
 | `s2c.pending.approval`、`s2c.pending.question`、`s2c.pending.cleared` | `interactions.respond` |
 | `s2c.notify`（`category` 为 `approval.required` / `question.asked`） | `interactions.respond` |
 | `s2c.notify`（`category` 为 `turn.completed` / `session.error`） | `sessions.read`（正文可能包含助手输出） |
@@ -549,6 +549,8 @@ Host 不具备该能力时 `welcome.capabilities.sessionRestore=false`，请求�
 } }
 ```
 
+可选字段 `mode` 取 `"queue"`（默认）或 `"steer"`，仅在 `welcome.capabilities.promptQueue=true` 时有效，语义见「运行中排队与转向扩展」。能力位缺失时，`mode:"queue"` 与省略等价，仍然允许；`mode:"steer"` 返回 `E_UNSUPPORTED`。
+
 ### c2s.session.attachment（payload: sessionId, attachmentId）
 
 按 id 读回一张会话引用过的持久化图片（宿主校验该会话日志确实包含此 id 后才返回）。
@@ -835,6 +837,7 @@ deeppilot/setDeviceName(deviceId, customName) -> customName | null
 | E_BUSY | 会话正在处理上一条输入 |
 | E_UNSUPPORTED | 协议版本或能力不支持 |
 | E_INTERNAL | 服务端内部错误 |
+| E_STEER_UNAVAILABLE | 排队项已无法转向：当前这一轮已结束，或该项不在排队区。仅在 `promptQueue` 能力下的 `c2s.session.queue.update` 中出现 |
 
 `message` 是人类可读的诊断文本，客户端可原样展示，也可按自身需要本地化。两个约定：
 
@@ -859,6 +862,14 @@ Bridge 侧 Host code 到 wire 码的映射是 `src/wire-errors.ts` 的单一属�
 | `session/not-found`、`session/agent-busy`、`session/writer-held`、`session/conflict` | 同会话域取值 | 上游在指令路径上的原样拒绝 |
 
 两处取值理由需要写明：`command/definition-changed` 归 `E_NOT_FOUND` 而不是 `E_BUSY`，因为目标定义已不存在，自动重试不会成功，客户端应重拉目录后让用户重选；`command/attachments-unsupported` 归 `E_PROTOCOL`，因为请求参数与指令自身的声明不符，与其余 payload 类拒绝同档。未登记的码仍然落 `E_INTERNAL`，并按本节约定把真实原因并进 `message`。
+
+运行中排队与转向（见「运行中排队与转向扩展」）的队列域映射：
+
+| Host code | wire 码 | 触发条件 |
+|---|---|---|
+| `session/queue-item-not-found` | E_NOT_FOUND | 项已被领取、删除，或不存在 |
+| `session/steer-unavailable` | E_STEER_UNAVAILABLE | 当前轮已结束，或该项不在排队区 |
+| `session/agent-busy`（子代理会话） | E_BUSY | 沿用会话域现有映射 |
 
 ## 10. 能力协商与版本策略
 
@@ -1067,6 +1078,78 @@ Host 必须确认源会话是普通、可见且未归档的会话；subagent、�
 同一设备的 `clientRequestId` 和相同请求内容只能执行一次。重启后 Host 从独立
 fork journal 恢复已创建的新 Session id，并返回 `replayed:true`；同一 ID 搭配不同
 内容返回 `E_PROTOCOL`。原会话永远不被修改或归档。
+
+## 运行中排队与转向扩展（可选 v2 能力）
+
+`welcome.capabilities.promptQueue=true` 表示 Host 同时提供 DSH `session.updateQueue`
+与 `inbox` 投影。缺失或为 false 时，客户端不得发送 `mode:"steer"` 与
+`c2s.session.queue.update`（Bridge 回 `E_UNSUPPORTED`），也不会收到
+`s2c.session.queue`；会话运行中的发送保持旧行为。旧客户端忽略该能力位。
+子代理会话不提供队列：Bridge 不为其推送快照，对其请求按 Host 的拒绝返回。
+
+### 发送模式
+
+- `queue`：进入下一轮（Host `next-turn`），当前轮结束后按先进先出执行。空闲会话的
+  提示词同样先入队再被立即领取，因此出现在队列里不代表会话正在运行。
+- `steer`：在当前轮的下一个步骤边界插入（Host `next-step`）。客户端只应在会话运行中
+  使用；空闲时的处理以 Host 为准。
+- 携带 `clientSendId` 时，`mode` 计入同 ID 的内容比对；同 ID 不同 `mode` 返回
+  rejected / `E_PROTOCOL`。Bridge 以 `dp:` 加 `clientSendId` 作为 Host `requestId`，
+  Host 对已入队或已写入日志的同一 `requestId` 重试，直接返回原受理结果，不重复插入。
+
+### s2c.session.queue（推送）
+
+```json
+{ "type": "s2c.session.queue", "payload": {
+  "sessionId": "session-…",
+  "items": [
+    { "itemId": "msg-…", "placement": "queued", "text": "第二条",
+      "imageCount": 0, "documentCount": 0, "clientSendId": "1730000000000-…" },
+    { "itemId": "msg-…", "placement": "steering", "text": "先别改测试",
+      "imageCount": 1, "documentCount": 0 }
+  ]
+} }
+```
+
+- 整表快照：每次入队、转向、删除、被领取或丢弃后，推送该会话当前的完整队列。客户端
+  整体替换，不做增量合并。
+- 推送范围：与 `s2c.session.event` 相同，变化时广播给所有具备 `sessions.read` 的连接，
+  不区分是否打开了该会话。`c2s.session.open` 时 Bridge 另在 `s2c.session.tail` 之后补发
+  一次当前快照（空队列也发），这一帧与 tail 同属打开响应，不占 seq。
+- `items` 保持 Host 的先进先出顺序。`placement` 为 `queued`（Host `next-turn`）或
+  `steering`（Host `next-step`）；Host 的 `context` 项不下发。
+- `itemId` 是 Host `MessageId`，供 `c2s.session.queue.update` 使用。
+- `text` 是用户正文，不含 Bridge 生成的文档正文块，最多 4096 个 Unicode 码点，超出时
+  截断并置 `truncated:true`。`imageCount` / `documentCount` 为附件数量；非本 Bridge
+  格式的来源（如 Web 端）`documentCount` 为 0。
+- `clientSendId` 在该项由 DeepPilot 客户端经 `clientSendId` 发送时出现（从 Host 来源
+  `rpcId` 去掉 `dp:` 前缀得到），所有设备收到的快照相同。它只供发起设备把待发送项与
+  队列项对上；不是凭据，`c2s.session.delivery` 按设备隔离，其他设备拿到也查不到回执。
+- 转向在 Host 侧分两次变化完成：先离开 `next-turn`，再进入 `next-step`。Bridge 可以
+  合并同一会话短时间内的连续变化，但客户端仍须按 `itemId` 跨两种 `placement` 跟踪，
+  不得把单帧缺席视为删除。
+- 变化推送占 seq、进入重放环，下行权限为 `sessions.read`。重放时客户端以同一会话的
+  最后一帧为准；收到 `s2c.resync` 后重开会话即获得新快照。
+
+### c2s.session.queue.update
+
+```json
+{ "type": "c2s.session.queue.update", "id": "q-1", "payload": {
+  "sessionId": "session-…", "itemId": "msg-…", "action": "steer"
+} }
+{ "type": "s2c.ack", "id": "q-1", "payload": { "sessionId": "session-…", "itemId": "msg-…" } }
+```
+
+- 需要 `prompt.send` 权限。`action` 为 `remove` 或 `steer`；`edit` 为预留值，本版本
+  返回 `E_UNSUPPORTED`。
+- `remove`：取消该项，Host 同时释放其上传附件。
+- `steer`：把排队项改为在下一个步骤边界插入，只对 `placement:"queued"` 且会话运行中
+  有效。
+- ack 只表示 Host 已提交该变更；真实状态以随后的 `s2c.session.queue` 为准。
+- 不保证幂等：项已不存在时返回 `E_NOT_FOUND`。客户端不自动重试，以下一帧快照为准。
+- 转向不可用时返回 `E_STEER_UNAVAILABLE`。该码不可自动重试：项通常仍在 `queued`，
+  客户端应提示「本轮已结束，消息保留在队列中」，并以下一帧快照为准。只有声明了
+  `promptQueue` 的 Bridge 才会返回此码，所以不认识它的旧客户端不会遇到。
 
 ## 移动端系统命令（v2 可选扩展）
 

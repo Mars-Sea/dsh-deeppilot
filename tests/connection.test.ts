@@ -1311,3 +1311,83 @@ test('连接建立 / 非正常关闭事件带来源哈希与 attemptId', async (
   assert.equal(closed.extra?.authenticated, false)
   assert.equal(typeof closed.extra?.durationMs, 'number')
 })
+
+// ---------- 运行中排队与转向（promptQueue） ----------
+
+function queueProxy(updates: any[] = []): Partial<ApiProxyLike> {
+  const base = makeProxy()
+  return {
+    sessions: {
+      ...base.sessions,
+      updateQueue: async (request: any) => {
+        updates.push(request)
+        return { result: { ok: true, value: { accepted: true } } }
+      },
+    } as ApiProxyLike['sessions'],
+  }
+}
+
+test('welcome 按 Host 是否提供 updateQueue 声明 promptQueue', async () => {
+  const legacy = await makeConnection()
+  legacy.authenticate()
+  assert.equal(legacy.ws.sent.find((f) => f.type === 's2c.welcome')?.payload.capabilities.promptQueue, false)
+  const modern = await makeConnection({ proxyOverrides: queueProxy() })
+  modern.authenticate()
+  assert.equal(modern.ws.sent.find((f) => f.type === 's2c.welcome')?.payload.capabilities.promptQueue, true)
+})
+
+test('没有 promptQueue 时 steer 回 E_UNSUPPORTED，queue 与省略照旧可发', async () => {
+  const { ws, bridge, authenticate } = await makeConnection({ scopes: ['prompt.send'] })
+  authenticate()
+  const modes: unknown[] = []
+  ;(bridge as any).sendPrompt = async (...args: any[]) => { modes.push(args[4]?.mode); return { ok: true, value: 1 } }
+  ws.receive({ v: 2, type: 'c2s.session.sendPrompt', id: 'steer', payload: { sessionId: 's', text: 'x', mode: 'steer' } })
+  await new Promise(r => setTimeout(r, 5))
+  assert.equal(lastFrame(ws).payload.code, 'E_UNSUPPORTED')
+  ws.receive({ v: 2, type: 'c2s.session.sendPrompt', id: 'queue', payload: { sessionId: 's', text: 'x', mode: 'queue' } })
+  await new Promise(r => setTimeout(r, 5))
+  assert.equal(lastFrame(ws).type, 's2c.ack')
+  assert.deepEqual(modes, ['queue'])
+})
+
+test('同一 clientSendId 换 mode 重发判为内容不一致；steer 与 clientSendId 一起交给 Bridge', async () => {
+  const { randomUUID } = await import('node:crypto')
+  const { ws, bridge, authenticate } = await makeConnection({ scopes: ['prompt.send'], proxyOverrides: queueProxy() })
+  authenticate()
+  const calls: any[] = []
+  ;(bridge as any).sendPrompt = async (...args: any[]) => { calls.push(args[4]); return { ok: true, value: 7 } }
+  const clientSendId = `${Date.now()}-${randomUUID()}`
+  ws.receive({ v: 2, type: 'c2s.session.sendPrompt', id: 'a', payload: { sessionId: 's', text: 'x', mode: 'steer', clientSendId } })
+  await new Promise(r => setTimeout(r, 10))
+  assert.equal(lastFrame(ws).payload.status, 'accepted')
+  assert.deepEqual(calls, [{ mode: 'steer', clientSendId }])
+  ws.receive({ v: 2, type: 'c2s.session.sendPrompt', id: 'b', payload: { sessionId: 's', text: 'x', clientSendId } })
+  await new Promise(r => setTimeout(r, 10))
+  assert.deepEqual(lastFrame(ws).payload, { clientSendId, status: 'rejected', code: 'E_PROTOCOL' })
+  assert.equal(calls.length, 1)
+})
+
+test('c2s.session.queue.update：能力门、prompt.send 权限与 ack 形状', async () => {
+  const legacy = await makeConnection({ scopes: ['prompt.send'] })
+  legacy.authenticate()
+  legacy.ws.receive({ v: 2, type: 'c2s.session.queue.update', id: 'u', payload: { sessionId: 's', itemId: 'm', action: 'remove' } })
+  await new Promise(r => setTimeout(r, 5))
+  assert.equal(lastFrame(legacy.ws).payload.code, 'E_UNSUPPORTED')
+
+  const reader = await makeConnection({ scopes: ['sessions.read'], proxyOverrides: queueProxy() })
+  reader.authenticate()
+  reader.ws.receive({ v: 2, type: 'c2s.session.queue.update', id: 'u', payload: { sessionId: 's', itemId: 'm', action: 'remove' } })
+  await new Promise(r => setTimeout(r, 5))
+  assert.equal(lastFrame(reader.ws).payload.code, 'E_FORBIDDEN')
+
+  const updates: any[] = []
+  const writer = await makeConnection({ scopes: ['prompt.send'], proxyOverrides: queueProxy(updates) })
+  writer.authenticate()
+  writer.ws.receive({ v: 2, type: 'c2s.session.queue.update', id: 'u', payload: { sessionId: 's', itemId: 'm', action: 'steer' } })
+  await new Promise(r => setTimeout(r, 5))
+  const ack = lastFrame(writer.ws)
+  assert.equal(ack.type, 's2c.ack')
+  assert.equal(ack.id, 'u')
+  assert.deepEqual(ack.payload, { sessionId: 's', itemId: 'm' })
+  assert.deepEqual(updates[0].payload, { sessionId: 's', itemId: 'm', action: { kind: 'steer' } })
+})

@@ -3,7 +3,123 @@
 > This is the durable audit record for DeepPilot's public DSH plugin. Re-audit
 > the next DSH release instead of assuming that an rc upgrade is runtime-safe.
 
-## Current decision — `dsh-v0.2.1-rc.3`
+## Current decision — `dsh-v0.2.2-alpha.2`
+
+- **Audited release:** `dsh-v0.2.2-alpha.2`, published to the npm registry
+  2026-10-28T02:50:54Z (GitHub Release 2026-10-28T02:50:54Z), and the **`alpha`**
+  channel release — `alpha` moved from `0.2.1-alpha.5` to it. It is **not**
+  `latest` (still `0.2.1-rc.2`) and not `next` (`0.2.1-rc.4`, audited below in the
+  same pass). This is the first `0.2.2` line release to enter the supported list,
+  and the first one to carry a real runtime break since `0.2.1-alpha.3`.
+- **Comparison baseline:** `dsh-v0.2.1-rc.3` (the previous audited tag).
+- **Plugin runtime verdict: one break, confined to the history read; fixed in
+  `src/dsh-api-proxy.ts`.** The tree grows 307 → 332 packages (26 added, 1
+  dropped). `@deepseek-ai/dsh-api-session-controller` removed
+  `SessionController.inspect(sessionId, signal?)` — absent from
+  `lib/types/index.d.ts` and from the runtime `lib/index.js` (the rc.3
+  `inspectApiSession` helper and the class method are both gone). This plugin's
+  `sessions.history` read a whole log through it, so on this host the phone's
+  history pagination threw `TypeError`; pairing, listing, prompting, the settings
+  page, and the plugin page all kept working, and the phone protocol itself is
+  unchanged because `HistoryResult` has the same shape.
+- **The fix branches on `inspect`, not on `page`.** `page(request, signal)` exists
+  on all eight admitted hosts with an identical signature and a stable
+  `{records, hasMore}` result, but `SessionPageRequest.throughSeq` is **mandatory
+  and validated** on the seven older ones and this adapter has no log cursor to
+  pass, so a unified `page` path would have broken every host below
+  `0.2.2-alpha.2`. The adapter keeps `inspect` when present, and otherwise reads
+  `page` with the phone's exclusive `beforeSeq` expressed as the inclusive
+  `throughSeq` (`beforeSeq - 1`; `-1` is the host's empty page) and unwraps the
+  host's `{type:'event',event}` records to the bridge's `{event}` contract.
+  `host-bridge.ts` already re-checks the seq boundary, so the inclusive cut
+  cannot make a client loop on one page.
+- **No other export change reaches the plugin.** 24 packages / 358 modules were
+  compared; 20 modules changed export surfaces but only two at entry level
+  (`dsh-api-session-controller` dropping `buildModelCatalog`; `dsh-app-boot`
+  dropping `DEFAULT_PROFILE_BUNDLES`, `OFFICIAL_ON_DEMAND_CATALOG`,
+  `ON_DEMAND_BUNDLES`, `OPTIONAL_BUNDLES`, `PROFILE_TEMPLATES` and adding three
+  platform helpers). A repo-wide grep shows the plugin uses none of them; the
+  three packages it actually imports (`cordis`, `dsh-typert-protocol`,
+  `schemastery`) have unchanged export surfaces. Two earlier script findings —
+  `connection` missing `createPeer` / `createSharedFetchHandler` and `typert`
+  missing `register` — were false positives from reading `rpc-host.d.ts` instead
+  of `rpc.d.ts`, and from comparing against a symbol neither version has; both are
+  recorded as corrections in `.alpha2-verify/AUDIT.md`.
+- **Patch anchor still valid.** The upstream `dsh-web-app/cordis.patch.yml`
+  changed 3 ids in and 3 out; the block this plugin disables
+  (`directory-picker`) moved from line 113 to 105 and byte 4664 to 4309, but the
+  block bytes and sha256 are identical, the shared id order is unchanged, and both
+  hosts' `loadOverlayPatches` resolve this plugin's patch to the same fields.
+- **Vendor peers: appended, not substituted.** This host vendors
+  `cordis 4.0.6-alpha.1` and `schemastery 3.18.6-alpha.1`, which the previous
+  ranges did not admit under npm's default prerelease rule (they did under
+  `includePrerelease`). The ranges now append `~4.0.6-alpha.1` / `~3.18.6-alpha.1`
+  after the GA clauses, because every earlier admitted host still vendors
+  `4.0.5` / `3.18.5`; replacing instead of appending would have been a
+  narrowing. DSH's evaluator ignores both peers (a manifest carrying only these
+  two passes), so this is an install-time and documentation concern. The
+  `cordis 4.0.5 → 4.0.6-alpha.1` diff is a pure refactor (`_resolveConfig` →
+  public `resolveConfig`, new `rawConfig`/`effectiveConfig`, `this.` →
+  `this.ctx.fiber.`) with an unchanged 26-symbol export surface;
+  `schemastery` changed only `package.json`.
+- **Activation verdict: the new release is admitted by both declarations.**
+  Before the widening, this host refused the plugin with a **single**
+  `engines.dsh` requirement and `exempted: false`, skipping the whole bundle.
+  After it, `afterNewlyAccepted = ["0.2.2-alpha.2"]` and
+  `afterNewlyRejected = []`; `0.2.2-alpha.1`, `0.2.2-alpha.2.1`,
+  `0.2.2-alpha.20`, `0.2.2-ALPHA.2`, `0.2.2-rc.1`, `0.2.2`, `0.2.1`,
+  `0.2.3`, and `1.0.0` stay refused. The projection is append-only: every other
+  manifest field is untouched.
+- **Evidence.** `.alpha2-verify/AUDIT.md` and `CHANGE_SURFACE.md`, with 12
+  re-runnable scripts (`tree-compare`, `export-symbol-diff`, `call-surface-check`,
+  `history-api-matrix`, `vendor-range-check`, `evaluator-repro`, `matrix`,
+  `patch-anchor-check`, `client-face-check`, `pkg-manifest-delta`,
+  `snapshot-state.sh`, `surface-evidence.sh`), 12 `*.out.json` results, 180
+  diffs, and 30+ raw logs. The history-API matrix
+  (`.alpha2-verify/history-api-matrix.out.json`) is what proves the branch
+  decision: `inspect` present on 7/8 hosts, `page` present on 8/8,
+  `SessionPage` shape stable on 8/8.
+- **Not covered / limits.** No real iPhone run and no Funnel end-to-end. No live
+  host boot on `0.2.2-alpha.2` was performed for this entry (the isolated-host
+  boot is tracked separately below). `dsh-client-ui-slots` was not tarball-compared
+  because this machine has no outbound HTTPS for `npm pack`; the plugin never
+  imports or injects that package and its `slots` service comes from
+  `dsh-client-ui-renderer`, which changed only `package.json`. npm install-time
+  peer resolution was not exercised.
+- **Install-side prerequisite.** This host's `dsh` package raised
+  `engines.node` to `>= 24.9.0` — the only structural `package.json` change among
+  the 19 declared peers. The plugin's own `engines.node` stays `>=22`; a `0.2.2`
+  host simply cannot run on Node below 24.9.
+
+### `dsh-v0.2.1-rc.4`, audited in the same pass
+
+- **Audited release:** `dsh-v0.2.1-rc.4`, published 2026-10-28T02:49:58Z, the
+  **`next`** channel release (`next` moved from `0.2.1-rc.3`). Baseline:
+  `0.2.1-rc.3`.
+- **Verdict: no change that reaches this plugin, no `src/` change.** 307 packages
+  on both sides; 42,415 of 42,731 shared files byte-identical; 316 differing paths
+  = 296 `package.json` + 20 files in eight packages (`dsh-mcp-client` capability
+  gating for `resources/list`, `dsh-llm-deepseek-account` moving one log call to
+  stderr, `dsh-client-ui-conversation` View tooltip plus one removed locale key,
+  four version/build strings, and documentation). None is in the plugin's
+  declaration or call surface. `package.json` structural changes: 0 across all
+  307 packages; 3,706 dependency-spec changes are mechanical `rc.3 → rc.4`
+  substitutions. Export surfaces: 0 changes across 3,271 `lib/` modules and 681
+  entry modules. The evaluator is the same file as rc.3 (same sha256).
+- **Patch anchor:** `dsh-web-app/cordis.patch.yml` is byte-identical to rc.3;
+  the `directory-picker` anchor keeps line 113, byte 4664, and the same block
+  sha256.
+- **Activation:** before the widening this host refused the plugin (single
+  `engines.dsh` requirement); after it, exactly `0.2.1-rc.4` is newly accepted,
+  nothing is newly rejected, and `0.2.1-rc.5`, `0.2.1`, `0.2.1-rc.4.1`,
+  `0.2.1-rc.40`, `0.2.1-RC.4`, and `0.2.1-rc.10` stay refused. Vendor pair is
+  still `cordis 4.0.5` / `schemastery 3.18.5`, both byte-identical to rc.3.
+- **Evidence:** `.rc4-verify/AUDIT.md`, `CHANGE_SURFACE.md`, 10 scripts, 9
+  `*.out.json` results, 316 diffs. The comparator carries a negative control (a
+  byte-identical package compared against itself yields 0 differences; the same
+  package with one bit flipped yields exactly 1).
+
+### Previous decision — `dsh-v0.2.1-rc.3`
 
 - **Audited release:** `dsh-v0.2.1-rc.3`, published to the npm registry
   2026-10-23T07:54:30Z (GitHub Release 2026-10-23T15:26:39Z), and the **`next`**
@@ -733,6 +849,135 @@
   out of the shipped Web composition. See "Automation is now an optional
   bundle" below. The plugin needs no code change; the phone's copy now points
   at the bundle.
+
+## 2026-10-24 — 插件链路实测：`dsh-v0.2.1-rc.3` 上的运行中排队与转向
+
+这不是版本审计：没有放行或下线任何版本。本节验证插件尚未提交的「运行中排队与转向」实现
+（`promptQueue` 能力，见 `PROTOCOL.md`「运行中排队与转向扩展」），在真实宿主上能否按协议
+完整跑通：从手机帧，经 Bridge，到 Host 的 `prompt` / `updateQueue` 与 `inbox` 投影，再回到
+手机。
+
+### 方法
+
+- 宿主 CLI：npx 缓存中的 `0.2.1-rc.3` 安装（`dsh --version` 输出 `0.2.1-rc.3`）。
+- 插件：当前工作副本构建后用 `npm pack` 打成本地包，经
+  `dsh plugin --profile queue add <tgz>` 装入。装好后确认包内 `lib/index.js` 带有
+  `promptQueue`。
+- 隔离 `DSH_HOME` 放在一次性临时目录（已删除），profile 用 `--from-default-profile web`
+  创建。设备身份用 `scripts/smoke-live.mts register` 预先写入 `devices-v2.json`。连接走真实
+  的 TLS 与签名挑战握手，不经过配对码。
+- 额外挂载一个补丁，引入仅供测试的夹具，并用显式环境变量把关：本机 OpenAI 兼容模型，监听
+  `127.0.0.1:3388`，每个请求延迟 15 秒才回复。夹具只记录合成会话里用户消息的文本，用来核对
+  转向插进了哪一轮。
+- 测试客户端是临时脚本，每 15 秒发一次 `c2s.ping`，按清单逐项断言。宿主 Web 端口 3387，
+  插件手机端 3398。结束后停掉宿主，确认三个端口都已无监听。
+
+### 结果
+
+| 检查项 | 实际看到的 | 结论 |
+| --- | --- | --- |
+| 能力声明 | `welcome.capabilities.promptQueue=true` | 通过 |
+| 打开会话 | 先收到 `s2c.session.tail`，再收到一帧空快照，这帧不带 seq | 通过 |
+| 运行中排队 | 乙、丙依次进入 `queued`，各带自己的 `clientSendId`，帧带 seq | 通过 |
+| 同 ID 重发 | 回执复用（`accepted`、原 `userSeq`），队列没有多出一项 | 通过 |
+| 转向 | 收到 ack 后快照分两帧：先是丙离开，再是丙以 `steering` 出现 | 通过 |
+| 删除 | ack 后快照里不再有乙；对乙再转向返回 `E_NOT_FOUND` | 通过 |
+| 转向不可用 | 运行中把戊排进队列，再 `c2s.session.cancel`；取消后戊留在 `queued`，Host 没有自动领取；对戊转向返回 `E_STEER_UNAVAILABLE` | 通过 |
+
+模型侧的调用记录与快照一致：
+- 转向后的丙，作为甲那一轮的第二步发给了模型，没有另起一轮。
+- 丁单独作为一轮运行。
+- 戊从未发给模型：取消后它留在排队区，随后被删除。
+
+### 发现
+
+- **空闲会话上发 `mode:"steer"`**：Host 正常受理。该项先在快照里以 `steering` 出现一帧，
+  随后被领取，按普通的一轮运行，不报错。
+- **空闲时普通发送也经过排队区**：该项会以 `queued` 短暂出现一帧，下一帧即消失。这在插件
+  链路上复现了 rc.2 探针的结论，客户端对账时必须容忍这类一闪而过的项。
+- **`cancel` 不领取排队项**：取消后排队项仍然保留，会话停在空闲，直到有下一次发送或删除。
+  这让 rc.2 探针里「无法构造」的 `session/steer-unavailable` 空闲场景，有了稳定的构造方法。
+- **监听地址**：插件手机端监听在 `0.0.0.0:3398`，这是 LAN 传输的固定行为。验收时设备注册表
+  里只有冒烟设备。
+
+### 局限
+
+- 只跑了 `0.2.1-rc.3`。`0.2.0-rc.2` 上的插件链路没有实测，只有上次的宿主侧探针。
+- 第一轮运行有两个问题：客户端没发心跳，约 100 秒后被插件断开；部分等待条件匹配到了更早的
+  帧。修正客户端后，在新会话上重跑才得到上表。第一轮里丁没有出现在历史和模型记录里，当时
+  没有检查它的发送回执，原因未查清。推测它是在上一轮结束的瞬间发出、被 Host 拒收，但没有
+  证据。
+- 只测了单台设备。快照「所有设备相同」与多设备并发操作都没有覆盖。
+- 模型是合成的，固定输出不代表真实供应商的行为。
+
+## 2026-10-24 — 运行时探针：`dsh-v0.2.0-rc.2` 上的 `inbox` 投影
+
+这不是版本审计：没有放行或下线任何版本，插件代码也没有改动。本节只回答计划中手机端
+「运行中排队与转向」可选能力（`sessionController.updateQueue`，见下文「New rc.2
+capabilities worth using」）背后唯一悬而未决的问题：最早放行的宿主版本，是否通过本插件
+已在使用的投影通道发布待处理收件箱（inbox）。
+
+### 静态证据
+
+- `@deepseek-ai/dsh-agent-loop@0.2.0-rc.2`（`lib/index.js:27`）注册了带对外视图
+  （wire view）的标准 `inbox` 投影。其状态为
+  `{ "next-turn": Message[], "next-step": Message[] }`，由持久事件
+  `agent/inbox/spliced` 折叠而来；折叠会拒绝越界的 splice，以及同时出现在两个列表里的
+  同一个 `MessageId`。
+- `@deepseek-ai/dsh-api-session-controller` 的 `0.2.0-rc.2` 与 `0.2.1-rc.3`
+  （registry 包）带有相同的 `updateQueue` 实现：`edit`（只接受非空纯文本）、`remove`
+  （同时释放该提示词的上传附件）、`steer`（只接受 `next-turn` 中的项且 Agent 正在运行，
+  否则返回 `session/steer-unavailable`）。项不存在时返回 `session/queue-item-not-found`。
+  两个版本的 README 都说明：提示词的 `requestId` 会持久化为用户来源的 `rpcId`，待处理
+  收件箱里的消息也保留这一来源。
+- `0.2.1-rc.3` 在会话列表投影的类型定义里列出了 `inbox`，`0.2.0-rc.2` 没有列出，这正是
+  需要做运行时探针的原因。
+
+### 方法
+
+- 宿主 CLI：npx 缓存中的 `0.2.0-rc.2` 安装（`dsh --version` 输出 `0.2.0-rc.2`）。
+- 隔离 `DSH_HOME` 位于一次性临时目录（已删除），profile 用 `--from-default-profile web`
+  创建。`--dump-config` 退出码 0、stderr 为空、组合树中没有 `deeppilot` 行：刻意不加载
+  插件。
+- 额外挂载一个补丁，引入仅供测试的夹具，并用显式环境变量把关：
+  - 本机 OpenAI 兼容模型，监听 `127.0.0.1:3288`，经 `llm-pi-ai` 以占位密钥注册；每个
+    请求延迟 40 秒才回复，让该轮一直处于运行中；
+  - 订阅 `sessionProjections.onChanged` 的探针，与 `src/dsh-api-proxy.ts` 使用的是同一
+    接口。只对 `inbox` 键打印两个列表的长度、消息 ID 前 8 位、`source.kind`，以及是否带
+    `source.rpcId`，不打印任何消息正文。夹具必须声明 `inject: ['sessionProjections']`，
+    否则 `apply` 时取不到该服务。
+- 在宿主自带的 Web 界面（端口 3287）上操作：发送 A；A 运行期间发送 B 和 C；在排队区对
+  B 转向；删除 C；等 A 结束。结束后停掉宿主，确认 3287 与 3288 端口已无监听。
+
+### 结果
+
+| 检查项 | 探针输出 | 结论 |
+| --- | --- | --- |
+| 投影存在且实时推送 | 发出 B、C 后：`next-turn=2`、`next-step=0` | 通过 |
+| 能对应回发送 | 每一项均为 `kind=user` 且带 `rpcId` | 通过 |
+| 转向 | 先是 `next-turn=1 [C] next-step=0`，再是 `next-turn=1 [C] next-step=1 [B]` | 通过 |
+| 删除 | `next-turn=0`、`next-step=1 [B]` | 通过 |
+| 被领取执行 | A 结束后：`next-step=0`，随后出现一次新的模型请求 | 通过 |
+
+Web 界面表现一致：排队区标题为「2 条排队消息」，每项带编辑、删除与「插话发送」（转向）
+操作，被转向的 B 立即显示在会话尾部。
+
+### 对队列能力的影响
+
+- 转向分两帧完成：B 先离开 `next-turn`，下一帧才进入 `next-step`。客户端必须按
+  `MessageId` 跨两个列表跟踪各项，不能把只缺席一帧当作被删除。
+- 空闲会话上的提示词也会先经过 `next-turn` 再被领取，因此出现在收件箱里不能作为该轮正在
+  运行的证据。
+- 本次探针不要求插件做任何改动。该能力仍是可选能力，以 `updateQueue` 与 `inbox` 投影同时
+  可用为前提。
+
+### 局限
+
+- 没有运行 `0.2.1-rc.3`；其静态证据与本版一致。
+- 没有加载插件。探针用的是同一个 `onChanged` 接口，但插件自身的折叠与手机帧仍未测试。
+- 空闲会话上对排队项转向返回 `session/steer-unavailable` 只有源码证据：空闲会话会立即
+  领取排队项，这种状态无法构造出来。
+- 模型是合成的，其固定输出不代表任何真实供应商的行为。
 
 ## 2026-10-16 — audit of `dsh-v0.2.1-alpha.5`
 

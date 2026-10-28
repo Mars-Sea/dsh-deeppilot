@@ -505,6 +505,10 @@ export const sessionRows: readonly WireFrameRow[] = [
       if (p.clientSendId !== undefined && !validSendId(p.clientSendId)) {
         return reject('E_PROTOCOL', 'invalid clientSendId')
       }
+      // mode 缺省即 queue；steer 是否可用要看能力位，留给 handle 判断（validate 拿不到 bridge）。
+      if (p.mode !== undefined && p.mode !== 'queue' && p.mode !== 'steer') {
+        return reject('E_PROTOCOL', 'invalid prompt mode')
+      }
       if (
         !isOptionalField(p, 'text', (v) => isText(v, MAX_PROMPT_TEXT_CHARS, false)) ||
         !isOptionalField(p, 'images', Array.isArray) ||
@@ -589,6 +593,7 @@ export const sessionRows: readonly WireFrameRow[] = [
         text,
         images,
         documents,
+        ...(p.mode === 'steer' ? { mode: 'steer' } : {}),
         ...(p.clientSendId !== undefined ? { clientSendId: p.clientSendId } : {}),
       })
     },
@@ -598,20 +603,57 @@ export const sessionRows: readonly WireFrameRow[] = [
       const images = payload.images as Array<{ mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string; name?: string }>
       const documents = payload.documents as Array<{ mediaType: string; name: string; text: string; truncated?: boolean }>
       const clientSendId = payload.clientSendId as string | undefined
+      const steer = payload.mode === 'steer'
+      // 转向依赖 Host 的排队能力；queue 与省略等价，旧 Host 上照旧可发。
+      if (steer && ctx.bridge.capabilities.promptQueue !== true) {
+        return ctx.fail('E_UNSUPPORTED', 'prompt queue not supported')
+      }
+      const mode = steer ? 'steer' as const : 'queue' as const
       if (clientSendId !== undefined) {
         // 幂等投递：同一 clientSendId 重复到达时复用回执，不重复入队。
+        // mode 只在 steer 时计入指纹：升级前落盘的同 ID 条目不含 mode，
+        // 按 queue 重发必须仍被认作同一请求，而不是内容不一致。
         const receipt = await ctx.bridge.promptDeliveries.dispatch(
           ctx.deviceId!,
           clientSendId,
-          { sessionId, content: { text, images, documents } },
-          () => ctx.bridge.sendPrompt(sessionId, text, images, documents),
+          { sessionId, content: { text, images, documents, ...(steer ? { mode } : {}) } },
+          () => ctx.bridge.sendPrompt(sessionId, text, images, documents, { mode, clientSendId }),
         )
         ctx.send('s2c.ack', receipt)
         return
       }
-      const userSeq = await ctx.bridge.sendPrompt(sessionId, text, images, documents)
+      const userSeq = await ctx.bridge.sendPrompt(sessionId, text, images, documents, { mode })
       if (!userSeq.ok) return ctx.fail(userSeq.code, userSeq.message)
       ctx.send('s2c.ack', { userSeq: userSeq.value })
+    },
+  },
+  {
+    // 删除或转向一条排队项。与发送同属 prompt.send：都在改这个会话接下来要跑的输入。
+    type: 'c2s.session.queue.update',
+    stage: 'authenticated',
+    scopes: ['prompt.send'],
+    capability: 'promptQueue',
+    doc: 'PROTOCOL.md c2s.session.queue.update',
+    validate: (payload) => {
+      const checked = payloadObject(payload)
+      if (!checked.ok) return checked
+      const invalid = requireSessionId(checked.value)
+      if (invalid) return invalid
+      if (!isText(checked.value.itemId, 256)) return reject('E_PROTOCOL', 'invalid itemId')
+      const action = checked.value.action
+      // edit 是协议预留值：首版不开放文本编辑（DSH 只接受非空纯文本，带图片的项无法原样编辑）。
+      if (action === 'edit') return reject('E_UNSUPPORTED', 'queue edit not supported')
+      if (action !== 'remove' && action !== 'steer') return reject('E_PROTOCOL', 'invalid queue action')
+      return accept({ sessionId: checked.value.sessionId, itemId: checked.value.itemId, action })
+    },
+    handle: async (ctx, payload) => {
+      const result = await ctx.bridge.updateQueue(
+        payload.sessionId as string,
+        payload.itemId as string,
+        payload.action as 'remove' | 'steer',
+      )
+      if (!result.ok) return ctx.fail(result.code, result.message)
+      ctx.send('s2c.ack', result.value)
     },
   },
 ]

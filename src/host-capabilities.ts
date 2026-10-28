@@ -25,6 +25,7 @@ export type ProbedCapability =
   | 'sessionRestore'
   | 'projectSelection'
   | 'schedules'
+  | 'promptQueue'
 
 /** 每位一行：Host 上必须存在的依赖。缺失即该位为 false，相关帧回 E_UNSUPPORTED。 */
 export const HOST_CAPABILITY_PROBES: Record<ProbedCapability, (proxy: ApiProxyLike) => boolean> = {
@@ -44,6 +45,9 @@ export const HOST_CAPABILITY_PROBES: Record<ProbedCapability, (proxy: ApiProxyLi
   // 五个 schedule 帧都只要求 Schedule 服务存在；历史上按 list&&create 探测的取值
   // 会在只实现了部分方法的 Host 上把位压成 false，而方法体内又只判服务存在。
   schedules: (proxy) => proxy.schedule !== undefined,
+  // 排队快照来自 inbox 投影，增删转向走 session.updateQueue；两者在支持的 DSH
+  // 版本里同时提供（DSH_RELEASE_MEMORY 2026-10-24 实测 0.2.0-rc.2），因此只探方法。
+  promptQueue: (proxy) => typeof proxy.sessions.updateQueue === 'function',
 }
 
 /** 由 Bridge 自身恒真的位（见 BRIDGE_INVARIANT_CAPABILITIES）。 */
@@ -104,6 +108,7 @@ export function capabilityBits(
     sessionRestore: HOST_CAPABILITY_PROBES.sessionRestore(proxy),
     projectSelection: HOST_CAPABILITY_PROBES.projectSelection(proxy),
     schedules: HOST_CAPABILITY_PROBES.schedules(proxy),
+    promptQueue: HOST_CAPABILITY_PROBES.promptQueue(proxy),
     push: pushOutlet?.isAvailable() === true,
     widgetPush: true,
     liveActivityPush: true,

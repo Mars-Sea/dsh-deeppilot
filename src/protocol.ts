@@ -219,6 +219,10 @@ export interface WelcomeCapabilities {
    * deleting its local credentials. Absent on older bridges; older clients
    * ignore the extra field. */
   deviceRevoke?: boolean
+  /** Host exposes DSH session.updateQueue and the inbox projection: running
+   * sessions accept mode:"steer", s2c.session.queue snapshots are pushed and
+   * c2s.session.queue.update is served. Absent ⇒ running sessions only stop. */
+  promptQueue?: boolean
 }
 
 export interface WelcomePayload {
@@ -549,6 +553,25 @@ export interface ErrorPayload { code: string; message: string }
 export { ERROR_CODES, type WireErrorCode } from './wire-errors.ts'
 
 export interface PromptDeliveryPayload { sessionId: string; clientSendId: string }
+
+/** 运行中排队与转向扩展（promptQueue 能力）。 */
+export interface SessionQueueItem {
+  /** Host MessageId；c2s.session.queue.update 用它定位。 */
+  itemId: string
+  /** queued = Host next-turn（下一轮）；steering = Host next-step（下一个步骤边界）。 */
+  placement: "queued" | "steering"
+  /** 用户正文，不含文档正文块；最多 4096 个码点。 */
+  text: string
+  truncated?: true
+  imageCount: number
+  documentCount: number
+  /** 由 DeepPilot 客户端经 clientSendId 发送时出现；所有设备收到的快照相同。 */
+  clientSendId?: string
+}
+/** 整表快照：客户端整体替换，并按 itemId 跨 placement 跟踪。 */
+export interface SessionQueuePayload { sessionId: string; items: SessionQueueItem[] }
+export interface SessionQueueUpdatePayload { sessionId: string; itemId: string; action: "remove" | "steer" }
+export interface SessionQueueUpdateAck { sessionId: string; itemId: string }
 export type { DeliveryReceipt } from "./dispatch-journal.ts"
 
 export type { CommandSummary, CommandCatalog, CommandAttachment, CommandExecution, PermissionCatalog, PermissionOption } from './command-api.ts'

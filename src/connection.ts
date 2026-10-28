@@ -241,7 +241,8 @@ export class BridgeConnection implements BridgeSink {
 
   push(type: string, payload: unknown, seq?: number): void {
     if (type === 's2c.notify') payload = { ...(payload as object), hostAudience: this.deps.audience }
-    if (type === 's2c.session.event') {
+    // 队列快照与会话事件一样要排在 tail 之后：打开期间到达的先进缓冲。
+    if (type === 's2c.session.event' || type === 's2c.session.queue') {
       const sessionId = (payload as { sessionId?: unknown } | undefined)?.sessionId
       if (typeof sessionId === 'string') {
         const buffered = this.openingSessionEvents.get(sessionId)

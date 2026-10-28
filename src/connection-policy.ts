@@ -80,6 +80,7 @@ export function isEnvelope(value: unknown): value is Envelope {
  */
 const PUSH_SCOPE_BY_TYPE: Partial<Record<string, DeviceScope>> = {
   's2c.session.event': 'sessions.read',
+  's2c.session.queue': 'sessions.read',
   's2c.skills.changed': 'sessions.read',
   's2c.commands.changed': 'sessions.read',
   's2c.models.changed': 'sessions.read',

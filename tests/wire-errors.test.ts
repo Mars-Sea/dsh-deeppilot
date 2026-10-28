@@ -210,7 +210,15 @@ test('待决应答的三种结局各有其码与信息', () => {
   assert.match(pendingResponseMessage('question', 'transport'), /host connection failed/)
 })
 
-test('wire 错误码表与 PROTOCOL.md 的七个码一致', () => {
+test('wire 错误码表与 PROTOCOL.md 的八个码一致', () => {
   assert.deepEqual(Object.keys(ERROR_CODES).sort(),
-    ['E_AUTH', 'E_BUSY', 'E_FORBIDDEN', 'E_INTERNAL', 'E_NOT_FOUND', 'E_PROTOCOL', 'E_UNSUPPORTED'])
+    ['E_AUTH', 'E_BUSY', 'E_FORBIDDEN', 'E_INTERNAL', 'E_NOT_FOUND', 'E_PROTOCOL', 'E_STEER_UNAVAILABLE', 'E_UNSUPPORTED'])
+})
+
+test('队列域：转向不可用走专用码，项已消失归 E_NOT_FOUND', () => {
+  assert.equal(wireErrorOf('queue', { code: 'session/steer-unavailable' }).code, 'E_STEER_UNAVAILABLE')
+  assert.equal(wireErrorOf('queue', { code: 'session/queue-item-not-found' }).code, 'E_NOT_FOUND')
+  assert.equal(wireErrorOf('queue', { code: 'session/agent-busy' }).code, 'E_BUSY')
+  // 只有队列域认这个码：会话域里它仍落兜底，不会把别的路径带歪。
+  assert.equal(wireErrorOf('session', { code: 'session/steer-unavailable' }).code, 'E_INTERNAL')
 })

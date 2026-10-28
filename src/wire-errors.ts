@@ -24,6 +24,8 @@ export const ERROR_CODES = {
   E_BUSY: 'session is busy',
   E_UNSUPPORTED: 'protocol version or capability unsupported',
   E_INTERNAL: 'internal error',
+  // 仅 promptQueue 能力下的 c2s.session.queue.update 会返回，旧客户端不会遇到。
+  E_STEER_UNAVAILABLE: 'queued item can no longer steer the current turn',
 } as const
 
 export type WireErrorCode = keyof typeof ERROR_CODES
@@ -46,7 +48,7 @@ export const WIRE_ERROR_FALLBACK: WireErrorCode = 'E_INTERNAL'
  * schedule 域例外：定时任务服务（`@deepseek-ai/dsh-schedule`）至今仍抛扁平
  * snake_case（`schedule_not_found`），不要给它加命名空间。
  */
-export type ErrorDomain = 'session' | 'model' | 'schedule' | 'command'
+export type ErrorDomain = 'session' | 'model' | 'schedule' | 'command' | 'queue'
 
 const DOMAIN_TABLES: Record<ErrorDomain, Readonly<Record<string, WireErrorCode>>> = {
   // 会话/工作区/目录管理域的 Host 错误码。
@@ -145,6 +147,19 @@ const DOMAIN_TABLES: Record<ErrorDomain, Readonly<Record<string, WireErrorCode>>
     'session-not-found': 'E_NOT_FOUND',
     'agent-busy': 'E_BUSY',
     'session-conflict': 'E_BUSY',
+  },
+  // 运行中排队与转向域（DSH session.updateQueue）。
+  queue: {
+    // 项已被领取、删除或从未存在；Host 对已消失的会话也回这个码。重试无意义，
+    // 客户端以下一帧 s2c.session.queue 为准。
+    'session/queue-item-not-found': 'E_NOT_FOUND',
+    // 当前轮已结束，或该项已在转向区：项通常仍在队列里，自动重试同样不会成功。
+    // 用专用码而不是 E_NOT_FOUND，见 app-private ADR-0011 第 5 条。
+    'session/steer-unavailable': 'E_STEER_UNAVAILABLE',
+    // 子代理会话由父会话路由占用：沿用会话域的映射。
+    'session/agent-busy': 'E_BUSY',
+    'session/writer-held': 'E_BUSY',
+    'gateway/bad-request': 'E_PROTOCOL',
   },
 }
 

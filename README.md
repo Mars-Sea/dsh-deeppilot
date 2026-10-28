@@ -32,17 +32,18 @@ Host on your own computer and does not replace or modify the DSH Web UI.
 
 ## Install from npm
 
-This source checkout targets Node.js 22+ and the six DSH releases it has been
+This source checkout targets Node.js 22+ and the eight DSH releases it has been
 audited against — `0.2.0-rc.2`, the `alpha` channel releases `0.2.1-alpha.3`,
-`0.2.1-alpha.4`, and `0.2.1-alpha.5`, and the two `next` channel releases it has
-admitted in turn, `0.2.1-rc.2` and `0.2.1-rc.3` — with a `web` profile. (The
-npm channels move: `latest` now points at `0.2.1-rc.2`, which was promoted
-from `next`, and `next` at `0.2.1-rc.3`.) DSH checks a plugin's declared
+`0.2.1-alpha.4`, `0.2.1-alpha.5`, and `0.2.2-alpha.2`, and the `next` channel
+releases it has admitted in turn, `0.2.1-rc.2`, `0.2.1-rc.3`, and `0.2.1-rc.4` —
+with a `web` profile. (The npm channels move: `latest` now points at
+`0.2.1-rc.2`, which was promoted from `next`, `next` at `0.2.1-rc.4`, and
+`alpha` at `0.2.2-alpha.2`.) DSH checks a plugin's declared
 requirements before composing a profile, on every start rather than only on
 install, so any other host version refuses to activate this plugin. From DSH
 `0.2.1-alpha.4` on, that check reads `engines.dsh` and ignores
 `peerDependencies`; older hosts know only the peer range, so both name the same
-six releases. The package includes Funnel helpers
+eight releases. The package includes Funnel helpers
 for macOS, Linux, and Windows on amd64/arm64; trusted-LAN mode does not require
 the helper. The helper is built with Go 1.27, which requires **macOS 13 Ventura
 or later**: on macOS 12 and earlier, Funnel mode cannot start, while
