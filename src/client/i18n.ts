@@ -162,6 +162,15 @@ const TABLES: LocaleTables = {
     'phase.stopped': '已停止',
     'phase.unknown': '状态未知',
 
+    // ---- status strip: short channel states (the column label names the channel) ----
+    'channel.state.disabled': '未启用',
+    'channel.state.starting': '正在启动',
+    'channel.state.login_required': '待授权',
+    'channel.state.online': '已就绪',
+    'channel.state.error': '失败',
+    'channel.state.unavailable': '不可用',
+    'channel.state.stopped': '已停止',
+
     // ---- connection panel ----
     'panel.activeConnections': '当前连接',
     'panel.identity': '设备身份认证',
@@ -192,6 +201,7 @@ const TABLES: LocaleTables = {
     'pair.kind.lan': '内网',
     'pair.noAddress': '没有可用地址',
     'pair.noAddressHelp': '没有可用的局域网或远程入口。请确认局域网连接已启动，或启用远程连接。',
+    'pair.disabledHelp': 'DeepPilot 连接已关闭。先在上方开启连接，再添加手机。',
     'pair.qrAlt': 'DeepPilot 配对二维码',
     'pair.qrShow': '显示二维码',
     'pair.qrHide': '隐藏二维码',
@@ -442,6 +452,15 @@ const TABLES: LocaleTables = {
     'phase.stopped': 'Stopped',
     'phase.unknown': 'Status unknown',
 
+    // ---- status strip: short channel states (the column label names the channel) ----
+    'channel.state.disabled': 'Off',
+    'channel.state.starting': 'Starting',
+    'channel.state.login_required': 'Needs sign-in',
+    'channel.state.online': 'Ready',
+    'channel.state.error': 'Failed',
+    'channel.state.unavailable': 'Unavailable',
+    'channel.state.stopped': 'Stopped',
+
     // ---- connection panel ----
     'panel.activeConnections': 'Active connections',
     'panel.identity': 'Device authentication',
@@ -472,6 +491,7 @@ const TABLES: LocaleTables = {
     'pair.kind.lan': 'LAN',
     'pair.noAddress': 'No address available',
     'pair.noAddressHelp': 'No LAN or remote endpoint is available. Make sure LAN is running or enable remote access.',
+    'pair.disabledHelp': 'DeepPilot is turned off. Turn the connection on above before adding a phone.',
     'pair.qrAlt': 'DeepPilot pairing QR code',
     'pair.qrShow': 'Show QR code',
     'pair.qrHide': 'Hide QR code',
