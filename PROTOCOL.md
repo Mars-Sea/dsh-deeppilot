@@ -192,9 +192,9 @@ scope 与操作映射：
 
 | scope | 允许的操作 |
 |---|---|
-| `sessions.read` | 会话/工作区/目录读取、会话打开与历史、模型目录读取、`c2s.session.skills` 技能目录，以及 `c2s.session.commands`、`c2s.session.permissions`、`c2s.session.export` |
+| `sessions.read` | 会话/工作区/目录读取、会话打开与历史、模型目录读取、`c2s.session.skills` 技能目录，以及 `c2s.session.commands`、`c2s.session.permissions`、`c2s.session.export`、`c2s.plugin.update.check` |
 | `prompt.send` | `c2s.session.sendPrompt`、`c2s.session.command`、`c2s.session.feedback`、`c2s.session.queue.update` |
-| `sessions.manage` | 创建/重命名/归档/取消会话，创建工作区，切换模型 |
+| `sessions.manage` | 创建/重命名/归档/取消会话，创建工作区，切换模型，`c2s.plugin.update.apply` 安装更新 |
 | `interactions.respond` | pending 快照、回答 approval 与 question |
 | `notifications.register` | 注册 APNs token 与通知偏好 |
 | `schedule.manage` | 定时任务/提醒的列表、历史、创建、修改和删除；同时需要 `sessions.read` 才能读取任务内容 |
@@ -1151,6 +1151,131 @@ fork journal 恢复已创建的新 Session id，并返回 `replayed:true`；同�
   客户端应提示「本轮已结束，消息保留在队列中」，并以下一帧快照为准。只有声明了
   `promptQueue` 的 Bridge 才会返回此码，所以不认识它的旧客户端不会遇到。
 
+## 实时流式输出扩展（可选 v2 能力）
+
+`welcome.capabilities.assistantStream=true` 表示 Bridge 会把模型的增量输出作为
+`s2c.session.delta` 推给已打开该会话的连接。缺失或 false 时客户端不得依赖该帧，渲染
+退回「整步落盘后才出现文字」的旧行为；旧客户端忽略未知帧。
+
+### s2c.session.delta（推送）
+
+```json
+{ "type": "s2c.session.delta", "payload": {
+  "sessionId": "session-…",
+  "streamId": "stream-…",
+  "kind": "message.delta",
+  "text": "增量片段",
+  "ts": 1730000000000
+} }
+```
+
+- 权限 `sessions.read`；只推给已经 `c2s.session.open` 该会话的连接，不做广播。
+- **不占 seq、不进重放环、断线不补发**。这是它与 `s2c.session.event` 的根本区别：后者
+  投影持久事件并占用重放序号，前者是瞬时流量。
+- `kind` 为 `stream.start`、`message.delta`、`thinking.delta` 或 `stream.end`。生命周期帧
+  的 `text` 为 `""`。`stream.start` 在每次模型尝试开始时由 Bridge 生成随机 `streamId`；
+  不能把会在 Agent 恢复后重置的宿主 attempt 计数直接用作全局流标识。
+- 服务端按 50 ms 窗口有序合并同一流同一文字类别的增量，单帧正文上限 256 KiB，
+  超出截断并置 `truncated:true`；推理与正文切换时不得重新排序。final 与 end 之前先
+  发出尚在合并窗口内的内容，正式行之后不得再发迟到的增量。
+- 宿主持久 `assistant/message` 先于 committed end 发出，它经 `s2c.session.event` 的
+  `message.final` 送达，`data.streamId?` 关联同一次尝试的临时行。客户端用正式行替换
+  该流临时内容。只有 final 没有 delta（旧宿主，或打开会话时已在运行）是正常情况。
+- `stream.end` 带 `outcome:{kind:"committed",eventType:"assistant/message"|"assistant/attempt",seq}`
+  或 `outcome:{kind:"abandoned"}`。`seq` 在这里指宿主持久日志中的事件序号，不是
+  信封重放序号；弃置尝试及仅记录 attempt 的尝试必须清理临时行，不能等待不存在的 final。
+- 客户端在收到 `turn.end`、取消成功回执、连接断开或 abandoned end 时，必须丢弃
+  未完成临时流；临时内容不写入正式消息历史或磁盘缓存。
+- 子代理会话不推送该帧。
+
+## 插件自更新扩展（可选 v2 能力）
+
+`welcome.capabilities.pluginUpdate=true` 表示 Bridge 允许手机触发「把本插件更新到某个
+已发布版本」。缺失或 false 时客户端不得发送下列 c2s 帧（旧 Bridge 回 `E_PROTOCOL`）。
+
+### 协议闸门
+
+Bridge 在触发更新前必须核对三件事，任一不满足即拒绝，不做部分更新：
+
+1. 目标版本存在于 npm 且声明了 bundle；
+2. 目标版本接受当前运行的 DSH 版本（宿主 `listVersions` 的对应项未带 `incompatible`，
+   转给手机时投影为 `compatible`）；
+3. 目标精确版本的 `package.json` 声明 `deepPilot.protocolVersion` 等于当前整数
+   `protocolVersion`。该声明通过注册表元数据读取并核对包名与版本；缺失或格式非法时拒绝。
+   第 3 条是 App↔插件闸门，宿主本身不校验它。
+
+安装前按宿主实际软件源计划核验全部可能的回退来源。每个来源的精确目标包名、版本、
+协议声明及强 SRI 完整性摘要必须一致，任一源不可核验或内容分歧都拒绝受理；不会修改
+全局软件源或把私有源扩为公共回退。检查界面可先显示单源候选预览，apply 仍以完整预检
+为准。
+
+### c2s.plugin.update.check → s2c.plugin.update.status
+
+权限 `sessions.read`，widget 不可用。请求 `{}`。响应载荷：
+
+```json
+{ "type": "s2c.plugin.update.status", "payload": {
+  "currentVersion": "0.9.12",
+  "protocolVersion": 2,
+  "latestVersion": "0.9.13",
+  "updateAvailable": true,
+  "compatible": true,
+  "protocolCompatible": true,
+  "versions": [{ "version": "0.9.13", "compatible": true, "protocolVersion": 2 }],
+  "checkedAt": 1730000000000
+} }
+```
+
+- `versions` 最多 10 项，新版本在前；`compatible` 是宿主对 DSH 兼容性的判断，
+  `protocolVersion` 来自目标包声明，缺失时该版本不可选。
+- 读取失败时 `latestVersion` 为 `null` 并附 `reason`，不抛错——离线是可预期的常态。
+- 最近一次更新日志额外返回 `journal: {clientRequestId,fromVersion,toVersion,phase,startedAt,message?}`。
+  成功、回滚与失败终态都保留，手机用请求编号对账；处于中间态时显示正在更新，不能把断线
+  或尚未自检完成解读为失败。
+
+### c2s.plugin.update.apply
+
+权限 `sessions.manage`，widget 不可用。请求 `{version, clientRequestId}`。客户端生成并保留
+唯一请求编号，最长 128 个 ASCII 字母、数字、点、下划线、冒号或连字符；App 沿用
+13 位时间前缀加 UUID。Bridge 先完成目标校验及更新日志耐久写入，才回
+`s2c.ack {clientRequestId, accepted:true}`。同编号同目标复用原状态，不重复安装；同编号不同
+目标返回 `E_PROTOCOL`，另一更新正在进行时返回 `E_BUSY`。随后用
+`s2c.plugin.update.progress` 推进度：
+
+```json
+{ "type": "s2c.plugin.update.progress", "payload": {
+  "clientRequestId": "…",
+  "phase": "installing",
+  "percent": 0,
+  "message": "中文诊断文本"
+} }
+```
+
+- `phase` 语义：`preparing` 校验目标；`installing` 宿主正在替换包——启用 HMR 时本插件
+  会被卸载，**连接会断开，这是预期行为**；`verifying` 新版本已加载并自检；
+  `restart-required` 表示宿主未启用 HMR、需要用户重启 DSH；`done` 更新完成；
+  `rolled-back` 表示安装失败且宿主已自动装回旧版本；`failed` 表示失败且未能回滚。
+- 手机断开后重连应先查 `c2s.plugin.update.check`，用其中的 `journal` 判定上次结果，
+  不要假设连接断开等于失败。
+- 该帧不进入重放环。
+
+### 更新日志（重启安全）
+
+Bridge 在开始安装前把 `{clientRequestId,fromVersion,toVersion,phase,startedAt,message?}`
+耐久写入插件当前数据目录的 `update-journal.json`（默认
+`<DSH_HOME>/deeppilot/update-journal.json`，尊重自定义及隔离配置）。保留最近一次的成功、
+回滚或失败终态，新请求覆盖；不保存设备、凭据或会话内容。连接关闭不得取消宿主正在执行
+的更新，新实例启动后按当前实际版本及宿主结果恢复日志。旧实例异步回调不得覆写新请求。
+
+这里的“重启恢复”指宿主 HMR 卸载旧插件、加载新插件后手机自动重连并恢复会话。宿主无
+HMR 时只能报告 `restart-required`，不强杀 DSH 进程，也不声称已自动重启。
+
+### 回滚
+
+回滚由宿主的 `updateBundle` 负责：HMR 路径下安装失败或取消会自动装回旧版本。Bridge 不
+自行回滚，只把宿主报告的结果映射成上面的 `phase`。未启用 HMR 时宿主报告需要重启，
+Bridge 必须返回 `restart-required` 而不是假装完成。
+
 ## 移动端系统命令（v2 可选扩展）
 
 `welcome.capabilities.commands?: boolean` 缺省为不支持。手机从当前会话的官方命令目录发现指令；目录名称、`definitionId`、`input.hint` 和 `input.attachments` 原样投影，不传处理器。命令不走普通 prompt 通道，执行生命周期由主机记录。所有新帧均拒绝 widget。
@@ -1173,7 +1298,9 @@ fork journal 恢复已创建的新 Session id，并返回 `replayed:true`；同�
 
 ### c2s.session.export
 
-权限 `sessions.read`。请求 `{sessionId}`。使用官方 `/api/session.export?includeDescendants=true` 归档路由，返回含子会话、图片和文件的完整 ZIP。连续响应 `s2c.session.export.chunk {index,data}`，从 0 连续编号，每块最多 48 KiB 二进制的 base64；同一请求 `id` 关联所有块，块不是最终响应。最终 `s2c.ack {sessionId,fileName,chunks,bytes}` 核对完整性。错误为同 id 的 `s2c.error`，客户端删除未完成临时文件。传输按连接写缓冲等待，断线取消归档流；块不进入重放环。服务端对整次导出设十分钟上限，超时同样取消归档流、按同 id 的 `s2c.error`（E_INTERNAL）结束，且不发送 `s2c.ack`——部分块永远不构成成功的导出。手机按块落临时文件、核对编号和最终大小，成功后才打开系统分享。
+权限 `sessions.read`。请求 `{sessionId, format?}`，`format` 取 `"zip"`（缺省）或 `"markdown"`。`zip` 使用官方 `/api/session.export?includeDescendants=true` 归档路由，返回含子会话、图片和文件的完整 ZIP；`markdown` 使用官方 `/api/session.markdown?sessionId=…` 路由，返回 `text/markdown` 的对话正文。两种格式共用同一套分块与回执：连续响应 `s2c.session.export.chunk {index,data}`，从 0 连续编号，每块最多 48 KiB 二进制的 base64；同一请求 `id` 关联所有块，块不是最终响应。最终 `s2c.ack {sessionId,fileName,chunks,bytes,mediaType?}` 核对完整性，`mediaType` 为 `application/zip` 或 `text/markdown; charset=utf-8`。错误为同 id 的 `s2c.error`，客户端删除未完成临时文件。传输按连接写缓冲等待，断线取消归档流；块不进入重放环。服务端对整次导出设十分钟上限，超时同样取消归档流、按同 id 的 `s2c.error`（E_INTERNAL）结束，且不发送 `s2c.ack`——部分块永远不构成成功的导出。手机按块落临时文件、核对编号和最终大小，成功后才打开系统分享。
+
+`format:"markdown"` 需要 `welcome.capabilities.sessionMarkdown=true`，缺失或 false 时 Bridge 回 `E_UNSUPPORTED`；客户端必须在发送前读取该能力位，不能只凭请求成功与否判断——不认识 `format` 的旧 Bridge 会忽略该字段并照常返回 ZIP。Markdown 正文省略 reasoning、system/developer 消息与注入的非人类上下文，菜单文案必须写成「导出对话正文」而不是「导出完整日志」。缺省 `format` 时行为与本扩展出现前逐字节相同。
 
 模型与文件入口由手机自身提供，并复用已有选择器；权限、反馈仅装饰匹配的官方 `definitionId`，同名第三方命令仍保留自己的执行与参数语义。技能继续补全文字后作为 prompt 发送；同名候选按类型分开，显式选择技能优先保留技能语义。
 

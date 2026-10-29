@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { SessionExportFormat } from './protocol.ts'
 
 export interface CommandSummary {
   name: string
@@ -16,7 +17,8 @@ export interface CommandApi {
   execute(sessionId: string, line: string, attachments: CommandAttachment[], expectedDefinitionId?: string): Promise<CommandExecution>
   permissions(sessionId: string): Promise<PermissionCatalog>
   feedback(sessionId: string, text: string, category?: string): Promise<void>
-  export(sessionId: string, signal: AbortSignal): Promise<Response>
+  readonly markdownAvailable?: boolean
+  export(sessionId: string, signal: AbortSignal, format?: SessionExportFormat): Promise<Response>
 }
 
 /**
@@ -37,6 +39,15 @@ export class DshCommandApi implements CommandApi {
   constructor(private readonly ctx: Context) {}
   get available(): boolean {
     return this.ctx.get('commands') !== undefined && typeof (this.ctx.get('typertGateway') as any)?.invoke === 'function'
+  }
+  get markdownAvailable(): boolean {
+    const connection = this.connection()
+    // 共享 fetch 方法在无导出插件时也存在；实际路由和正文读取依赖都就绪才宣告能力。
+    // alpha2 的连接服务持有此路由表；旧宿主或未知实现没有表时保守关闭入口。
+    const route = connection?.fetchRoutes instanceof Map ? connection.fetchRoutes.get('/api/session.markdown') : undefined
+    return typeof connection?.createSharedFetchHandler === 'function' &&
+      route?.methods instanceof Set && route.methods.has('GET') && typeof route.fetch === 'function' &&
+      typeof (this.ctx.get('sessionQuery') as any)?.readSession === 'function'
   }
   private connection(): any { return this.ctx.get('connection') }
   private owner(): unknown {
@@ -105,11 +116,15 @@ export class DshCommandApi implements CommandApi {
     // 反馈保存失败的原因对手机是可执行的，压成一句通用失败会丢掉它。
     if (result?.ok !== true) throw fail(typeof result?.error?.code === 'string' ? result.error.code : 'command/invalid-response', typeof result?.error?.message === 'string' ? result.error.message : '反馈未能保存')
   }
-  async export(sessionId: string, signal: AbortSignal): Promise<Response> {
-    // 使用与官方浏览器相同的归档路由，包含子会话和附件，避免自制残缺日志。
+  async export(sessionId: string, signal: AbortSignal, format?: SessionExportFormat): Promise<Response> {
+    // 完整归档与对话正文各用官方路由；缺省沿用原 URL，保留子会话和附件。
+    const markdown = format === 'markdown'
+    const path = markdown ? '/api/session.markdown?sessionId=' : '/api/session.export?includeDescendants=true&sessionId='
     const response = await this.connection().createSharedFetchHandler('/api').fetch(
-      new Request('http://localhost/api/session.export?includeDescendants=true&sessionId=' + encodeURIComponent(sessionId), { signal }), this.owner())
-    if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('application/zip')) throw fail('command/export-unavailable', '主机未能生成会话日志归档')
+      new Request('http://localhost' + path + encodeURIComponent(sessionId), { signal }), this.owner())
+    const contentType = response.headers.get('content-type')
+    const matches = markdown ? contentType?.split(';')[0]?.trim().toLowerCase() === 'text/markdown' : contentType?.includes('application/zip')
+    if (!response.ok || !response.body || !matches) throw fail('command/export-unavailable', markdown ? '主机未能生成会话对话正文' : '主机未能生成会话日志归档')
     return response
   }
 }

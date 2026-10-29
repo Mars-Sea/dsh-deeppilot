@@ -1,4 +1,4 @@
-import type { SessionSummary } from './protocol.ts'
+import type { SessionExportFormat, SessionSummary } from './protocol.ts'
 import type { DeviceScope } from './device-auth.ts'
 import type { PushNotification } from './protocol.ts'
 import type { WireErrorCode } from './wire-errors.ts'
@@ -9,7 +9,8 @@ export interface CommandsApiLike {
   execute(req: RpcRequestLike<{ sessionId: string; line: string; attachments: CommandAttachment[]; expectedDefinitionId?: string }>): Promise<RpcResponseLike<CommandExecution>>
   permissions(req: RpcRequestLike<{ sessionId: string }>): Promise<RpcResponseLike<PermissionCatalog>>
   feedback(req: RpcRequestLike<{ sessionId: string; text: string; category?: string }>): Promise<RpcResponseLike<void>>
-  export(req: RpcRequestLike<{ sessionId: string }>, signal: AbortSignal): Promise<Response>
+  readonly markdownAvailable?: boolean
+  export(req: RpcRequestLike<{ sessionId: string; format?: SessionExportFormat }>, signal: AbortSignal): Promise<Response>
 }
 
 /* Stable bridge-facing structural types mapped to rc.2 controllers by
@@ -275,6 +276,8 @@ export function unwrapStreamItem(item: MuxFrameLike | ApiStreamItemLike): MuxFra
 }
 
 export interface ApiProxyLike {
+  /** 真实宿主反射声明了助手流帧时才为 true；旧代理缺省关闭。 */
+  readonly assistantStreamAvailable?: boolean
   commands?: CommandsApiLike
   sessions: SessionsApiLike
   workspace?: WorkspaceApiLike

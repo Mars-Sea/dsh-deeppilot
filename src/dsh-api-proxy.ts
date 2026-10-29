@@ -118,6 +118,23 @@ export interface DshApiProxyOptions {
 
 /** Direct-controller adapter with the shape HostBridge consumes. */
 export class DshApiProxy implements ApiProxyLike {
+  /** Probe the Host's generated reflection, not this adapter's listener registration. */
+  get assistantStreamAvailable(): boolean {
+    const typert = this.ctx.get('typert') as {
+      getPackage?(name: string, face: 'host'): {
+        model?: { services?: Array<{ key?: string; types?: Array<{ name?: string }> }> }
+      } | undefined
+    } | undefined
+    try {
+      return typert?.getPackage?.('@deepseek-ai/dsh-api-session-controller', 'host')?.model?.services
+        ?.some(service => service.key === 'sessionController' &&
+          service.types?.some(type => type.name === 'SessionAssistantStreamFrame')) === true
+    } catch {
+      // 可选反射尚未注册时只关闭流能力，不让 welcome 握手随它失败。
+      return false
+    }
+  }
+
   private readonly commandApi: DshCommandApi
   get commands(): CommandsApiLike | undefined {
     if (!this.commandApi.available) return undefined
@@ -126,7 +143,8 @@ export class DshApiProxy implements ApiProxyLike {
       execute: request => this.call(() => this.commandApi.execute(request.payload!.sessionId, request.payload!.line, request.payload!.attachments, request.payload!.expectedDefinitionId)),
       permissions: request => this.call(() => this.commandApi.permissions(request.payload!.sessionId)),
       feedback: request => this.call(() => this.commandApi.feedback(request.payload!.sessionId, request.payload!.text, request.payload!.category)),
-      export: (request, signal) => this.commandApi.export(request.payload!.sessionId, signal),
+      markdownAvailable: this.commandApi.markdownAvailable,
+      export: (request, signal) => this.commandApi.export(request.payload!.sessionId, signal, request.payload!.format),
     }
   }
   private readonly session: SessionControllerLike
@@ -378,6 +396,17 @@ export class DshApiProxy implements ApiProxyLike {
         event: event as MuxFrameLike['event'],
       })
     }) as never, { global: true })
+    // This is an agent-scoped publication with ONE payload argument. Reading
+    // `(session, frame)` here silently loses every real Host stream frame.
+    const offAssistantStream = this.ctx.on('agent/assistant-stream' as never, (({ agent, frame }: {
+      agent: { session: { id: string; header?: { origin?: string } } }; frame: unknown
+    }) => {
+      queue.push({ type: 'session/assistant-stream', sessionId: String(agent.session.id),
+        isSubagent: agent.session.header?.origin === 'subagent', value: frame })
+    }) as never, { global: true })
+    const offAgentDisposed = this.ctx.on('agent/disposed' as never, (({ agent }: {
+      agent: { session: { id: string } }
+    }) => queue.push({ type: 'session/assistant-stream-disposed', sessionId: String(agent.session.id) })) as never, { global: true })
     const projections = this.ctx.get('sessionProjections') as {
       onChanged?(listener: (session: { id: string }, key: string, value: unknown) => void): () => void
     } | undefined
@@ -404,6 +433,8 @@ export class DshApiProxy implements ApiProxyLike {
       yield* queue.iterate()
     } finally {
       offEvent()
+      offAssistantStream()
+      offAgentDisposed()
       offProjection?.()
       offSkills()
       offCommands.forEach(dispose => dispose())

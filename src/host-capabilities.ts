@@ -26,6 +26,17 @@ export type ProbedCapability =
   | 'projectSelection'
   | 'schedules'
   | 'promptQueue'
+  | 'sessionMarkdown'
+  | 'assistantStream'
+  | 'pluginUpdate'
+
+// 自更新服务由宿主可选注入，生命周期与 Bridge 数据源相互独立。按代理实例绑定
+// 就绪探针，避免用「模块被导入」冒充服务已就绪，也不让能力表反向依赖 wire 行表。
+const pluginUpdateProbes = new WeakMap<ApiProxyLike, () => boolean>()
+export function setPluginUpdateProbe(proxy: ApiProxyLike, probe: (() => boolean) | undefined): void {
+  if (probe) pluginUpdateProbes.set(proxy, probe)
+  else pluginUpdateProbes.delete(proxy)
+}
 
 /** 每位一行：Host 上必须存在的依赖。缺失即该位为 false，相关帧回 E_UNSUPPORTED。 */
 export const HOST_CAPABILITY_PROBES: Record<ProbedCapability, (proxy: ApiProxyLike) => boolean> = {
@@ -48,10 +59,18 @@ export const HOST_CAPABILITY_PROBES: Record<ProbedCapability, (proxy: ApiProxyLi
   // 排队快照来自 inbox 投影，增删转向走 session.updateQueue；两者在支持的 DSH
   // 版本里同时提供（DSH_RELEASE_MEMORY 2026-10-24 实测 0.2.0-rc.2），因此只探方法。
   promptQueue: (proxy) => typeof proxy.sessions.updateQueue === 'function',
+  sessionMarkdown: (proxy) => proxy.commands?.markdownAvailable === true && typeof proxy.commands?.export === 'function',
+  assistantStream: (proxy) => proxy.assistantStreamAvailable === true,
+  pluginUpdate: (proxy) => pluginUpdateProbes.get(proxy)?.() === true,
 }
 
 /** 由 Bridge 自身恒真的位（见 BRIDGE_INVARIANT_CAPABILITIES）。 */
 export type BridgeInvariantCapability = (typeof BRIDGE_INVARIANT_CAPABILITIES)[number]
+
+/** 只约束出站瞬时帧的能力，无须用入站请求触发。 */
+export const OUTBOUND_HOST_CAPABILITIES = {
+  assistantStream: 's2c.session.delta',
+} as const
 
 /** 由推送出口就绪状态决定的位（APNs 凭据或中继注册）。 */
 export type OutletCapability = 'push'
@@ -109,6 +128,9 @@ export function capabilityBits(
     projectSelection: HOST_CAPABILITY_PROBES.projectSelection(proxy),
     schedules: HOST_CAPABILITY_PROBES.schedules(proxy),
     promptQueue: HOST_CAPABILITY_PROBES.promptQueue(proxy),
+    sessionMarkdown: HOST_CAPABILITY_PROBES.sessionMarkdown(proxy),
+    assistantStream: HOST_CAPABILITY_PROBES.assistantStream(proxy),
+    pluginUpdate: HOST_CAPABILITY_PROBES.pluginUpdate(proxy),
     push: pushOutlet?.isAvailable() === true,
     widgetPush: true,
     liveActivityPush: true,

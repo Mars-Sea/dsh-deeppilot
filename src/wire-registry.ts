@@ -47,6 +47,9 @@ export type S2CType =
   | 's2c.schedule.updated'
   | 's2c.session.archived'
   | 's2c.session.event'
+  | 's2c.session.delta'
+  | 's2c.plugin.update.status'
+  | 's2c.plugin.update.progress'
   | 's2c.session.forked'
   | 's2c.session.models'
   | 's2c.session.skills'
@@ -103,6 +106,8 @@ export type C2SType =
   | 'c2s.session.permissions'
   | 'c2s.session.feedback'
   | 'c2s.session.export'
+  | 'c2s.plugin.update.check'
+  | 'c2s.plugin.update.apply'
   | 'c2s.session.selectModel'
   | 'c2s.session.delivery'
   | 'c2s.session.sendPrompt'
@@ -200,6 +205,8 @@ export interface WireFrameRow {
   readonly scopes: readonly DeviceScope[]
   readonly widgetPolicy?: WidgetPolicy
   readonly capability?: CapabilityGate
+  /** 只约束某种载荷，门留在 handler（例如同一导出帧的可选 Markdown 格式）。 */
+  readonly conditionalCapabilities?: readonly CapabilityGate[]
   /** PROTOCOL.md 小节名；tests/wire-registry.test.ts 断言其存在。 */
   readonly doc: string
   readonly validate?: (payload: unknown) => CheckedPayload
@@ -299,11 +306,13 @@ import { pushRows } from './wire-push.ts'
 import { scheduleRows } from './wire-schedule.ts'
 import { sessionRows } from './wire-session.ts'
 import { commandRows } from './wire-command.ts'
+import { pluginUpdateRows } from './wire-plugin-update.ts'
 
 /** 全部入站行。装配是静态的：新增特性 module 必须在这里显式出现。 */
 export const WIRE_FRAME_ROWS: readonly WireFrameRow[] = [
   ...sessionRows,
   ...commandRows,
+  ...pluginUpdateRows,
   ...scheduleRows,
   ...interactionRows,
   ...pushRows,

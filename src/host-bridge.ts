@@ -51,6 +51,7 @@ import { capabilityBits } from './host-capabilities.ts'
 import { projectQueue, promptRequestId } from './prompt-queue.ts'
 import { hostFailureOf, wireCodeFor, wireErrorOf, type WireErrorCode } from './wire-errors.ts'
 import { formatLogLine } from './diagnostics.ts'
+import { AssistantStream, type AssistantStreamDelta } from './assistant-stream.ts'
 
 export {
   MAX_MESSAGE_PROJECTION_BYTES,
@@ -114,6 +115,10 @@ export class HostBridge {
    */
   private queues = new Map<string, { items: SessionQueueItem[]; fingerprint: string }>()
   private sinks = new Set<BridgeSink>()
+  private readonly assistantStream = new AssistantStream(
+    payload => this.pushAssistantDelta(payload),
+    sessionId => this.hasStreamViewer(sessionId),
+  )
   private ring: Array<{ seq: number; type: string; payload: unknown }> = []
   private cursor = 0;
   private userReceiptSeq = 0;
@@ -197,6 +202,7 @@ export class HostBridge {
 
   removeSink(sink: BridgeSink): void {
     this.sinks.delete(sink);
+    this.dropSinkSessions(sink);
   }
 
   /** Whether the ring still holds everything after the cursor. */
@@ -219,10 +225,30 @@ export class HostBridge {
 
   markSinkClosed(sink: BridgeSink, sessionId: string): void {
     this.sinkSessions.get(sink)?.delete(sessionId);
+    if (!this.hasStreamViewer(sessionId)) this.assistantStream.clearPending(sessionId);
   }
 
   dropSinkSessions(sink: BridgeSink): void {
+    const sessions = this.sinkSessions.get(sink);
     this.sinkSessions.delete(sink);
+    for (const sessionId of sessions ?? []) {
+      if (!this.hasStreamViewer(sessionId)) this.assistantStream.clearPending(sessionId);
+    }
+  }
+
+  private hasStreamViewer(sessionId: string): boolean {
+    if (this.disposed || this.subagentSessionIds.has(sessionId)) return false;
+    return [...this.sinks].some(sink => this.isViewedBy(sink, sessionId) && sink.canReceive('sessions.read'));
+  }
+
+  /** Instant publications bypass record(): no cursor, ring, notification or push side effect. */
+  private pushAssistantDelta(payload: AssistantStreamDelta): void {
+    if (this.disposed || this.subagentSessionIds.has(payload.sessionId)) return;
+    for (const sink of this.sinks) {
+      if (this.isViewedBy(sink, payload.sessionId) && sink.canReceive('sessions.read')) {
+        sink.push('s2c.session.delta', payload);
+      }
+    }
   }
 
   private isViewedBy(sink: BridgeSink, sessionId: string): boolean {
@@ -391,6 +417,7 @@ export class HostBridge {
     if (this.disposed) return
     this.disposed = true
     this.abort.abort();
+    this.assistantStream.dispose();
     this.sinks.clear();
     this.sinkSessions.clear();
     this.pushOutlet = undefined;
@@ -415,6 +442,8 @@ export class HostBridge {
       }
     } catch {
       // ditto
+    } finally {
+      this.assistantStream.dispose();
     }
   }
 
@@ -460,12 +489,30 @@ export class HostBridge {
       case 'commands/changed':
         this.record('s2c.commands.changed', {})
         break;
+      case 'session/assistant-stream': {
+        const sessionId = String(frame.sessionId ?? '');
+        if (frame.isSubagent === true) this.subagentSessionIds.add(sessionId);
+        if (this.subagentSessionIds.has(sessionId)) {
+          this.assistantStream.abandon(sessionId);
+          break;
+        }
+        this.assistantStream.accept(sessionId, frame.value);
+        break;
+      }
+      case 'session/assistant-stream-disposed':
+        this.assistantStream.abandon(String(frame.sessionId ?? ''));
+        break;
       case 'session/event': {
         const event = frame.event as SessionEventLike | undefined;
         const sessionId = String(frame.sessionId ?? '');
         if (!event || !sessionId) break;
         if (frame.isSubagent === true) this.subagentSessionIds.add(sessionId);
-        if (this.subagentSessionIds.has(sessionId)) break;
+        if (this.subagentSessionIds.has(sessionId)) {
+          this.assistantStream.abandon(sessionId);
+          break;
+        }
+        const streamId = this.assistantStream.beforeEvent(sessionId, event);
+        if (event.type === 'turn/end') this.assistantStream.abandon(sessionId);
         if (event.type === 'agent-preset/selected') {
           this.record('s2c.skills.changed', { sessionId });
         }
@@ -474,7 +521,8 @@ export class HostBridge {
         const projection = projectEvent(sessionId, event);
         this.captureActivity(sessionId, event, projection?.data.tool as { name?: string; summary?: string } | undefined);
         if (projection) {
-          this.record('s2c.session.event', { sessionId, kind: projection.kind, seq: event.seq, data: projection.data });
+          this.record('s2c.session.event', { sessionId, kind: projection.kind, seq: event.seq,
+            data: { ...projection.data, ...(streamId && projection.kind === 'message.final' ? { streamId } : {}) } });
         }
         if (projection?.kind === 'turn.end') {
           this.emitTurnCompletedNotify(sessionId, projection.data.ok === true);
@@ -975,10 +1023,10 @@ export class HostBridge {
     }
   }
 
-  async exportSession(sessionId: string, signal: AbortSignal): Promise<Response> {
+  async exportSession(sessionId: string, signal: AbortSignal, format?: import('./protocol.ts').SessionExportFormat): Promise<Response> {
     const api = this.apiProxy.commands
     if (!api) throw Object.assign(new Error('当前主机不支持日志导出'), { code: 'command/export-unsupported' })
-    return api.export({ rpcId: randomUUID(), payload: { sessionId } }, signal)
+    return api.export({ rpcId: randomUUID(), payload: { sessionId, ...(format === undefined ? {} : { format }) } }, signal)
   }
 
   /** 由会话目录决定技能可见性；不读取正文，也不把本机路径发给移动端。 */

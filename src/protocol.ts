@@ -68,6 +68,83 @@ export type PushDelivery = PushNotification | WidgetPushNotification | LiveActiv
 export interface SessionOpenPayload { sessionId: string; tailCount?: number }
 export interface SessionClosePayload { sessionId: string }
 export interface SessionHistoryPayload { sessionId: string; beforeSeq: number; limit: number }
+/**
+ * `format` 缺省为 `zip`，与扩展出现前的行为逐字节相同；`markdown` 需要
+ * `welcome.capabilities.sessionMarkdown`，否则 Bridge 回 E_UNSUPPORTED。
+ * 不认识该字段的旧 Bridge 会忽略它并照常返回 ZIP，所以客户端必须先看能力位。
+ */
+export type SessionExportFormat = 'zip' | 'markdown'
+export interface SessionExportPayload { sessionId: string; format?: SessionExportFormat }
+
+/**
+ * 瞬时流式增量：不占 seq、不进重放环、断线不补发。与 `s2c.session.event`
+ * 的 message.delta/thinking.delta 是两套语义——后者投影持久事件并占重放序号。
+ */
+export type SessionDeltaKind = 'stream.start' | 'message.delta' | 'thinking.delta' | 'stream.end'
+export type SessionStreamOutcome =
+  | { kind: 'committed'; eventType: 'assistant/message' | 'assistant/attempt'; seq: number }
+  | { kind: 'abandoned' }
+export interface SessionDeltaPayload {
+  sessionId: string
+  streamId: string
+  kind: SessionDeltaKind
+  /** 生命周期帧为 ''；文字帧为本窗口内有序拼接的增量。 */
+  text: string
+  ts: number
+  truncated?: boolean
+  outcome?: SessionStreamOutcome
+}
+
+/** 插件自更新的阶段；rolled-back 表示宿主已自动装回旧版本。 */
+export type PluginUpdatePhase =
+  | 'preparing'
+  | 'installing'
+  | 'verifying'
+  | 'restart-required'
+  | 'done'
+  | 'rolled-back'
+  | 'failed'
+
+/** 重启安全日志：保留最近一次结果，供热替换断线后的客户端核对；新请求覆盖。 */
+export interface PluginUpdateJournal {
+  clientRequestId: string
+  fromVersion: string
+  toVersion: string
+  phase: PluginUpdatePhase
+  startedAt: number
+  message?: string
+}
+
+export interface PluginUpdateVersionEntry {
+  version: string
+  /** 宿主对 DSH 兼容性的判断（listVersions 给出）。 */
+  compatible: boolean
+  /** 目标包 package.json 的 deepPilot.protocolVersion；缺失则该版本不可选。 */
+  protocolVersion?: number
+}
+
+export interface PluginUpdateStatusPayload {
+  currentVersion: string
+  protocolVersion: number
+  latestVersion: string | null
+  updateAvailable: boolean
+  compatible: boolean
+  protocolCompatible: boolean
+  versions: PluginUpdateVersionEntry[]
+  checkedAt: number
+  /** 读取失败时的人类可读原因；离线是常态，不抛错。 */
+  reason?: string
+  journal?: PluginUpdateJournal
+}
+
+export interface PluginUpdateApplyPayload { version: string; clientRequestId: string }
+
+export interface PluginUpdateProgressPayload {
+  clientRequestId: string
+  phase: PluginUpdatePhase
+  percent?: number
+  message?: string
+}
 export interface SessionModelsRequestPayload { sessionId: string }
 export interface SessionSelectModelPayload extends ModelSelection { sessionId: string }
 export interface SessionRenamePayload { sessionId: string; title: string }
@@ -223,6 +300,17 @@ export interface WelcomeCapabilities {
    * sessions accept mode:"steer", s2c.session.queue snapshots are pushed and
    * c2s.session.queue.update is served. Absent ⇒ running sessions only stop. */
   promptQueue?: boolean
+  /** Bridge pushes s2c.session.delta while a turn runs: transient assistant and
+   * reasoning increments that never occupy a replay seq. Absent ⇒ the client
+   * keeps the old "text appears when the step lands" rendering. */
+  assistantStream?: boolean
+  /** Bridge serves c2s.session.export with format:"markdown" (the host's
+   * /api/session.markdown route). Absent ⇒ only the ZIP archive is available. */
+  sessionMarkdown?: boolean
+  /** Bridge serves c2s.plugin.update.check / c2s.plugin.update.apply, letting
+   * the phone replace this plugin with a published version. Absent ⇒ the phone
+   * can only link out to npm. */
+  pluginUpdate?: boolean
 }
 
 export interface WelcomePayload {
@@ -468,6 +556,8 @@ export type SessionEventKind =
   | 'error'
 
 export interface SessionEventData {
+  /** 正式 assistant 消息关联的瞬时流；客户端用其替换相同流的临时行。 */
+  streamId?: string
   text?: string
   ok?: boolean
   /** tool.end only: host invocation id pairing the result with its call row. */

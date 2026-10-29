@@ -244,6 +244,12 @@ interface PermissionCatalog {
 }
 //#endregion
 //#region src/protocol.d.ts
+/**
+ * `format` 缺省为 `zip`，与扩展出现前的行为逐字节相同；`markdown` 需要
+ * `welcome.capabilities.sessionMarkdown`，否则 Bridge 回 E_UNSUPPORTED。
+ * 不认识该字段的旧 Bridge 会忽略它并照常返回 ZIP，所以客户端必须先看能力位。
+ */
+type SessionExportFormat = 'zip' | 'markdown';
 interface WelcomeCapabilities {
   /** 会话命令目录、执行、权限与原生日志导出入口。缺省不支持。 */
   commands?: boolean;
@@ -281,6 +287,17 @@ interface WelcomeCapabilities {
    * sessions accept mode:"steer", s2c.session.queue snapshots are pushed and
    * c2s.session.queue.update is served. Absent ⇒ running sessions only stop. */
   promptQueue?: boolean;
+  /** Bridge pushes s2c.session.delta while a turn runs: transient assistant and
+   * reasoning increments that never occupy a replay seq. Absent ⇒ the client
+   * keeps the old "text appears when the step lands" rendering. */
+  assistantStream?: boolean;
+  /** Bridge serves c2s.session.export with format:"markdown" (the host's
+   * /api/session.markdown route). Absent ⇒ only the ZIP archive is available. */
+  sessionMarkdown?: boolean;
+  /** Bridge serves c2s.plugin.update.check / c2s.plugin.update.apply, letting
+   * the phone replace this plugin with a published version. Absent ⇒ the phone
+   * can only link out to npm. */
+  pluginUpdate?: boolean;
 }
 type SessionStatus = "running" | "idle" | "error" | "unknown";
 /**
@@ -467,8 +484,10 @@ interface CommandsApiLike {
     text: string;
     category?: string;
   }>): Promise<RpcResponseLike<void>>;
+  readonly markdownAvailable?: boolean;
   export(req: RpcRequestLike<{
     sessionId: string;
+    format?: SessionExportFormat;
   }>, signal: AbortSignal): Promise<Response>;
 }
 interface RpcOk<T> {
@@ -829,6 +848,8 @@ interface ApiStreamItemLike {
   payload: MuxFrameLike;
 }
 interface ApiProxyLike {
+  /** 真实宿主反射声明了助手流帧时才为 true；旧代理缺省关闭。 */
+  readonly assistantStreamAvailable?: boolean;
   commands?: CommandsApiLike;
   sessions: SessionsApiLike;
   workspace?: WorkspaceApiLike;
@@ -942,6 +963,7 @@ declare class HostBridge {
    */
   private queues;
   private sinks;
+  private readonly assistantStream;
   private ring;
   private cursor;
   private userReceiptSeq;
@@ -982,6 +1004,9 @@ declare class HostBridge {
   markSinkOpen(sink: BridgeSink, sessionId: string): void;
   markSinkClosed(sink: BridgeSink, sessionId: string): void;
   dropSinkSessions(sink: BridgeSink): void;
+  private hasStreamViewer;
+  /** Instant publications bypass record(): no cursor, ring, notification or push side effect. */
+  private pushAssistantDelta;
   private isViewedBy;
   /** F-9: when a notification-worthy event fires, mirror it to every
    *  online device that is not currently viewing the session (the s2c.notify
@@ -1076,7 +1101,7 @@ declare class HostBridge {
     data: string;
   } | null>;
   commandOperation(operation: 'list' | 'execute' | 'permissions' | 'feedback', payload: Record<string, unknown>): Promise<SessionManagementResult<unknown>>;
-  exportSession(sessionId: string, signal: AbortSignal): Promise<Response>;
+  exportSession(sessionId: string, signal: AbortSignal, format?: SessionExportFormat): Promise<Response>;
   /** 由会话目录决定技能可见性；不读取正文，也不把本机路径发给移动端。 */
   sessionSkills(sessionId: string): Promise<SessionManagementResult<{
     skills: SkillSummary[];

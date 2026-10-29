@@ -15,6 +15,7 @@ import {
   BRIDGE_INVARIANT_CAPABILITIES,
   HANDLER_GATED_CAPABILITIES,
   HOST_CAPABILITY_PROBES,
+  OUTBOUND_HOST_CAPABILITIES,
 } from '../src/host-capabilities.ts'
 import { ERROR_CODES, pendingResponseErrorCode } from '../src/wire-errors.ts'
 import { WIRE_FRAME_ROWS, registryRowFor } from '../src/wire-registry.ts'
@@ -48,20 +49,24 @@ test('每行都声明阶段、scope 合法性、widget 策略与文档锚点', (
 test('每行引用的能力位都真实存在', () => {
   const probed = new Set(Object.keys(HOST_CAPABILITY_PROBES))
   for (const row of WIRE_FRAME_ROWS) {
-    if (row.capability === undefined) continue
-    const known = probed.has(row.capability) ||
-      row.capability === 'push' ||
-      (BRIDGE_INVARIANT_CAPABILITIES as readonly string[]).includes(row.capability)
-    assert.ok(known, `${row.type} gates unknown capability ${row.capability}`)
+    for (const bit of [row.capability, ...(row.conditionalCapabilities ?? [])]) {
+      if (bit === undefined) continue
+      const known = probed.has(bit) || bit === 'push' ||
+        (BRIDGE_INVARIANT_CAPABILITIES as readonly string[]).includes(bit)
+      assert.ok(known, `${row.type} gates unknown capability ${bit}`)
+    }
   }
 })
 
-test('每个宿主探测位至少被一行引用，否则探测是死重量', () => {
-  // Bridge 恒真位（BRIDGE_INVARIANT_CAPABILITIES）是对客户端的声明，不绑定具体帧；
-  // 从 Host 探测出来的位若没有帧引用，说明探测白做了。
-  const gated = new Set(WIRE_FRAME_ROWS.map((row) => row.capability).filter((c) => c !== undefined))
+test('宿主探测位都绑定入站能力门、载荷能力门或出站帧', () => {
+  const gated = new Set(WIRE_FRAME_ROWS.flatMap(row =>
+    [row.capability, ...(row.conditionalCapabilities ?? [])]).filter(c => c !== undefined))
+  // 纯推送流不需要入站帧；导出格式共享一条入站行，由 handler 按格式施加门禁。
+  const outgoing = new Map(Object.entries(OUTBOUND_HOST_CAPABILITIES))
   for (const bit of Object.keys(HOST_CAPABILITY_PROBES)) {
-    assert.ok(gated.has(bit as never), `host-probed capability ${bit} gates no frame`)
+    assert.ok(gated.has(bit as never) || outgoing.has(bit), `host-probed capability ${bit} gates no wire path`)
+    const type = outgoing.get(bit)
+    if (type) assert.ok(PROTOCOL.includes(type), `${type} must be documented`)
   }
   for (const bit of HANDLER_GATED_CAPABILITIES) {
     assert.ok(!gated.has(bit as never), 'push 的门在 handler 内（注册先于就绪），不应出现在行上')

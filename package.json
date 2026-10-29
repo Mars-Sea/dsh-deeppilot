@@ -34,6 +34,9 @@
     "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
+  "deepPilot": {
+    "protocolVersion": 2
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -61,6 +64,7 @@
     "SKILL.md",
     "SECURITY.md",
     "docs/DSH_RELEASE_MEMORY.md",
+    "docs/DSH_022_FEATURES.md",
     "docs/NPM_PUBLISHING.md",
     "docs/SECURITY_ROADMAP.md",
     "docs/SECURITY_ROADMAP.zh-CN.md",

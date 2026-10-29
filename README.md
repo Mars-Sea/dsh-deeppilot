@@ -19,6 +19,13 @@ Host on your own computer and does not replace or modify the DSH Web UI.
 ## What you get
 
 - Browse projects, sessions, history, and live agent output from iPhone.
+- Stream assistant text and reasoning while viewing a session; reconnects recover
+  the durable history rather than treating partial output as a completed answer.
+- Export a full ZIP log archive, or share the conversation body as Markdown when
+  the Host provides that optional route.
+- Check plugin updates from the app and install an explicitly confirmed compatible
+  version. The Host handles hot replacement and rollback; without hot reload the
+  app reports that a DSH restart is required.
 - Send prompts, switch models, create sessions, and answer approvals/questions.
 - Pair with a five-minute single-use code and a per-device P-256 key; physical
   iPhones keep the private key in Secure Enclave.

@@ -1,6 +1,7 @@
 import { isText, payloadObject, reject, type CheckedPayload, type WireFrameRow } from './wire-registry.ts'
 import { hostFailureOf, wireErrorOf } from './wire-errors.ts'
 import type { CommandAttachment } from './command-api.ts'
+import type { SessionExportFormat } from './protocol.ts'
 
 function sessionPayload(value: unknown): CheckedPayload {
   const result = payloadObject(value)
@@ -42,13 +43,24 @@ export const commandRows: readonly WireFrameRow[] = [
   })),
   {
     type: 'c2s.session.export', stage: 'authenticated', scopes: ['sessions.read'], capability: 'commands',
-    doc: 'PROTOCOL.md c2s.session.export', validate: sessionPayload,
+    conditionalCapabilities: ['sessionMarkdown'],
+    doc: 'PROTOCOL.md c2s.session.export',
+    validate: value => {
+      const result = sessionPayload(value)
+      if (!result.ok) return result
+      if (result.value.format !== undefined && result.value.format !== 'zip' && result.value.format !== 'markdown') return reject('E_PROTOCOL', '导出格式无效')
+      return result
+    },
     handle: async (ctx, payload) => {
+      const format = payload.format as SessionExportFormat | undefined
+      if (format === 'markdown' && ctx.bridge.capabilities.sessionMarkdown !== true) return ctx.fail('E_UNSUPPORTED', '当前主机不支持导出对话正文')
       const signal = AbortSignal.any([ctx.signal ?? new AbortController().signal, AbortSignal.timeout(10 * 60_000)])
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
       const cancel = () => { void reader?.cancel().catch(() => {}) }
       try {
-        const response = await ctx.bridge.exportSession(payload.sessionId as string, signal)
+        const response = format === undefined
+          ? await ctx.bridge.exportSession(payload.sessionId as string, signal)
+          : await ctx.bridge.exportSession(payload.sessionId as string, signal, format)
         reader = response.body!.getReader()
         signal.addEventListener('abort', cancel, { once: true })
         let index = 0, bytes = 0
@@ -64,7 +76,9 @@ export const commandRows: readonly WireFrameRow[] = [
           }
         }
         signal.throwIfAborted()
-        ctx.send('s2c.ack', { sessionId: payload.sessionId, fileName: 'dsh-session-log.zip', chunks: index, bytes })
+        // 缺省格式的旧客户端按原回执结束；显式选择格式才附媒体类型，避免改变旧帧字节。
+        ctx.send('s2c.ack', { sessionId: payload.sessionId, fileName: format === 'markdown' ? 'dsh-session.md' : 'dsh-session-log.zip', chunks: index, bytes,
+          ...(format === undefined ? {} : { mediaType: format === 'markdown' ? 'text/markdown; charset=utf-8' : 'application/zip' }) })
       } catch (error) {
         // 归档失败不止一种：主机没生成归档、内容类型不符、十分钟超时，或者本次
         // 连接断开。此前这里统一成一句「请重试」，把主机给的真实原因也一并吞掉；

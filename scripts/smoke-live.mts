@@ -674,7 +674,17 @@ async function runCommands(): Promise<void> {
     const fields = { ...cp, deviceId: identity.deviceId, deviceName: 'Smoke Harness', appVersion: 'smoke' }
     const welcome = client.waitForPush(f => f.type === 's2c.welcome')
     client.send('c2s.auth.prove', { ...fields, signature: signProof(fields, identity) })
-    assert('指令能力已启用', (await welcome).payload?.capabilities?.commands === true, '真实 WSS 鉴权')
+    const capabilities = (await welcome).payload?.capabilities
+    assert('指令能力已启用', capabilities?.commands === true, '真实 WSS 鉴权')
+    if (process.env.SMOKE_REQUIRE_FEATURES === '1') {
+      for (const bit of ['assistantStream', 'sessionMarkdown', 'pluginUpdate']) {
+        assert('新版宿主能力 ' + bit, capabilities?.[bit] === true, '本轮三项能力必须全部就绪')
+      }
+    }
+    if (capabilities?.pluginUpdate === true) {
+      const status = expect(await client.request('c2s.plugin.update.check', {}, 120_000), 's2c.plugin.update.status').payload
+      assert('自更新检查真实宿主接线可用', status.protocolVersion === 2 && typeof status.currentVersion === 'string' && Array.isArray(status.versions), '只查询，不发送 apply')
+    }
     const workspace = join(DSH_HOME, 'command-workspace')
     mkdirSync(workspace, { recursive: true })
     // 技能的项目根以最近 .git 为界；隔离目录不能继承外层插件仓库。
@@ -717,10 +727,21 @@ async function runCommands(): Promise<void> {
     assert('不支持附件的指令拒绝上传', rejectedAttachment.type === 's2c.error', '压缩附件被拒绝')
     // 先产生完整已结束轮次，再通过官方压缩服务压缩；模型只返回本机固定文本。
     for (let i = 0; i < 5; i++) {
+      const receivedBefore = client.received.length
       const end = client.waitForPush(f => f.type === 's2c.session.event' && f.payload?.sessionId === sessionId && f.payload?.kind === 'turn.end', 120_000)
       const receipt = expect(await client.request('c2s.session.sendPrompt', { sessionId, text: `合成历史第${i}轮：` + 'synthetic context for command acceptance. '.repeat(2300), clientSendId: `${Date.now()}-${randomUUID()}` }, 120_000), 's2c.ack').payload
       if (receipt.status === 'rejected') throw new StepError('合成输入被主机拒绝：' + receipt.code)
       await end
+      if (i === 0 && capabilities?.assistantStream === true) {
+        const turnFrames = client.received.slice(receivedBefore)
+        const deltas = turnFrames.filter(frame => frame.type === 's2c.session.delta' && frame.payload?.sessionId === sessionId)
+        const text = deltas.find(frame => frame.payload.kind === 'message.delta')
+        const final = turnFrames.find(frame => frame.type === 's2c.session.event' && frame.payload?.kind === 'message.final' && frame.payload?.data?.streamId === text?.payload.streamId)
+        const settled = deltas.find(frame => frame.payload.kind === 'stream.end')
+        if (process.env.SMOKE_TRACE_STREAM === '1') writeFileSync(join(DSH_HOME, 'stream-frame-summary.json'), JSON.stringify(turnFrames.map(frame => ({ type: frame.type, seq: frame.seq, kind: frame.payload?.kind, streamId: frame.payload?.streamId ?? frame.payload?.data?.streamId, outcome: frame.payload?.outcome })), null, 2))
+        assert('实时文字先于正式消息且没有重放序号', !!text && !!final && turnFrames.indexOf(text) < turnFrames.indexOf(final) && deltas.every(frame => frame.seq === undefined), `瞬时帧${deltas.length}，正文${!!text}，正式消息${!!final}`)
+        assert('流生命周期与正式事件精确关联', !!text && deltas[0]?.payload.kind === 'stream.start' && final?.payload.data.streamId === text.payload.streamId && settled?.payload.outcome?.kind === 'committed' && settled.payload.outcome.seq === final?.payload.seq, 'start → delta → final → committed end')
+      }
     }
     const compacted = await command('/compact')
     assert('官方压缩完成并产生摘要事件', compacted.kind === 'success' && Number.isSafeInteger(compacted.sourceEventSeq) && /^Compacted /.test(compacted.text ?? ''), String(compacted.text))
@@ -733,7 +754,7 @@ async function runCommands(): Promise<void> {
     await planEnd
     assert('退出计划模式可执行', (await command('/plan off')).kind === 'success', '真实计划服务')
     const fork = expect(await client.request('c2s.session.fork', { sessionId, clientRequestId: `${Date.now()}-${randomUUID()}` }), 's2c.session.forked').payload
-    assert('生成待导出的子会话', typeof fork.sessionId === 'string', '仅合成会话')
+    assert('生成独立分叉会话', typeof fork.sessionId === 'string', '仅合成会话；独立 fork 不等于 subagent')
     const chunks: Buffer[] = []
     const archive = expect(await client.request('c2s.session.export', { sessionId }, 120_000, frame => {
       if (frame.payload.index !== chunks.length) throw new StepError('日志块序号不连续')
@@ -747,12 +768,22 @@ async function runCommands(): Promise<void> {
     const paths = execFileSync('unzip', ['-Z1', zipPath], { encoding: 'utf8' })
     const contents = execFileSync('unzip', ['-p', zipPath], { maxBuffer: 32 * 1024 * 1024 }).toString('utf8')
     // 官方根日志使用固定文件名；只有子会话目录带会话编号。
-    assert('官方 ZIP 完整解包且含子会话', /^session(?:\.v\d+)?\.jsonl$/m.test(paths) && paths.includes(`subagents/${fork.sessionId}/`), `${paths.trim().split('\n').length} 个文件`)
+    assert('官方 ZIP 完整解包且含根会话', /^session(?:\.v\d+)?\.jsonl$/m.test(paths), `${paths.trim().split('\n').length} 个文件；独立 fork 不要求收入 subagents`)
     const rootLog = execFileSync('unzip', ['-p', zipPath, paths.split('\n').find(path => /^session(?:\.v\d+)?\.jsonl$/.test(path))!], { maxBuffer: 32 * 1024 * 1024 }).toString('utf8')
     const feedback = rootLog.trim().split('\n').map(line => JSON.parse(line)).filter(row => row.type === 'feedback/record')
     assert('七类反馈已写入日志', categories.every(c => feedback.some(row => row.data?.category === c && row.data?.text === 'command-smoke-' + c)), '核对 feedback/record 事件')
     assert('导出包含文档正文附件', contents.includes('command-smoke-attachment-body'), '官方附件归档')
     assert('被拒附件未进入归档', !contents.includes('must-not-upload') && !paths.includes('rejected'), '附件准入先于上传')
+    if (capabilities?.sessionMarkdown === true) {
+      const bodyChunks: Buffer[] = []
+      const receipt = expect(await client.request('c2s.session.export', { sessionId, format: 'markdown' }, 120_000, frame => {
+        if (frame.payload.index !== bodyChunks.length) throw new StepError('Markdown 块序号不连续')
+        bodyChunks.push(Buffer.from(frame.payload.data, 'base64'))
+      }), 's2c.ack').payload
+      const markdown = Buffer.concat(bodyChunks)
+      assert('官方 Markdown 正文与格式回执匹配', receipt.mediaType === 'text/markdown; charset=utf-8' && receipt.fileName === 'dsh-session.md' && receipt.bytes === markdown.length && receipt.chunks === bodyChunks.length && markdown.toString('utf8').includes('合成会话验收完成') && markdown.subarray(0, 2).toString() !== 'PK', `${bodyChunks.length} 块，${markdown.length} 字节`)
+      writeFileSync(join(DSH_HOME, 'command-smoke-conversation.md'), markdown)
+    }
     console.log('归档证据：' + zipPath)
   } finally { client.close() }
 }

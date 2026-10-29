@@ -7,6 +7,15 @@ export const inject = ['deeppilotReport']
 export function apply(ctx) {
   if (process.env.DEEPPILOT_COMMAND_SMOKE !== '1') throw new Error('仅允许在显式启用的隔离验收主机挂载')
   let requests = 0
+  if (process.env.COMMAND_SMOKE_TRACE_STREAM === '1') {
+    ctx.on('agent/assistant-stream', ({ agent, frame }) => {
+      console.log('[command-smoke] stream shape ' + JSON.stringify({
+        sessionId: agent?.session?.id, type: frame?.type, attemptIdType: typeof frame?.attemptId,
+        revision: frame?.revision, index: frame?.index, timeType: typeof frame?.time,
+        chunkType: frame?.chunk?.type, textType: typeof frame?.chunk?.text,
+      }))
+    }, { global: true })
+  }
   const model = http.createServer(async (req, res) => {
     if (req.url !== '/v1/chat/completions') { res.writeHead(404); res.end(); return }
     try {
@@ -16,8 +25,15 @@ export function apply(ctx) {
       const base = { id: `chatcmpl-smoke-${++requests}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: body.model }
       const content = '合成会话验收完成。用户仅要求检查移动端指令和缓存。此前已读取测试附件并记录结果；没有待执行工具或外部操作。保留这段背景作为后续会话摘要。'
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-      for (const choice of [{ delta: { role: 'assistant', content }, finish_reason: null }, { delta: {}, finish_reason: 'stop' }]) {
+      const choices = [
+        { delta: { role: 'assistant', content: content.slice(0, 24) }, finish_reason: null },
+        { delta: { content: content.slice(24) }, finish_reason: null },
+        { delta: {}, finish_reason: 'stop' },
+      ]
+      for (const choice of choices) {
         res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, ...choice }] }) + '\n\n')
+        // 跨过桥接合并窗口，证明手机能在最终落盘之前收到文字。
+        await new Promise(resolve => setTimeout(resolve, 60))
       }
       res.write('data: ' + JSON.stringify({ ...base, choices: [], usage: { prompt_tokens: 150, completion_tokens: 50, total_tokens: 200 } }) + '\n\n')
       res.end('data: [DONE]\n\n')

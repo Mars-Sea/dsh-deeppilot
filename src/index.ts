@@ -25,6 +25,9 @@ import {
 import type { RemoteStatus } from './remote-supervisor.ts'
 import { localLANIPv4Addresses } from './local-address.ts'
 import { UpdateChecker, type UpdateInfo } from './update-check.ts'
+import { PluginUpdater, supportsPluginUpdate } from './plugin-update.ts'
+import { setPluginUpdater } from './wire-plugin-update.ts'
+import { setPluginUpdateProbe } from './host-capabilities.ts'
 import { normalizeOptions } from './config.ts'
 import type { Config } from './config.ts'
 import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
@@ -382,6 +385,24 @@ export function apply(ctx: Context, options: unknown): void {
     return updated
   }, () => pushGateway.relayTest(), () => pushGateway.selfTest())
   const state: { bridge?: HostBridge } = {}
+  let pluginUpdater: PluginUpdater | undefined
+  // Optional injection preserves old hosts. Capture a host-owned manager; the
+  // running package operation deliberately outlives this plugin's HMR unload.
+  ;(ctx as unknown as { inject: (deps: string[], fn: (sub: unknown) => void) => void }).inject(
+    ['pluginManager'],
+    (sub) => {
+      const manager = (sub as { pluginManager?: unknown }).pluginManager
+      if (!supportsPluginUpdate(manager)) return
+      const updater = new PluginUpdater({ manager, currentVersion: SERVER_VERSION, journalPath: join(dataDir, 'update-journal.json') })
+      pluginUpdater = updater
+      if (state.bridge) setPluginUpdater(state.bridge, updater)
+      ;(sub as SubContext).effect(() => () => {
+        if (pluginUpdater !== updater) return
+        pluginUpdater = undefined
+        if (state.bridge) setPluginUpdater(state.bridge, undefined)
+      }, 'deeppilot: optional plugin updater')
+    },
+  )
   let pendingUpgrades = 0
   const authRateLimiter = new AuthRateLimiter()
 
@@ -742,6 +763,7 @@ export function apply(ctx: Context, options: unknown): void {
         log('DSH session bridge unavailable: ' + String(error), 'warn')
         return
       }
+      setPluginUpdateProbe(proxy, () => pluginUpdater !== undefined)
       const bridge = new HostBridge(
         proxy,
         cfg.historyBufferMax,
@@ -751,6 +773,7 @@ export function apply(ctx: Context, options: unknown): void {
         log,
       )
       bridge.setPushOutlet(pushGateway)
+      setPluginUpdater(bridge, pluginUpdater)
       state.bridge = bridge
       bridge.start()
       log('data plane active (mux + host streams)')

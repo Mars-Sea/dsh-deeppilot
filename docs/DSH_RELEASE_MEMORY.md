@@ -91,6 +91,26 @@
   the 19 declared peers. The plugin's own `engines.node` stays `>=22`; a `0.2.2`
   host simply cannot run on Node below 24.9.
 
+### Three optional capabilities verified in the same pass (2026-10-29)
+
+- **alpha.2 isolated host:** 32/32 checks, including `assistantStream`,
+  `sessionMarkdown` and `pluginUpdate` all advertised. A synthetic turn produced
+  `stream.start` → `message.delta` → matching `message.final` (`data.streamId`)
+  → committed `stream.end`; Markdown export returned 10 chunks / 484,669 bytes
+  with `text/markdown; charset=utf-8`; update `check` answered without ever
+  sending `apply`.
+- **rc.4 isolated host:** 27/27 checks. `assistantStream=true`, while
+  `sessionMarkdown` and `pluginUpdate` correctly stay false: rc.4's
+  `dsh-session-log-export` has no `session.markdown` route and its
+  `dsh-plugin-manager` exposes neither `listVersions` nor `updateBundle`.
+  The old ZIP path and old-client behaviour are unchanged.
+- **Automated:** plugin `npm test` 679 tests (677 pass, 1 intentional TODO,
+  1 env-gated real-host comparison; the comparison passes 21/21 with
+  `DSH_ALPHA2_PLUGIN_MANAGER` set). iOS offline suite 513 tests, 0 failures,
+  2 skips. Both committed trees build.
+- **Not covered:** no real iPhone, no system share sheet, no real npm install
+  through `updateBundle`/HMR rollback, no Funnel. Those remain manual gates.
+
 ### `dsh-v0.2.1-rc.4`, audited in the same pass
 
 - **Audited release:** `dsh-v0.2.1-rc.4`, published 2026-10-28T02:49:58Z, the
