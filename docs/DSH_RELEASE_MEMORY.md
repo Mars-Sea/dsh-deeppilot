@@ -2187,3 +2187,13 @@ release notes.
 2. 手机协议：模型当前选择投影新增 `s2c.models.changed`，受 `sessions.read` 控制；原生权限执行可附加 `expectedDefinitionId`，重读目录核对来源，旧客户端字段缺省兼容。无新增周期轮询或第二层主机时间缓存。
 3. 客户端：内存五分钟、磁盘最长七天，重启旧目录先展示并校验，按配对身份/主机/会话隔离；当前模型、权限和执行结果不落盘。具体约定和格式重建见[移动端目录缓存](移动端目录缓存.md)。
 4. 验证：插件 577 项通过、1 项原有待办，类型检查、生成产物构建和使用本机固定版本的离线配置校验通过；两端缓存单元与模拟器证据见各自文档。随 0.9.8（2026-10-18）发布；真机与系统分享仍未验收。
+
+## 2026-10-30 — 发布 `dsh-deeppilot@0.9.13`
+
+- **版本收口。** `0.9.12` 的版本提交 `a5a6f59` 曾落在 `main`，但从未打 tag、上传 npm 或建 GitHub Release；本次在 `0.9.11` 之上统一收口为 `0.9.13`：八版白名单（新增 `0.2.1-rc.4` 与 `0.2.2-alpha.2`，`SessionController.inspect` 缺失时 `sessions.history` 走 `page`）、运行中排队与转向、Markdown 导出、实时流式增量、插件自更新、设置页重设计，以及 helper 上报内嵌 Tailscale 版本后的六平台 `bin/` 重建。
+- **安装面。** `engines.dsh` 与十条 `dsh-*` peer 枚举八个精确版本；vendor peer 追加 `cordis ~4.0.6-alpha.1` / `schemastery ~3.18.6-alpha.1`；无配置字段变化。审计与隔离宿主证据见 `.alpha2-verify/`、`.rc4-verify/`（`0.2.1-rc.4` 27/27、`0.2.2-alpha.2` 32/32）。
+- **本地校验（发布工作树）。** `npm ci`；`npm test` 679 项（677 通过、1 项环境门禁跳过、1 项有意 TODO、0 失败）；`typecheck`；`build`（`lib/` 无变化）；`check:config-schema`（0.2.0-rc.2 CLI）；`smoke:helper`（darwin-arm64）；`go test ./...`；`bin/SHA256SUMS` 6/6；六平台 helper 重建后 `bin/` 无漂移；`npm pack` 69 项、51,405,933 字节。
+- **发布。** 发布提交 `0107efb584be4031af7279eb9f6cdf4404189081`，附注标签 `v0.9.13`；CI `40910195877` 与 CodeQL `40910195831` 绿色。`publish.yml` 首次运行 `40911590022` 的上传与来源证明步骤成功，但末尾核对在 24 次重试后仍 404，整次运行标红；重跑 `40918429580` 在发布步骤报 `E409 Cannot publish over previously staged version "0.9.13"`，由此确认**当前可信发布者绑定只允许暂存发布**：版本进入 npm staged 区，需维护者 2FA 批准后才公开。维护者批准后，注册表 `latest = 0.9.13`。
+- **发布后核验。** 来源证明类型 `https://slsa.dev/provenance/v1`，`gitCommit` 为发布提交，工作流引用 `refs/tags/v0.9.13`，invocation 为 `40911590022`；tarball SHA1 `ca2c754e3421cddd14a795c5b4d869c5ea4b3cf9`、SHA512 与注册表一致，69 个条目、解包 131,263,175 字节。全新隔离 `DSH_HOME`（`/tmp/dsh-verify-0913`，pnpm 从 npm 安装，不是 link）在真实 `0.2.2-alpha.2` 宿主上启动，`https://127.0.0.1:3098/phone/health` 返回 200，`serverVersion` 为 `0.9.13`、`dataPlane: true`；GitHub Release 在这一步通过后才公开并标记 Latest。
+- **流程变更。** 用户决定保留暂存流程；批准步骤与「工作流末尾核对在批准前必然失败」已写入 `docs/NPM_PUBLISHING.md` 与 `AGENTS.md` 发布第 4–5 步。工作流本身未改：末尾核对在 staged 版本上仍会标红，是否改成「检测到 staged 即视为成功并输出待批准」留待下次发布前决定。
+- **局限。** 未做真机、Funnel 端到端、真实 `updateBundle`/HMR 回滚安装，也没有在 `0.2.1-rc.4` 上做真实业务回合；上述健康检查只证明插件能被宿主组合、启动并应答。

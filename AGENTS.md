@@ -120,10 +120,14 @@ release commit, npm package, Git tag, and GitHub Release must all agree.
    npm 绑定与操作步骤见 `docs/NPM_PUBLISHING.md`，决策见 `docs/adr/0003-release-and-repo-visibility.md` 第 2 条。
    不在 `main` 上运行后另行检出标签，以免来源证明的提交与实际源码不同。
    若用户保留自行发布，提供该文档中的已核对手动命令。
-5. Verify the registry version, dist-tag, package metadata, and a clean DSH
-   profile install. Publish the prepared GitHub Release only after npm is
-   installable, so the in-app update link never leads users to an unavailable
-   package version.
+   **当前绑定只允许暂存发布（staged）**：工作流把版本送进 npm staged 区，
+   工作流末尾的注册表核对在批准前必然 404 失败，这是暂存模式的预期结果，不是上传失败。
+5. 维护者在 npmjs.com 的 Staged Packages 标签用 2FA 批准该版本（或本机
+   `npm stage list dsh-deeppilot` → `npm stage approve <id>`）。批准后版本才公开、
+   分发标签才生效，此时再核对注册表与来源证明，并在干净隔离的 `DSH_HOME` 中
+   完成一次从 npm 的安装验证。
+6. Publish the prepared GitHub Release only after npm is installable, so the
+   in-app update link never leads users to an unavailable package version.
 
 ## Agent skills
 
