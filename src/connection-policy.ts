@@ -13,6 +13,19 @@ import type { Envelope } from './protocol.ts'
 export const AUTH_TIMEOUT_MS = 35_000
 export const MAX_OUTBOUND_BUFFER_BYTES = 4 * 1024 * 1024
 /**
+ * 单帧下行上限：未声明 `maxFrameBytes` 的旧 App 用 URLSessionWebSocketTask 的
+ * 默认 `maximumMessageSize`（1 MiB），收到更大的帧会以 EMSGSIZE 失败并断线重连。
+ */
+export const LEGACY_CLIENT_MAX_FRAME_BYTES = 1024 * 1024
+/**
+ * 附件回读单帧的硬上限，与客户端声明的上限取小。发送前会先等发送缓冲排空，
+ * 但帧本身仍整块进缓冲；留出一半给同时到达的流式帧，避免越过
+ * MAX_OUTBOUND_BUFFER_BYTES 被当成慢客户端以 1013 断开。更大的附件要等分块传输。
+ */
+export const MAX_ATTACHMENT_FRAME_BYTES = MAX_OUTBOUND_BUFFER_BYTES / 2
+/** 附件 ack 在 `{mediaType,data}` 之外的信封字段（v/type/id/ts）余量。 */
+export const ATTACHMENT_ENVELOPE_HEADROOM_BYTES = 1024
+/**
  * Pre-auth frame cap. The 64 MiB cap on a fully authenticated socket exists
  * to support multi-MB image attachments; before hello the only legal frames
  * are c2s.ping and c2s.auth.prove, neither of which can legitimately exceed

@@ -592,6 +592,8 @@ export interface MessageProjection {
 export interface SessionAttachmentPayload {
   sessionId: string
   attachmentId: string
+  /** 客户端能收的单帧字节上限；缺省按旧 App 的 1 MiB 处理，超出回 E_TOO_LARGE。 */
+  maxFrameBytes?: number
 }
 
 export interface SessionTailPayload {

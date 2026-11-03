@@ -551,11 +551,17 @@ Host 不具备该能力时 `welcome.capabilities.sessionRestore=false`，请求�
 
 可选字段 `mode` 取 `"queue"`（默认）或 `"steer"`，仅在 `welcome.capabilities.promptQueue=true` 时有效，语义见「运行中排队与转向扩展」。能力位缺失时，`mode:"queue"` 与省略等价，仍然允许；`mode:"steer"` 返回 `E_UNSUPPORTED`。
 
-### c2s.session.attachment（payload: sessionId, attachmentId）
+### c2s.session.attachment（payload: sessionId, attachmentId, maxFrameBytes?）
 
 按 id 读回一张会话引用过的持久化图片（宿主校验该会话日志确实包含此 id 后才返回）。
 RPC 响应 result 为 `{ "mediaType": "image/jpeg", "data": "<base64>" }`；宿主不可用或 id 无效回 `E_NOT_FOUND`。
 客户端应做磁盘缓存，避免重复拉取。
+
+可选字段 `maxFrameBytes`（正整数）声明客户端能接收的单帧字节上限；非正整数回 `E_PROTOCOL`。
+缺省按 1 MiB 处理：旧版 iOS App 的 WebSocket 默认只收 1 MiB 以内的帧，更大的帧会让连接断开。
+Bridge 估算响应帧（base64 长度加信封余量），超过 `min(maxFrameBytes, 2 MiB)` 时回 `E_TOO_LARGE`，
+不发送图片；2 MiB 是为发送缓冲保留余量的固定上限，更大的附件需要分块传输。多张图片同时回读时，
+Bridge 等发送缓冲排空后再逐个发送。旧 Bridge 忽略该字段。
 
 ```json
 { "type": "c2s.session.attachment", "id": "r-9", "payload": { "sessionId": "session-…", "attachmentId": "att-…" } }
@@ -838,6 +844,7 @@ deeppilot/setDeviceName(deviceId, customName) -> customName | null
 | E_UNSUPPORTED | 协议版本或能力不支持 |
 | E_INTERNAL | 服务端内部错误 |
 | E_STEER_UNAVAILABLE | 排队项已无法转向：当前这一轮已结束，或该项不在排队区。仅在 `promptQueue` 能力下的 `c2s.session.queue.update` 中出现 |
+| E_TOO_LARGE | 响应会超过客户端能接收的单帧上限，未发送。目前只在 `c2s.session.attachment` 中出现；不可自动重试 |
 
 `message` 是人类可读的诊断文本，客户端可原样展示，也可按自身需要本地化。两个约定：
 

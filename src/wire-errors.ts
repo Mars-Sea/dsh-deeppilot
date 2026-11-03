@@ -26,6 +26,8 @@ export const ERROR_CODES = {
   E_INTERNAL: 'internal error',
   // 仅 promptQueue 能力下的 c2s.session.queue.update 会返回，旧客户端不会遇到。
   E_STEER_UNAVAILABLE: 'queued item can no longer steer the current turn',
+  // 响应会超过客户端能收的单帧上限（目前只有 c2s.session.attachment 返回）；不可自动重试。
+  E_TOO_LARGE: 'response exceeds the client frame limit',
 } as const
 
 export type WireErrorCode = keyof typeof ERROR_CODES
