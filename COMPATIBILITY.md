@@ -47,6 +47,7 @@ covered by the isolated composes and live runs recorded in the release memory.
 - The current app accepts the `deeppilot://pair` link and the JSON pairing payload. Bearer authentication, URL credentials, and first-frame shared tokens are rejected; devices register a P-256 public key and sign each WebSocket challenge.
 - The plugin's persisted device and Funnel state migration remains separate from DSH API version support. Session logs written by earlier DSH builds are readable only when the current Host's own history reader accepts them; this plugin does not rewrite those logs.
 - An unavailable optional OS facility, transport, or controller disables its dependent capability without crashing the Host.
+- Binary frames (`welcome.capabilities.binaryFrames`) are a plugin-level option between this plugin and the phone and do not depend on the DSH Host. The phone opts in per request with `binary: true`; older apps never do and keep receiving base64 text frames byte-for-byte as before, and older plugins ignore the field. The Funnel helper is a standard reverse proxy and passes binary WebSocket frames through unchanged.
 
 ## Schedules ship with the Web composition
 

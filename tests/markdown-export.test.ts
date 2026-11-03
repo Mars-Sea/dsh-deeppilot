@@ -5,6 +5,7 @@ import { DshApiProxy } from '../src/dsh-api-proxy.ts'
 import { HostBridge } from '../src/host-bridge.ts'
 import { registryRowFor, validatePayload, type FrameContext } from '../src/wire-registry.ts'
 import type { SessionExportFormat } from '../src/protocol.ts'
+import { BINARY_CHUNK_BYTES } from '../src/binary-frame.ts'
 
 const row = registryRowFor('c2s.session.export')!
 
@@ -33,11 +34,12 @@ function fixture(body: Uint8Array | string, contentType: string, status = 200) {
 }
 
 function frameContext(exportSession: (...args: any[]) => Promise<Response>, sessionMarkdown?: boolean) {
-  const sent: Array<{ type: string; payload: any }> = []
+  const sent: Array<{ type: string; payload: any; body?: Uint8Array }> = []
   let waits = 0
   const context = {
     bridge: { exportSession, capabilities: { sessionMarkdown } },
     send: (type: string, payload: unknown) => sent.push({ type, payload }),
+    sendBinary: (type: string, payload: unknown, body: Uint8Array) => sent.push({ type, payload, body: Buffer.from(body) }),
     fail: (code: string, message: string) => sent.push({ type: 's2c.error', payload: { code, message } }),
     waitForWritable: async () => { waits++ },
   } as unknown as FrameContext
@@ -178,4 +180,36 @@ test('实际 Bridge 和代理完整转发格式，省略格式的 RPC 不增字�
       assert.deepEqual(requests[1].payload, { sessionId: 's', format: 'zip' })
     } finally { captureBridge.dispose() }
   } finally { bridge.dispose() }
+})
+
+test('binary:true 时攒满 256 KiB 发二进制块，回执与文本模式一致', async () => {
+  // 宿主流按 100 KB 一次给出，验证跨读取攒块且最后一块是余数。
+  const archive = Uint8Array.from({ length: 700_001 }, (_, index) => (index * 7) % 256)
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let offset = 0; offset < archive.length; offset += 100_000) controller.enqueue(archive.subarray(offset, offset + 100_000))
+      controller.close()
+    },
+  })
+  const f = frameContext(async () => new Response(stream))
+  await row.handle(f.context, { sessionId: 's', binary: true })
+  const chunks = f.sent.slice(0, -1)
+  assert.deepEqual(chunks.map(item => [item.type, item.payload.index, item.body!.length]), [
+    ['s2c.session.export.chunk', 0, BINARY_CHUNK_BYTES],
+    ['s2c.session.export.chunk', 1, BINARY_CHUNK_BYTES],
+    ['s2c.session.export.chunk', 2, archive.length - 2 * BINARY_CHUNK_BYTES],
+  ])
+  assert.ok(chunks.every(item => item.payload.data === undefined))
+  assert.deepEqual(Buffer.concat(chunks.map(item => item.body!)), Buffer.from(archive))
+  assert.deepEqual(f.sent.at(-1), { type: 's2c.ack', payload: { sessionId: 's', fileName: 'dsh-session-log.zip', chunks: 3, bytes: archive.length } })
+  assert.equal(f.waits(), 3)
+})
+
+test('binary:false 或缺省保持 48 KiB base64 文本块', async () => {
+  for (const binary of [false, undefined]) {
+    const body = Buffer.alloc(60 * 1024, 3)
+    const f = frameContext(async () => new Response(body))
+    await row.handle(f.context, { sessionId: 's', ...(binary === undefined ? {} : { binary }) })
+    assert.deepEqual(f.sent.slice(0, -1).map(item => [item.body, Buffer.from(item.payload.data, 'base64').length]), [[undefined, 48 * 1024], [undefined, 12 * 1024]])
+  }
 })

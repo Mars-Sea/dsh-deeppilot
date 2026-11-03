@@ -19,6 +19,18 @@ v2 不接受 v1 Bearer Token、`c2s.hello.auth` 或任何降级握手；升级�
 - 命名：客户端请求 `c2s.*`，服务端响应与推送 `s2c.*`。
 - 未知 type：服务端回 `E_PROTOCOL` 错误帧，不断连。
 
+### 1.1 二进制帧（可选，能力位 `binaryFrames`）
+
+服务端只在客户端请求里显式带 `binary: true` 时，才对该请求回 WebSocket 二进制帧，布局为：
+
+`[格式 u8 = 1][头部长度 u32 大端][头部 JSON（UTF-8）][原始字节]`
+
+- 头部就是上面的信封，`id` 与请求关联的规则不变；原本放在 `payload.data` 里的 base64 去掉，改为帧尾的原始字节。
+- 目前只用于 `c2s.session.export` 与 `c2s.session.attachment` 的分块响应（见各自章节），这些块都不进入重放环。
+- 客户端遇到未知格式字节、头部长度越界或头部不是合法 JSON 时丢弃该帧。
+- `welcome.capabilities.binaryFrames` 缺失或 false 时客户端不得带 `binary: true`；旧服务端会忽略该字段，照常回文本帧。
+- 客户端发往服务端的帧仍然只能是文本帧。
+
 ## 2. 连接与鉴权
 
 ### 2.0 传输层诊断标识（可选扩展）
@@ -551,7 +563,7 @@ Host 不具备该能力时 `welcome.capabilities.sessionRestore=false`，请求�
 
 可选字段 `mode` 取 `"queue"`（默认）或 `"steer"`，仅在 `welcome.capabilities.promptQueue=true` 时有效，语义见「运行中排队与转向扩展」。能力位缺失时，`mode:"queue"` 与省略等价，仍然允许；`mode:"steer"` 返回 `E_UNSUPPORTED`。
 
-### c2s.session.attachment（payload: sessionId, attachmentId, maxFrameBytes?）
+### c2s.session.attachment（payload: sessionId, attachmentId, maxFrameBytes?, binary?）
 
 按 id 读回一张会话引用过的持久化图片（宿主校验该会话日志确实包含此 id 后才返回）。
 RPC 响应 result 为 `{ "mediaType": "image/jpeg", "data": "<base64>" }`；宿主不可用或 id 无效回 `E_NOT_FOUND`。
@@ -567,6 +579,11 @@ Bridge 等发送缓冲排空后再逐个发送。旧 Bridge 忽略该字段。
 { "type": "c2s.session.attachment", "id": "r-9", "payload": { "sessionId": "session-…", "attachmentId": "att-…" } }
 { "type": "s2c.ack", "id": "r-9", "payload": { "mediaType": "image/jpeg", "data": "/9j/…" } }
 ```
+
+可选字段 `binary`（布尔，需 `welcome.capabilities.binaryFrames=true`，非布尔回 `E_PROTOCOL`）为 true 时改为二进制分块，
+不再受单帧上限约束，`maxFrameBytes` 不参与判断：连续响应二进制帧 `s2c.session.attachment.chunk`，头部 payload 为 `{index}`
+（从 0 连续编号），帧尾是最多 256 KiB 的原图字节；每块发送前等待连接写缓冲。最终 `s2c.ack {mediaType?, chunks, bytes}`
+供客户端核对块数与总字节。原图超过 12 MiB 回 `E_TOO_LARGE`，不发送任何块。中途断线时不发送回执，客户端丢弃已收的块。
 
 ### c2s.session.cancel（payload: sessionId）
 
@@ -891,6 +908,8 @@ Bridge 侧 Host code 到 wire 码的映射是 `src/wire-errors.ts` 的单一属�
 - `schedulesHost` 同属可选 v2 扩展：true 表示宿主级计划任务模型与
   「Schedule 宿主级任务扩展」帧可用；缺失/false 时客户端只能使用会话级
   schedule 帧。旧帧在宿主级模型上仍由 Bridge 映射，旧客户端无需升级。
+- `binaryFrames` 是插件自身能力，不依赖 Host：true 表示导出与附件请求可以带 `binary: true`
+  改用二进制帧（见 §1.1）。缺失/false 时客户端照旧请求 base64 文本帧。
 - v2 同版本新增可选字段时双方必须忽略未知字段。
 - 旧 Host 不认识 `deeppilot/setDeviceName` 时，设置页应显示“不支持设备重命名”的降级提示，
   不得把失败伪装成保存成功；新客户端仍须正常显示和删除设备。
@@ -1465,6 +1484,8 @@ Bridge 必须返回 `restart-required` 而不是假装完成。
 权限 `sessions.read`。请求 `{sessionId, format?}`，`format` 取 `"zip"`（缺省）或 `"markdown"`。`zip` 使用官方 `/api/session.export?includeDescendants=true` 归档路由，返回含子会话、图片和文件的完整 ZIP；`markdown` 使用官方 `/api/session.markdown?sessionId=…` 路由，返回 `text/markdown` 的对话正文。两种格式共用同一套分块与回执：连续响应 `s2c.session.export.chunk {index,data}`，从 0 连续编号，每块最多 48 KiB 二进制的 base64；同一请求 `id` 关联所有块，块不是最终响应。最终 `s2c.ack {sessionId,fileName,chunks,bytes,mediaType?}` 核对完整性，`mediaType` 为 `application/zip` 或 `text/markdown; charset=utf-8`。错误为同 id 的 `s2c.error`，客户端删除未完成临时文件。传输按连接写缓冲等待，断线取消归档流；块不进入重放环。服务端对整次导出设十分钟上限，超时同样取消归档流、按同 id 的 `s2c.error`（E_INTERNAL）结束，且不发送 `s2c.ack`——部分块永远不构成成功的导出。手机按块落临时文件、核对编号和最终大小，成功后才打开系统分享。
 
 `format:"markdown"` 需要 `welcome.capabilities.sessionMarkdown=true`，缺失或 false 时 Bridge 回 `E_UNSUPPORTED`；客户端必须在发送前读取该能力位，不能只凭请求成功与否判断——不认识 `format` 的旧 Bridge 会忽略该字段并照常返回 ZIP。Markdown 正文省略 reasoning、system/developer 消息与注入的非人类上下文，菜单文案必须写成「导出对话正文」而不是「导出完整日志」。缺省 `format` 时行为与本扩展出现前逐字节相同。
+
+可选字段 `binary`（布尔，需 `welcome.capabilities.binaryFrames=true`，非布尔回 `E_PROTOCOL`）为 true 时，块改为二进制帧（§1.1）：头部 payload 只有 `{index}`，帧尾是原始字节；Bridge 跨宿主读取攒满 256 KiB 再发，最后一块为余数。编号、最终回执、错误与超时语义与文本块相同。缺省或 false 时仍是 48 KiB 的 base64 文本块。
 
 模型与文件入口由手机自身提供，并复用已有选择器；权限、反馈仅装饰匹配的官方 `definitionId`，同名第三方命令仍保留自己的执行与参数语义。技能继续补全文字后作为 prompt 发送；同名候选按类型分开，显式选择技能优先保留技能语义。
 

@@ -74,7 +74,9 @@ export interface SessionHistoryPayload { sessionId: string; beforeSeq: number; l
  * 不认识该字段的旧 Bridge 会忽略它并照常返回 ZIP，所以客户端必须先看能力位。
  */
 export type SessionExportFormat = 'zip' | 'markdown'
-export interface SessionExportPayload { sessionId: string; format?: SessionExportFormat }
+/** `binary: true`（需 welcome.capabilities.binaryFrames）时块改为二进制帧：头部
+ *  payload 只有 `{index}`，原始字节在帧尾，每块最多 256 KiB；最终回执不变。 */
+export interface SessionExportPayload { sessionId: string; format?: SessionExportFormat; binary?: boolean }
 
 /**
  * 瞬时流式增量：不占 seq、不进重放环、断线不补发。与 `s2c.session.event`
@@ -433,6 +435,11 @@ export interface WelcomeCapabilities {
    * the phone replace this plugin with a published version. Absent ⇒ the phone
    * can only link out to npm. */
   pluginUpdate?: boolean
+  /** Bridge answers c2s.session.export / c2s.session.attachment requests that
+   * carry `binary: true` with binary frames (raw bytes after a JSON header,
+   * see binary-frame.ts). Plugin-level, independent of the host. Absent ⇒ the
+   * client must keep requesting base64 text frames. */
+  binaryFrames?: boolean
 }
 
 export interface WelcomePayload {
@@ -594,7 +601,14 @@ export interface SessionAttachmentPayload {
   attachmentId: string
   /** 客户端能收的单帧字节上限；缺省按旧 App 的 1 MiB 处理，超出回 E_TOO_LARGE。 */
   maxFrameBytes?: number
+  /** 需 welcome.capabilities.binaryFrames。为 true 时图片按二进制分块下发
+   *  （s2c.session.attachment.chunk，头部 `{index}`），最终 s2c.ack 为
+   *  {@link SessionAttachmentBinaryAck}；此时 maxFrameBytes 不参与判断。 */
+  binary?: boolean
 }
+
+/** 二进制模式的附件最终回执：只核对块数与总字节，图片本身已在块里。 */
+export interface SessionAttachmentBinaryAck { mediaType?: string; chunks: number; bytes: number }
 
 export interface SessionTailPayload {
   sessionId: string

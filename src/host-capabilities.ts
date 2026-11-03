@@ -120,6 +120,8 @@ export function capabilityBits(
   return {
     historyPaging: true,
     replay: true,
+    // 插件自身能力，不依赖宿主：导出块与附件可按请求改用二进制帧。
+    binaryFrames: true,
     approvals: true,
     questions: true,
     pendingSnapshot: true,

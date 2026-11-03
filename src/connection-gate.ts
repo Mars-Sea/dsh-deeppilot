@@ -119,6 +119,8 @@ export interface GateHost {
   readonly debug: boolean
   log(message: string): void
   send(type: S2CType, payload: unknown, id?: string): void
+  /** 二进制帧发送；仅在客户端请求里带 `binary: true` 时由行调用。 */
+  sendBinary?(type: S2CType, payload: unknown, body: Uint8Array, id?: string): void
   fail(id: string | undefined, code: WireErrorCode, message: string): void
   close(code: number, reason: string): void
   // ---------- BridgeSink 转发（openSession 等行需要把上下文当作 sink） ----------
@@ -464,6 +466,7 @@ export class ConnectionGate {
       debug: host.debug,
       log: (message) => host.log(message),
       send: (type, payload) => host.send(type, payload, env.id),
+      ...(host.sendBinary ? { sendBinary: (type: S2CType, payload: unknown, body: Uint8Array) => host.sendBinary!(type, payload, body, env.id) } : {}),
       fail: (code, message) => host.fail(env.id, code, message),
       close: (code, reason) => host.close(code, reason),
       canReceive: (scope) => host.canReceive(scope),

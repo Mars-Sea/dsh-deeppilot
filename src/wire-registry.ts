@@ -64,6 +64,7 @@ export type S2CType =
   | 's2c.session.permissions'
   | 's2c.session.queue'
   | 's2c.session.export.chunk'
+  | 's2c.session.attachment.chunk'
   | 's2c.session.modelSelected'
   | 's2c.session.renamed'
   | 's2c.session.tail'
@@ -186,6 +187,8 @@ export interface FrameContext extends BridgeSink {
   readonly debug: boolean
   log(message: string): void
   send(type: S2CType, payload: unknown): void
+  /** 二进制帧：`payload` 进头部，`body` 是原始字节。缺省表示连接不支持（测试替身）。 */
+  sendBinary?(type: S2CType, payload: unknown, body: Uint8Array): void
   fail(code: WireErrorCode, message: string): void
   close(code: number, reason: string): void
   bufferOpenEvents(sessionId: string): OpenEventBuffer
