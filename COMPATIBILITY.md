@@ -1,29 +1,33 @@
 # Compatibility
 
-This branch targets exactly **eight DSH releases**: `0.2.0-rc.2`; the `alpha`
-channel releases `0.2.1-alpha.3`, `0.2.1-alpha.4`, `0.2.1-alpha.5`, and
-`0.2.2-alpha.2`; and the `next` channel releases `0.2.1-rc.2`, `0.2.1-rc.3`, and
-`0.2.1-rc.4`. The npm channels have
-moved since: `latest` now points at `0.2.1-rc.2`, promoted from `next`, `next`
-at `0.2.1-rc.4`, and `alpha` at `0.2.2-alpha.2`. All eight are
-named in both `engines.dsh` and `peerDependencies`; no other version is accepted.
-DSH evaluates that declaration before composing a profile — on every start, not
-only on install — so a newly published DSH release deactivates this plugin until
-the list is widened deliberately. That is the intended trade: a plugin that
-cannot run on an unaudited host fails visibly instead of misbehaving quietly.
-The decision and the reversal it represents are recorded in
-the maintainers' local decision record `docs/adr/0001-dsh-compatibility-policy.md`, with the supporting audit in
+This branch accepts DSH hosts inside the rolling compatibility range
+`>=0.2.1-rc.5 <0.3.0-0`. The lower bound is the newest audited `rc` release at
+decision time — npm `latest` and `next` both point at `0.2.1-rc.5` — and every
+later `0.2.x` release is admitted without a per-release source audit, including
+the `alpha` channel release `0.2.2-alpha.2` and later alphas, later rc releases,
+and `0.2.x` GA. `0.3.0` and its prereleases stay refused until a fresh audit.
+The bound is written `<0.3.0-0` because DSH evaluates the range with
+`semver.satisfies(..., { includePrerelease: true })`, where `<0.3.0` would admit
+`0.3.0-rc.1`. The range is named in both `engines.dsh` and `peerDependencies`; a
+host outside it is refused. DSH evaluates that declaration before composing a
+profile — on every start, not only on install.
+
+This is a deliberate policy trade: a new DSH release inside the range activates
+without waiting for a per-release audit, so a breaking change inside `0.2.x`
+would surface at runtime instead of at the activation gate. The gate that
+remains is the `0.3.0` boundary. The decision, its predecessor policies, and the
+reversals are recorded in the maintainers' local decision record
+`docs/adr/0001-dsh-compatibility-policy.md`, with the supporting audits in
 [`docs/DSH_RELEASE_MEMORY.md`](./docs/DSH_RELEASE_MEMORY.md).
 
-The development packages this branch builds and typechecks against stay pinned
-to the exact release-candidate baseline, currently `0.2.0-rc.2`; the audited
-`alpha` and `rc` hosts are covered by the isolated composes and live runs
-recorded in the release memory.
+The development packages this branch builds and typechecks against are pinned to
+the lower bound, currently `0.2.1-rc.5`; the audited host lines above it are
+covered by the isolated composes and live runs recorded in the release memory.
 
 | Component | Current contract | Evidence |
 |---|---|---|
 | Node.js | 22 or newer | Package engine and CI |
-| DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name `0.2.0-rc.2 \|\| 0.2.1-alpha.3 \|\| 0.2.1-alpha.4 \|\| 0.2.1-alpha.5 \|\| 0.2.1-rc.2 \|\| 0.2.1-rc.3 \|\| 0.2.1-rc.4 \|\| 0.2.2-alpha.2` (dev pins `0.2.0-rc.2`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.0-rc.2 CLI, plus isolated composes and live phone-protocol runs with the published 0.2.1-alpha.2, 0.2.1-alpha.3, and 0.2.1-alpha.4 CLIs, an isolated 0.2.1-alpha.5 host where this plugin now composes, starts, and answers `/phone/health` with 200 on its own LAN listener, a pre-widening 0.2.1-rc.2 host run where the unchanged declaration is refused at compose time, an isolated 0.2.1-rc.3 host where the widened declaration composes, starts, and answers `/phone/health` with 200, and isolated 0.2.1-rc.4 and 0.2.2-alpha.2 hosts where the eight-release declaration does the same (audits below) |
+| DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name the rolling range `>=0.2.1-rc.5 <0.3.0-0` (dev pins `0.2.1-rc.5`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.1-rc.5 CLI, plus isolated composes and live phone-protocol runs across the audited hosts recorded below (0.2.1-alpha.2 through 0.2.2-alpha.2), a full-tree audit of 0.2.1-rc.5 against 0.2.1-rc.4, and an isolated rc.5 host that composes, starts, and answers `/phone/health` with 200 (`0.2.1-rc.5 audit outcome` below) |
 | DSH history read | `SessionController.inspect` when the host has it, `SessionController.page` otherwise | DSH 0.2.2-alpha.2 removed `inspect`; the adapter branches on its presence and maps the host page's `{type:'event',event}` records onto the bridge's `{event}` contract, expressing the phone's exclusive `beforeSeq` as the inclusive `throughSeq` cut. Unit tests cover both branches (audits below) |
 | iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
@@ -67,7 +71,23 @@ built. The bridge mounts on `sessionController` / `connection` /
 `typertGateway`, all of which become ready before the Schedule service finishes
 its own initialization, so a probe taken at that moment would report `false` for
 the bridge's whole lifetime. On a live host with the service mounted the bit is
-`true` and the schedule list/create/history/delete flow passes.
+`true` and the schedule list/create/history/delete flow passes on audited hosts
+up to `0.2.2-alpha.2`.
+
+**Known limitation on `0.2.2-alpha.3`.** That release moved automation to
+host-level task management and rewrote the `dsh-schedule` service: `update` and
+`delete` no longer exist (`edit({ action })` replaces them), `list` returns a
+page object instead of an array, `create` takes its request first, and the
+request body carries `timing` / `target` instead of the selector fields. The
+bridge now serves both contracts from one adapter chosen by service shape, not
+by version string: the legacy per-session path is unchanged, and the host-level
+path adds the optional `schedulesHost` capability with host-level frames
+(list / view / create / edit / run / limits) while projecting the legacy frames
+onto host-level tasks, so an older App keeps schedule list, create, edit and
+delete on that host. The wire contract is documented under
+[`PROTOCOL.md`](./PROTOCOL.md) "Schedule 宿主级任务扩展". The audit and the
+decision are recorded in
+[`docs/DSH_RELEASE_MEMORY.md`](./docs/DSH_RELEASE_MEMORY.md).
 
 ## Configuration migration
 
@@ -76,6 +96,64 @@ The verbose-diagnostics field moved from the top-level `debug` to
 carries the old top-level `debug: true` is accepted but that value is ignored:
 verbose logging must be turned on again from the settings page. No other config
 field changed shape, and the old key is not read anywhere in this version.
+
+## 0.2.1-rc.5 audit outcome
+
+The artifact-level audit of `dsh-v0.2.1-rc.5` (published to the npm registry
+2026-10-29T14:15:23Z; GitHub Release 2026-10-30T02:12:26Z, whose notes mention
+only improved thinking-content display) against `dsh-v0.2.1-rc.4` found **no
+runtime break**. The tree stays at 307 packages.
+
+- **Whole-tree comparison.** 42,731 shared files: 42,421 byte-identical and 310
+  differing — 296 `package.json` files plus 14 non-manifest files in 7 packages;
+  one further file is new in rc.5 only
+  (`dsh-client-ui-chat/lib/types/client/reasoning-text.d.ts`, 363 B). `cordis`
+  and `schemastery` are byte-identical including their manifests, and the rc.4
+  tree fingerprint reproduced the previous audit's value, so both rounds compared
+  the same baseline.
+- **No contract change.** All 307 manifests have zero `structural` changes (the
+  comparison covers the full 11,099-leaf union); the 3,706 dependency-spec
+  changes are mechanical `0.2.1-rc.4 → 0.2.1-rc.5` replacements. The evaluator
+  `dsh-app-boot/lib/index.js` is byte-identical to rc.4 (sha256 `5135179a…`), so
+  the activation gate behaves exactly as before.
+- **The 15 non-manifest files (14 changed, 1 added) are outside this plugin's
+  surface.** `dsh-client-ui-chat` reworks the host's internal
+  `conversation.chat.reasoning.body` Slot (owner props gain `rawText`, and
+  reasoning text is stripped of its `<signature>` wrapper before display) plus
+  its types and three READMEs; `dsh-cordis-client-runner` updates the embedded
+  Slot registry metadata; `dsh-experimental-client-ui-cot-translation` changes
+  only JSDoc/type comments; `dsh-client-modules` changes a build-commit
+  constant; three settings/sidebar client bundles change only version strings
+  (same byte size). None of these packages is in the declaration surface (10
+  peers, 4 client injects, vendored cordis/schemastery) or the plugin call
+  surface, and a machine check over the 7 packages reports
+  `allOutsideDeclarationSurface`.
+- **Patch anchor unchanged.** `dsh-web-app/cordis.patch.yml` is byte-identical to
+  rc.4 (same 595 lines / 117 entries / sha256 `cdceb423…`), so the
+  `id: directory-picker` block this plugin disables is untouched.
+- **Export and client faces unchanged.** All 3,271 `lib/` modules and 681 entry
+  modules have identical export surfaces; the four client-injected packages are
+  byte-identical.
+- **Activation matrix.** The previous closed list rejected `0.2.1-rc.5`; the
+  rolling range admits it together with `0.2.2-alpha.2`, `0.2.1`, later rc and
+  alpha releases and `0.2.x` GA. Twelve candidates are newly admitted and
+  exactly the seven former list members are newly refused; `0.3.0-rc.1`,
+  `0.3.0`, `0.3.0-0`, and `1.0.0` stay refused. Every verdict matched an
+  independent semver calculation. The range also admits unaudited
+  `0.2.2`/`0.2.3` prereleases by construction (`0.2.2-alpha.1`,
+  `0.2.2-alpha.2.1`, `0.2.2-ALPHA.2`, `0.2.2-0`); this is the accepted cost of a
+  rolling range, not an evaluator quirk.
+- **Live load.** In an isolated `DSH_HOME` the rc.5 host composes the plugin
+  (`--dump-config` exit 0, no skip line), starts it, and the plugin's own LAN
+  listener answers `/phone/health` with 200; the isolated home receives
+  `deeppilot/host-id` and `deeppilot/lan-tls/`.
+- **Vendor peers.** rc.5 still vendors `cordis 4.0.5` and `schemastery 3.18.5`,
+  both already inside the declared ranges, so no vendor clause changed.
+- **Known boundary.** `dsh-client-ui-slots` has no artifact in either tree (same
+  as the rc.4 round), so it was not byte-compared; `react` was not compared; the
+  npm install-time resolution was not run.
+- **Evidence.** `.rc5-verify/AUDIT.md`, `.rc5-verify/HOST-BOOT.md`, and the JSON
+  logs beside them.
 
 ## 0.2.2-alpha.2 audit outcome
 

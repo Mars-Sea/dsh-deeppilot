@@ -34,22 +34,22 @@
 
 ## 从 npm 安装
 
-当前源码面向 Node.js 22+ 与带 `web` profile 的**八个已审计 DSH 版本**：
-`0.2.0-rc.2`、`alpha` 通道的 `0.2.1-alpha.3`、
-`0.2.1-alpha.4`、`0.2.1-alpha.5` 与 `0.2.2-alpha.2`，以及先后三版 `next` 通道的
-`0.2.1-rc.2`、`0.2.1-rc.3` 与 `0.2.1-rc.4`（npm 通道会移动：`latest` 现指向由 `next` 转正的
-`0.2.1-rc.2`，`next` 指向 `0.2.1-rc.4`，`alpha` 指向 `0.2.2-alpha.2`）。
-DSH 在组合 profile 前会校验插件声明的
-兼容要求，且**每次启动都会校验**（不只是安装时），因此其他宿主版本会拒绝
-激活本插件。从 DSH `0.2.1-alpha.4` 起，该校验只读 `engines.dsh` 并忽略
-`peerDependencies`；更早的宿主只认 peer 范围，因此两处列出同一组八个版本。
-npm 包内置 macOS、Linux、Windows 的 amd64/arm64 Funnel helper；可信局域网
-模式不依赖 helper。helper 用 Go 1.27 编译，要求 **macOS 13 Ventura 或更高版本**：
-macOS 12 及更早版本无法启动 Funnel 模式，可信局域网模式不受影响。
+当前源码面向 Node.js 22+ 与**滚动兼容区间** `>=0.2.1-rc.5 <0.3.0-0` 内的
+DSH 宿主（带 `web` profile）。下界是决策时最新的已审计 `rc` 版本（npm
+`latest` 与 `next` 均指向 `0.2.1-rc.5`）；其后的所有 `0.2.x` 版本自动放行，
+包括 `alpha` 通道的 `0.2.2-alpha.2` 及之后的 alpha、之后的 rc 与 `0.2.x`
+正式版。`0.3.0` 及其预发布仍需重新审计，由上界 `<0.3.0-0` 拦下。
+DSH 在组合 profile 前会校验插件声明的兼容要求，且**每次启动都会校验**（不只是
+安装时），因此区间外的宿主会拒绝激活本插件。从 DSH `0.2.1-alpha.4` 起，该校验
+只读 `engines.dsh` 并忽略 `peerDependencies`；更早的宿主只认 peer 范围，因此
+两处声明同一区间。npm 包内置 macOS、Linux、Windows 的 amd64/arm64 Funnel
+helper；可信局域网模式不依赖 helper。helper 用 Go 1.27 编译，要求 **macOS 13
+Ventura 或更高版本**：macOS 12 及更早版本无法启动 Funnel 模式，可信局域网模式
+不受影响。
 
-当前工作树的 `engines.dsh` 与 `peerDependencies` 精确列出这六个版本，构建与
-类型检查针对 `0.2.0-rc.2`。从此工作树发布新版本前，已发布的旧插件包仍可能
-带有各自旧的兼容声明。
+当前工作树的 `engines.dsh` 与 `peerDependencies` 声明该区间，构建与类型检查
+针对 `0.2.1-rc.5`。从此工作树发布新版本前，已发布的旧插件包仍可能带有各自旧的
+兼容声明。
 
 ```sh
 dsh plugin --profile web add dsh-deeppilot

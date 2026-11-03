@@ -1,7 +1,122 @@
 # DSH release compatibility memory
 
-> This is the durable audit record for DeepPilot's public DSH plugin. Re-audit
-> the next DSH release instead of assuming that an rc upgrade is runtime-safe.
+> This is the durable audit record for DeepPilot's public DSH plugin. Since
+> 2026-10-30 the declaration is a rolling range: audit a release when it would
+> move the lower bound, at each `0.x` minor boundary, or when a host inside the
+> range breaks at runtime.
+
+## Audit record — `dsh-v0.2.2-alpha.3` (runtime break inside the range)
+
+- **Release (2026-11-03):** `dsh-v0.2.2-alpha.3` on the npm `alpha` channel
+  (published 2026-11-03T07:48:26Z); `latest` and `next` remain `0.2.1-rc.5`. It
+  is inside the rolling range, so **no declaration change** was needed. The real
+  `0.2.2-alpha.3` evaluator accepted the worktree `0.9.14` manifest with zero
+  requirements and refused the published `0.9.13` (eight-release list) with a
+  single `engines.dsh` requirement — alpha-channel users must upgrade the plugin
+  before it activates.
+- **Gate and install surface:** 18 candidate versions were scored with the
+  published evaluator and an independent semver recomputation with zero
+  disagreements (`0.3.0-0`, `0.3.0-rc.1`, `0.3.0`, `1.0.0` stay refused). The
+  host vendors `cordis 4.0.6-alpha.2` / `schemastery 3.18.6-alpha.2`, both
+  inside this plugin's peer ranges; its `engines.node` is `>=24.9.0`.
+- **One runtime break, confined to schedule.** `0.2.2-alpha.3` moved automation
+  to host-level task management and rewrote `dsh-schedule`: `update` and
+  `delete` are gone (`edit({ id, action: 'update' | 'delete', patch,
+  expectedUpdatedAt })` replaces them), `list` returns
+  `{ items, shown, total, limit, offset }` instead of an array, `create` takes
+  `(request, actorSessionId, signal)`, and the request body uses `timing` /
+  `target` instead of `at` / `after_seconds` / …. The four bridge call sites
+  (`src/dsh-api-proxy.ts:216/232/236/248`) still speak the `0.2.2-alpha.2`
+  contract, so the phone's schedule list, create, edit and delete fail while
+  `schedule.history` keeps working. The `schedules` capability bit stays `true`
+  because it probes service presence only, so the break is silent (each action
+  returns an internal error) instead of hiding the feature. No other contract
+  changed: 24 of the 25 audited interfaces are identical or compatibly changed
+  and the client face is untouched.
+- **Runtime verification:** an isolated `0.2.2-alpha.3` host composed and started
+  the `0.9.14` worktree (`--dump-config` exit 0, no skipped bundle, 199 composed
+  entries), `/phone/health` returned 200 with `protocolVersion` 2 and
+  `serverVersion` `0.9.14`, and the live 3080 host on the same build serves the
+  same plugin from its linked worktree. The config schema projection accepts
+  every `deeppilot` option, and `NODE_DEBUG=esm` proves the plugin's
+  `@deepseek-ai/*` imports resolve to the alpha.3 installation tree rather than
+  the pinned dev copies.
+- **Decision:** keep the rolling range; ship `0.9.14` so alpha-channel users get
+  a host-activatable plugin. The schedule adapter now serves both contracts
+  (shape-detected `legacy` / `host` adapters, additive protocol v2 capability
+  `schedulesHost`, host-level frames, legacy frames projected onto host-level
+  tasks, iOS mirror); the wire contract lives in `PROTOCOL.md` section "Schedule
+  宿主级任务扩展". The public contract consequence is recorded in
+  `COMPATIBILITY.md`.
+- **Evidence:** `.alpha3-verify/AUDIT.md`, `CHANGE_SURFACE.md`, `CLIENT_FACE.md`,
+  `HOST-BOOT.md` and `logs/` in this repository; `.alpha3-verify/gate-matrix.mjs`
+  reproduces every activation verdict.
+
+## Current decision — rolling range from `dsh-v0.2.1-rc.5`
+
+- **Decision (2026-10-30):** the compatibility declaration is one rolling range,
+  `>=0.2.1-rc.5 <0.3.0-0`, in `engines.dsh` and all ten `@deepseek-ai/dsh*`
+  peers, replacing the eight-release closed list. The lower bound is the newest
+  `rc` release (`0.2.1-rc.5`, published 2026-10-29T14:15:23Z); the current
+  `alpha` release `0.2.2-alpha.2` sorts above it and needs no second clause.
+  `<0.3.0-0` keeps the `0.3.0` audit gate. Dev packages move to the exact
+  `0.2.1-rc.5` baseline with vendored `cordis 4.0.5` / `schemastery 3.18.5`.
+  Release `0.9.14`. Recorded in `docs/adr/0001-dsh-compatibility-policy.md`
+  section 8.
+- **Trigger:** `latest` and `next` both moved to `0.2.1-rc.5`; the closed list
+  (ending `0.2.2-alpha.2`) refused to activate on it, and every DSH release
+  required eleven declaration edits plus a lockfile, test, and doc pass.
+- **Audit of `dsh-v0.2.1-rc.5` against `dsh-v0.2.1-rc.4` (`.rc5-verify/`):**
+  **no runtime break, `src/` unchanged.** 307 = 307 packages; 42,731 shared
+  files: 42,421 byte-identical, 310 differing (296 `package.json` + 14
+  non-manifest files in 7 packages), plus one file new in rc.5 only
+  (`dsh-client-ui-chat/lib/types/client/reasoning-text.d.ts`, 363 B). The rc.4
+  tree fingerprint reproduced the previous audit's value. All 307 manifests have
+  zero structural changes across the full 11,099-leaf union; 3,706 dependency
+  specs are mechanical `0.2.1-rc.4 → 0.2.1-rc.5` replacements. The evaluator
+  `dsh-app-boot/lib/index.js` is byte-identical to rc.4 (sha256 `5135179a…`,
+  same as rc.3). `dsh-web-app/cordis.patch.yml` is byte-identical, so the
+  `id: directory-picker` patch anchor is untouched. The four client faces are
+  byte-identical. 3,271 `lib/` modules and 681 entry modules show zero export
+  deltas. The 15 non-manifest files (14 changed, 1 added) live in
+  `dsh-client-ui-chat` (the internal `conversation.chat.reasoning.body` Slot
+  gains `rawText`, reasoning text strips its `<signature>` wrapper before
+  display, plus types and READMEs), `dsh-cordis-client-runner` (embedded Slot
+  registry metadata), `dsh-experimental-client-ui-cot-translation` (JSDoc/type
+  comments only), `dsh-client-modules` (build-commit constant), and three
+  settings/sidebar client bundles (version strings, same byte size). A machine
+  check over the 7 packages reports `allOutsideDeclarationSurface`; none is in
+  the declaration surface (10 peers + 4 client injects + vendored
+  cordis/schemastery) or the plugin call surface.
+- **Matrix (rc.5 evaluator, `includePrerelease: true`):** before → `0.2.1-rc.5`
+  rejected; after → `0.2.1-rc.5`, `0.2.2-alpha.2`, `0.2.1`, later rc/alpha/GA
+  admitted — 12 candidates newly admitted, exactly the seven former list members
+  newly refused — while `0.3.0-rc.1`, `0.3.0`, `0.3.0-0`, and `1.0.0` stay
+  rejected. Every verdict matched an independent semver calculation, and dropping
+  `engines.dsh` to exercise the peer path yields the same accepted set. The range
+  also admits unaudited prereleases above the bound by construction
+  (`0.2.2-alpha.1`, `0.2.2-alpha.2.1`, `0.2.2-ALPHA.2`, `0.2.2-0`); this is
+  pinned as a known admission surface in `tests/compatibility-metadata.test.ts`.
+- **Positive load (isolated `DSH_HOME`, `.rc5-verify/HOST-BOOT.md`):** with a
+  projected manifest carrying only the new range, the rc.5 host composes the
+  plugin (`--dump-config` exit 0, no `skipping profile bundle` line, 7
+  `deeppilot` hits), starts it, and the plugin's own LAN port answers
+  `/phone/health` with 200 (`ok`, `enabled`, `protocolVersion` 2, `dataPlane`
+  active). Both the committed 0.9.13 artifacts (`serverVersion` 0.9.13) and the
+  in-flight 0.9.14 worktree (`serverVersion` 0.9.14) load. The isolated home
+  received `deeppilot/host-id` and `deeppilot/lan-tls/`.
+- **Verification:** `npm test` 681 (679 pass, 1 pre-existing todo, 1 skipped),
+  `typecheck`, `build`, `check:config-schema` against the `0.2.1-rc.5` CLI,
+  `smoke:helper`, `go test ./...`, `bin/SHA256SUMS` 6/6.
+- **Evidence:** `.rc5-verify/AUDIT.md`, `CHANGE_SURFACE.md`, `HOST-BOOT.md`,
+  `tree-compare.out.json`, `matrix.out.json`, `evaluator-repro.out.json`,
+  `patch-anchor-check.out.json`, `export-symbol-diff.out.json`,
+  `pkg-manifest-delta.out.json`, `vendor-check.out.json`, `diffs/`, `logs/`.
+- **Honest boundary:** `dsh-client-ui-slots` has no artifact in either tree (as
+  in the rc.4 round), so it was not byte-compared; `react` and the npm
+  install-time resolution were not checked; no real-device pairing, Funnel
+  end-to-end, or model turn was run; `0.9.14` is prepared locally, not
+  published.
 
 ## Current decision — `dsh-v0.2.2-alpha.2`
 

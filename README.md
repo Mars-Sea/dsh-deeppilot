@@ -39,25 +39,24 @@ Host on your own computer and does not replace or modify the DSH Web UI.
 
 ## Install from npm
 
-This source checkout targets Node.js 22+ and the eight DSH releases it has been
-audited against — `0.2.0-rc.2`, the `alpha` channel releases `0.2.1-alpha.3`,
-`0.2.1-alpha.4`, `0.2.1-alpha.5`, and `0.2.2-alpha.2`, and the `next` channel
-releases it has admitted in turn, `0.2.1-rc.2`, `0.2.1-rc.3`, and `0.2.1-rc.4` —
-with a `web` profile. (The npm channels move: `latest` now points at
-`0.2.1-rc.2`, which was promoted from `next`, `next` at `0.2.1-rc.4`, and
-`alpha` at `0.2.2-alpha.2`.) DSH checks a plugin's declared
-requirements before composing a profile, on every start rather than only on
-install, so any other host version refuses to activate this plugin. From DSH
-`0.2.1-alpha.4` on, that check reads `engines.dsh` and ignores
-`peerDependencies`; older hosts know only the peer range, so both name the same
-eight releases. The package includes Funnel helpers
-for macOS, Linux, and Windows on amd64/arm64; trusted-LAN mode does not require
-the helper. The helper is built with Go 1.27, which requires **macOS 13 Ventura
-or later**: on macOS 12 and earlier, Funnel mode cannot start, while
-trusted-LAN mode keeps working.
+This source checkout targets Node.js 22+ and DSH hosts inside the rolling
+compatibility range `>=0.2.1-rc.5 <0.3.0-0` with a `web` profile. The lower
+bound is the newest audited `rc` release at decision time — npm `latest` and
+`next` both point at `0.2.1-rc.5` — and every later `0.2.x` release is admitted
+automatically, including the `alpha` channel release `0.2.2-alpha.2` and later
+alphas, later rc releases, and `0.2.x` GA. `0.3.0` and its prereleases stay
+refused until a fresh audit. DSH checks a plugin's declared requirements before
+composing a profile, on every start rather than only on install, so a host
+outside the range refuses to activate this plugin. From DSH `0.2.1-alpha.4` on,
+that check reads `engines.dsh` and ignores `peerDependencies`; older hosts know
+only the peer range, so both declare the identical range. The package includes
+Funnel helpers for macOS, Linux, and Windows on amd64/arm64; trusted-LAN mode
+does not require the helper. The helper is built with Go 1.27, which requires
+**macOS 13 Ventura or later**: on macOS 12 and earlier, Funnel mode cannot
+start, while trusted-LAN mode keeps working.
 
-The current working tree names exactly those six versions in `engines.dsh` and
-`peerDependencies` and is built/typechecked against `0.2.0-rc.2`. A previously
+The current working tree declares that range in `engines.dsh` and
+`peerDependencies` and is built/typechecked against `0.2.1-rc.5`. A previously
 published plugin package may still carry its own older compatibility
 declaration until a release is made from this tree.
 

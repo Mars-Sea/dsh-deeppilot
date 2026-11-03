@@ -45,23 +45,28 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
 - For any DSH release audit or compatibility decision, read and update
   `docs/DSH_RELEASE_MEMORY.md`; keep install, runtime, and phone-protocol risk
   classified separately.
-- The DSH compatibility declaration names exactly the eight releases this branch
-  supports: `0.2.0-rc.2`, the `alpha` channel releases
-  `0.2.1-alpha.3`, `0.2.1-alpha.4`, `0.2.1-alpha.5`, and `0.2.2-alpha.2`, and the
-  `next` channel releases `0.2.1-rc.2`, `0.2.1-rc.3`, and `0.2.1-rc.4`, admitted
-  in that order. The npm
-  channels move: `latest` now points at `0.2.1-rc.2` (rc.2, promoted from
-  `next`), `next` at `0.2.1-rc.4`, and `alpha` at `0.2.2-alpha.2`. It lives
-  in two places that must agree: `package.json` `engines.dsh`, which DSH
-  `0.2.1-alpha.4` and later evaluate alone, and `package.json`
-  `peerDependencies`, which older hosts still evaluate and npm reads at install
-  time. DSH evaluates them before composing a profile on every start, not only on
-  install, so any other host version refuses to activate the plugin. Widening the
-  list is therefore part of shipping support for a new DSH release: source-diff
-  it, record it in `docs/DSH_RELEASE_MEMORY.md`, then add the version in both
-  declarations, in `tests/compatibility-metadata.test.ts`, in
-  `package-lock.json`, and in both READMEs. The policy and the reversal it
-  represents are recorded in `docs/adr/0001-dsh-compatibility-policy.md`.
+- The DSH compatibility declaration is one rolling range, not a list of
+  releases: `package.json` `engines.dsh` and all ten `@deepseek-ai/dsh*` peers
+  name `>=0.2.1-rc.5 <0.3.0-0`. The lower bound is the newest audited `rc`
+  release at decision time (npm `latest` and `next` both point at
+  `0.2.1-rc.5`); every later `0.2.x` release activates without a per-release
+  source audit, and the current `alpha` channel release `0.2.2-alpha.2` sits
+  inside the same range because it sorts after the lower bound. Write
+  `<0.3.0-0`, not `<0.3.0`, for the upper bound: DSH evaluates the range with
+  `semver.satisfies(..., { includePrerelease: true })`, and `<0.3.0` would admit
+  `0.3.0-rc.1`. The range lives in two places that must agree: `engines.dsh`,
+  which DSH `0.2.1-alpha.4` and later evaluate alone, and `peerDependencies`,
+  which older hosts still evaluate and npm reads at install time. DSH evaluates
+  them before composing a profile on every start, not only on install, so a host
+  outside the range refuses to activate the plugin. A new DSH release inside the
+  range needs no declaration change; adjusting either bound is a deliberate
+  policy change that needs `docs/DSH_RELEASE_MEMORY.md`,
+  `tests/compatibility-metadata.test.ts`, `package-lock.json`, and both READMEs
+  updated in the same change. Audit a release when it would move the lower
+  bound, at each `0.x` minor boundary (the `0.3.0` gate), or when a host inside
+  the range is found to break at runtime, and record the outcome in
+  `docs/DSH_RELEASE_MEMORY.md`. The policy and its reversals are recorded in
+  `docs/adr/0001-dsh-compatibility-policy.md`.
 
 ### Authorization and completion
 
