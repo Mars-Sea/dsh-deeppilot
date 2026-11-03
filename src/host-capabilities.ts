@@ -6,6 +6,8 @@
  * 已经漂移过两次：`models` 位要求 `models && selectModel`，而
  * `c2s.session.models` 只需要 `models`（门过严）；`schedules` 位只探
  * `list && create`，而五个 schedule 方法只要求服务存在（部分 Host 上会 TypeError）。
+ * 新增的 `schedulesHost` 取同一个 adapter 的判别位（与会话级位同源），不再单独
+ * 探方法——同类漂移在宿主级模型上会直接表现为「新帧被门挡住」或「能力位撒谎」。
  *
  * 规则：一位一行，表达式取「该位所闸的帧真正需要的最小依赖」。位与帧的绑定
  * 由 wire 注册表的 `capability` 字段声明（见 wire-registry.ts），host-bridge
@@ -25,6 +27,7 @@ export type ProbedCapability =
   | 'sessionRestore'
   | 'projectSelection'
   | 'schedules'
+  | 'schedulesHost'
   | 'promptQueue'
   | 'sessionMarkdown'
   | 'assistantStream'
@@ -53,9 +56,12 @@ export const HOST_CAPABILITY_PROBES: Record<ProbedCapability, (proxy: ApiProxyLi
   projectSelection: (proxy) =>
     typeof proxy.workspace?.list === 'function' &&
     typeof proxy.workspace?.create === 'function',
-  // 五个 schedule 帧都只要求 Schedule 服务存在；历史上按 list&&create 探测的取值
-  // 会在只实现了部分方法的 Host 上把位压成 false，而方法体内又只判服务存在。
+  // 五个会话级 schedule 帧都只要求 Schedule 服务存在；历史上按 list&&create 探测
+  // 的取值会在只实现了部分方法的 Host 上把位压成 false，而方法体内又只判服务存在。
   schedules: (proxy) => proxy.schedule !== undefined,
+  // 宿主级能力位与 schedules 同源：取同一个已解析 adapter 的判别位，而不是再按
+  // 控制器的某个方法探一遍（该方法探测与能力位曾漂移过两次，见文件头）。
+  schedulesHost: (proxy) => proxy.schedule?.mode === 'host',
   // 排队快照来自 inbox 投影，增删转向走 session.updateQueue；两者在支持的 DSH
   // 版本里同时提供（DSH_RELEASE_MEMORY 2026-10-24 实测 0.2.0-rc.2），因此只探方法。
   promptQueue: (proxy) => typeof proxy.sessions.updateQueue === 'function',
@@ -127,6 +133,7 @@ export function capabilityBits(
     sessionRestore: HOST_CAPABILITY_PROBES.sessionRestore(proxy),
     projectSelection: HOST_CAPABILITY_PROBES.projectSelection(proxy),
     schedules: HOST_CAPABILITY_PROBES.schedules(proxy),
+    schedulesHost: HOST_CAPABILITY_PROBES.schedulesHost(proxy),
     promptQueue: HOST_CAPABILITY_PROBES.promptQueue(proxy),
     sessionMarkdown: HOST_CAPABILITY_PROBES.sessionMarkdown(proxy),
     assistantStream: HOST_CAPABILITY_PROBES.assistantStream(proxy),

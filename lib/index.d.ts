@@ -1,10 +1,7 @@
 import z from "@deepseek-ai/schemastery";
 import { Context } from "@deepseek-ai/cordis";
-//#region src/device-auth.d.ts
 declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage'];
 type DeviceScope = (typeof DEVICE_SCOPES)[number];
-//#endregion
-//#region src/wire-errors.d.ts
 /**
  * 错误词表（error vocabulary）的唯一属主。
  *
@@ -33,8 +30,6 @@ declare const ERROR_CODES: {
   readonly E_STEER_UNAVAILABLE: 'queued item can no longer steer the current turn';
 };
 type WireErrorCode = keyof typeof ERROR_CODES;
-//#endregion
-//#region src/dispatch-journal.d.ts
 /** 落盘条目：两个通用字段 + codec 私有字段。 */
 interface JournalEntry {
   fingerprint: string;
@@ -202,8 +197,6 @@ type MutationDispatchResult<T> = {
   message?: string;
   replayed?: boolean;
 };
-//#endregion
-//#region src/command-api.d.ts
 interface CommandSummary {
   name: string;
   description: string;
@@ -242,14 +235,119 @@ interface PermissionCatalog {
   options: PermissionOption[];
   currentValue?: string;
 }
-//#endregion
-//#region src/protocol.d.ts
 /**
  * `format` 缺省为 `zip`，与扩展出现前的行为逐字节相同；`markdown` 需要
  * `welcome.capabilities.sessionMarkdown`，否则 Bridge 回 E_UNSUPPORTED。
  * 不认识该字段的旧 Bridge 会忽略它并照常返回 ZIP，所以客户端必须先看能力位。
  */
 type SessionExportFormat = 'zip' | 'markdown';
+/** `at` 的本地日历写法；与 DSH `LocalAtInput` 一一对应。 */
+interface HostScheduleLocalAt {
+  date: string;
+  time: string;
+  time_zone: string;
+}
+type HostScheduleTiming = {
+  kind: 'after';
+  after_seconds: number;
+} | {
+  kind: 'at';
+  at: string | HostScheduleLocalAt;
+} | {
+  kind: 'every';
+  every_seconds: number;
+} | {
+  kind: 'daily';
+  daily: {
+    time: string;
+    time_zone: string;
+  };
+} | {
+  kind: 'weekly';
+  weekly: {
+    time: string;
+    time_zone: string;
+    weekdays: number[];
+  };
+} | {
+  kind: 'cron';
+  cron: {
+    expression: string;
+    time_zone: string;
+  };
+} | {
+  kind: 'rrule';
+  rrule: string;
+};
+/** `new_once` / `new` 目标建会话时的工作目录与预设（省略用 Host 默认）。 */
+interface HostScheduleCreateSpec {
+  cwd?: string;
+  agentPreset?: string;
+}
+/**
+ * 任务视图里的交付目标。`new_once` 的 `sessionId` 是 Host 创建时预留的会话，
+ * 首次投递后目标会转成 `session`。
+ */
+type HostScheduleTarget = {
+  kind: 'session';
+  sessionId: string;
+} | {
+  kind: 'new_once';
+  sessionId: string;
+  create?: HostScheduleCreateSpec;
+} | {
+  kind: 'new';
+  create?: HostScheduleCreateSpec;
+};
+/**
+ * 创建/编辑请求里客户端可给出的目标：`new_once` 的会话由 Host 预留，客户端不填
+ * `sessionId`。
+ */
+type HostScheduleTargetRequest = {
+  kind: 'session';
+  sessionId: string;
+} | {
+  kind: 'new_once';
+  create?: HostScheduleCreateSpec;
+} | {
+  kind: 'new';
+  create?: HostScheduleCreateSpec;
+};
+/** 最近一次已确认投递的回执；不含 prompt 正文。 */
+interface HostScheduleDeliveryReceipt {
+  scheduledAt: string;
+  deliveredAt: string;
+  messageId: string;
+  targetSessionId: string;
+}
+/**
+ * 宿主级任务视图。可选字段（createdAt/updatedAt/executionActive/
+ * deliveryFloorEndsAt/lastDelivery）客户端不得依赖；`involvedSessionIds` 是
+ * Host 内部字段，Bridge 不返回。
+ */
+interface HostScheduleTask {
+  id: string;
+  title: string;
+  prompt: string;
+  timing: HostScheduleTiming;
+  target: HostScheduleTarget;
+  status: 'active' | 'paused' | 'ended';
+  scheduledAt: string;
+  createdAt?: string;
+  updatedAt?: string;
+  executionActive?: boolean;
+  deliveryFloorEndsAt?: string;
+  lastDelivery?: HostScheduleDeliveryReceipt;
+}
+/** 编辑补丁：至少一个字段；省略的字段保持原值。 */
+interface HostSchedulePatch {
+  title?: string;
+  prompt?: string;
+  timing?: HostScheduleTiming;
+  target?: HostScheduleTargetRequest;
+  /** false 暂停、true 恢复。 */
+  active?: boolean;
+}
 interface WelcomeCapabilities {
   /** 会话命令目录、执行、权限与原生日志导出入口。缺省不支持。 */
   commands?: boolean;
@@ -275,6 +373,10 @@ interface WelcomeCapabilities {
   projectSelection: boolean;
   /** Host exposes the optional DSH Schedule service. */
   schedules?: boolean;
+  /** 宿主级计划任务模型（DSH 0.2.2-alpha.3 起）：true 时
+   * 「Schedule 宿主级任务扩展」帧可用，schedulesHost=false/缺失时客户端只能
+   * 使用会话级 schedule 帧。与 `schedules` 相互独立（后者只表示服务存在）。 */
+  schedulesHost?: boolean;
   /** Bridge has APNs configured; clients may send c2s.push.register. */
   push?: boolean;
   widgetPush?: boolean;
@@ -464,8 +566,6 @@ interface PendingSnapshotPayload {
   approvals: PendingApprovalPayload[];
   questions: PendingQuestionPayload[];
 }
-//#endregion
-//#region src/host-api.d.ts
 interface CommandsApiLike {
   list(req: RpcRequestLike<{
     sessionId: string;
@@ -640,7 +740,10 @@ interface ScheduleHistoryViewLike {
   };
   nextBefore?: string;
 }
-interface ScheduleApiLike {
+/** 会话级 Schedule 服务（DSH ≤ 0.2.2-alpha.2）：任务绑定单一 Session。 */
+interface LegacyScheduleApiLike {
+  /** 判别位缺省即 legacy：旧宿主与既有测试夹具不必补字段。 */
+  readonly mode?: 'legacy';
   list(req: RpcRequestLike<{
     sessionId: string;
   }>): Promise<RpcResponseLike<{
@@ -684,6 +787,101 @@ interface ScheduleApiLike {
     code?: string;
   }>>;
 }
+/** 宿主级任务视图：与 wire 的 `HostScheduleTask` 同一形状（Bridge 直接透传）。 */
+type HostScheduleTaskView = HostScheduleTask;
+interface HostScheduleListRequestLike {
+  /** true 只列运行中；false 只列暂停/结束；省略列全部。 */
+  active?: boolean;
+  limit?: number;
+  offset?: number;
+}
+interface HostScheduleListResultLike {
+  tasks: HostScheduleTaskView[];
+  shown: number;
+  total: number;
+  limit: number;
+  offset: number;
+}
+/** 查看结果：命中或非变更 miss（Host 用 code 表示 miss，不是抛错）。 */
+type HostScheduleViewOutcome = {
+  kind: 'task';
+  task: HostScheduleTaskView;
+} | {
+  kind: 'not-found';
+  id: string;
+};
+/** 编辑结果：更新后的任务、已删除、miss，或乐观锁冲突（wire 上回 E_BUSY）。 */
+type HostScheduleEditOutcome = {
+  kind: 'task';
+  task: HostScheduleTaskView;
+} | {
+  kind: 'deleted';
+  id: string;
+} | {
+  kind: 'not-found';
+  id: string;
+} | {
+  kind: 'conflict';
+  id: string;
+};
+/** 手动执行结果：已投递、已有执行在进行中（E_BUSY），或目标已不存在。 */
+type HostScheduleRunOutcome = {
+  kind: 'task';
+  task: HostScheduleTaskView;
+} | {
+  kind: 'pending';
+  id: string;
+} | {
+  kind: 'not-found';
+  id: string;
+};
+interface HostScheduleLimitsView {
+  /** 以新建会话方式投递的最小间隔秒数；客户端只展示，不自行节流。 */
+  newSessionIntervalSeconds: number;
+}
+interface HostScheduleCreateRequestLike {
+  title: string;
+  prompt: string;
+  timing: HostScheduleTiming;
+  /** 省略时由 Host 默认：首次投递新建并复用会话。 */
+  target?: HostScheduleTargetRequest;
+}
+type HostScheduleEditRequestLike = {
+  id: string;
+  action: 'update';
+  patch: HostSchedulePatch;
+  expectedUpdatedAt?: string | null;
+} | {
+  id: string;
+  action: 'delete';
+  expectedUpdatedAt?: string | null;
+};
+/**
+ * 宿主级 Schedule 服务（DSH 0.2.2-alpha.3 起）。
+ *
+ * 探测只看形状：`edit` 存在且 `update` 不存在。`remoteXxx` 是同一服务的
+ * 「人类 Remote 调用」变体（不记录 acting Session）；Bridge 就是人类 Remote
+ * 调用方，因此直接用公开方法并省略 actorSessionId。
+ */
+interface HostScheduleApiLike {
+  readonly mode: 'host';
+  list(req: RpcRequestLike<HostScheduleListRequestLike>): Promise<RpcResponseLike<HostScheduleListResultLike>>;
+  view(req: RpcRequestLike<{
+    id: string;
+  }>): Promise<RpcResponseLike<HostScheduleViewOutcome>>;
+  create(req: RpcRequestLike<HostScheduleCreateRequestLike>): Promise<RpcResponseLike<HostScheduleTaskView>>;
+  edit(req: RpcRequestLike<HostScheduleEditRequestLike>): Promise<RpcResponseLike<HostScheduleEditOutcome>>;
+  run(req: RpcRequestLike<{
+    id: string;
+  }>): Promise<RpcResponseLike<HostScheduleRunOutcome>>;
+  history(req: RpcRequestLike<{
+    id: string;
+    limit: number;
+    before?: string;
+  }>): Promise<RpcResponseLike<ScheduleHistoryViewLike>>;
+  limits(req: RpcRequestLike<Record<string, never>>): Promise<RpcResponseLike<HostScheduleLimitsView>>;
+}
+type ScheduleApiLike = LegacyScheduleApiLike | HostScheduleApiLike;
 interface HostApiLike {
   listDirectory?(req: RpcRequestLike<{
     path?: string;
@@ -914,16 +1112,12 @@ interface PushOutlet {
    */
   isAvailable(): boolean;
 }
-//#endregion
-//#region src/document-payload.d.ts
 interface PromptDocument {
   name: string;
   mediaType: string;
   text: string;
   truncated?: boolean;
 }
-//#endregion
-//#region src/host-bridge.d.ts
 /**
  * 失败结果直接携带 wire 错误码（error vocabulary 见 wire-errors.ts）。
  *
@@ -941,6 +1135,18 @@ type ScheduleBridgeResult<T> = {
   code: WireErrorCode;
   message: string;
   replayed?: boolean;
+};
+/**
+ * 宿主级编辑（update / delete 合一的 `edit`）的 Bridge 结果值。
+ *
+ * 与 legacy 的 updated/deleted 两个独立帧结果分开表达，wire handler 用
+ * `'deleted' in value` 落成 `deleted:true` 或 `task`。
+ */
+type HostScheduleEditValue = {
+  task: HostScheduleTaskView;
+} | {
+  deleted: true;
+  id: string;
 };
 declare class HostBridge {
   private readonly apiProxy;
@@ -1149,7 +1355,40 @@ declare class HostBridge {
   }): Promise<ScheduleBridgeResult<{
     sessionId: string;
   }>>;
+  /**
+   * 当前 adapter 是否宿主级计划任务模型。
+   *
+   * 能力位 `schedulesHost`（host-capabilities.ts）与新帧、旧帧映射全部读这一个
+   * 判别位：探测只发生一次（DshApiProxy.resolveSchedule），这里不再看控制器
+   * 方法，也不看版本号字符串。
+   */
+  private get hostSchedule();
   listSchedules(sessionId: string): Promise<ScheduleBridgeResult<ScheduleTaskViewLike[]>>;
+  /** 宿主级列表 -> 旧会话级视图：过滤 session 目标、丢弃 ended、按 scheduledAt 升序。 */
+  private listHostSchedulesAsLegacy;
+  listHostSchedules(request?: HostScheduleListRequestLike): Promise<ScheduleBridgeResult<HostScheduleListResultLike>>;
+  viewHostSchedule(id: string): Promise<ScheduleBridgeResult<HostScheduleTaskView>>;
+  createHostSchedule(deviceId: string, payload: Record<string, unknown> & {
+    clientRequestId: string;
+    title: string;
+    prompt: string;
+    timing: unknown;
+    target?: unknown;
+  }): Promise<ScheduleBridgeResult<HostScheduleTaskView>>;
+  editHostSchedule(deviceId: string, payload: Record<string, unknown> & {
+    clientRequestId: string;
+    id: string;
+    action: 'update' | 'delete';
+    expectedUpdatedAt?: string | null;
+    patch?: unknown;
+  }): Promise<ScheduleBridgeResult<HostScheduleEditValue>>;
+  runHostSchedule(deviceId: string, payload: {
+    clientRequestId: string;
+    id: string;
+  }): Promise<ScheduleBridgeResult<HostScheduleTaskView>>;
+  scheduleLimits(): Promise<ScheduleBridgeResult<{
+    newSessionIntervalSeconds: number;
+  }>>;
   scheduleHistory(sessionId: string, id: string, limit: number, before?: string): Promise<ScheduleBridgeResult<ScheduleHistoryViewLike>>;
   createSchedule(deviceId: string, payload: Record<string, unknown> & {
     sessionId: string;
@@ -1182,8 +1421,6 @@ declare class HostBridge {
   respondApproval(requestId: string, decision: 'allow' | 'deny', reason?: string): Promise<PendingResponseOutcome>;
   respondQuestion(requestId: string, answers: unknown): Promise<PendingResponseOutcome>;
 }
-//#endregion
-//#region src/config.d.ts
 interface Config {
   /** Master switch; when false the plugin activates and does nothing. */
   enabled?: boolean;
@@ -1342,8 +1579,6 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
     relayToken: z<string, string, "defined">;
   }>>, "defined">;
 }>>, "plain">;
-//#endregion
-//#region src/push-policy.d.ts
 /** Prune only when the provider supplies an authoritative token-lifecycle verdict. */
 declare function shouldPrunePushToken(outcome: 'sent' | 'invalid-token' | 'failed', reason?: string): boolean;
 /** APNs requires both registration and the same content permission as WS. */
@@ -1361,8 +1596,6 @@ declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 
   hasEnrollKey: boolean;
   tokenStillCurrent: boolean;
 }): boolean;
-//#endregion
-//#region src/index.d.ts
 /**
  * dsh-deeppilot — data bridge between the DSH host and DeepPilot
  * clients. Owns independent, narrowly routed LAN (TLS-only, pinned by paired
@@ -1381,6 +1614,5 @@ declare const name = "deeppilot";
 /** No web-service requirement: the plugin owns its own transport listeners. */
 declare const inject: string[];
 declare function apply(ctx: Context, options: unknown): void;
-//#endregion
 export { Config, HostBridge, apply, inject, mayReceivePush, name, shouldPrunePushToken, shouldReEnrollRelayToken };
 //# sourceMappingURL=index.d.ts.map

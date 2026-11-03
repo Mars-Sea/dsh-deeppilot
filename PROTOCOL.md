@@ -197,7 +197,7 @@ scope 与操作映射：
 | `sessions.manage` | 创建/重命名/归档/取消会话，创建工作区，切换模型，`c2s.plugin.update.apply` 安装更新 |
 | `interactions.respond` | pending 快照、回答 approval 与 question |
 | `notifications.register` | 注册 APNs token 与通知偏好 |
-| `schedule.manage` | 定时任务/提醒的列表、历史、创建、修改和删除；同时需要 `sessions.read` 才能读取任务内容 |
+| `schedule.manage` | 定时任务/提醒：`c2s.schedule.list`、`c2s.schedule.history`、`c2s.schedule.create`、`c2s.schedule.update`、`c2s.schedule.delete`，以及宿主级扩展的 `c2s.schedule.host.list`、`c2s.schedule.host.view`、`c2s.schedule.host.create`、`c2s.schedule.host.edit`、`c2s.schedule.host.run`、`c2s.schedule.host.limits`；同时需要 `sessions.read` 才能读取任务内容 |
 
 缺少所需 scope 时服务端回 `E_FORBIDDEN`，连接保持打开。当前产品默认配对授予
 全部 scope，普通设置页不提供逐项权限控制，只提供全局连接开关和逐设备删除。
@@ -881,6 +881,9 @@ Bridge 侧 Host code 到 wire 码的映射是 `src/wire-errors.ts` 的单一属�
   （旧 Bridge 不认识该类型，回 `E_PROTOCOL`）；客户端应就此结束该次解绑的重试，改为
   本地抑制（不展示不属于任何已配对 Host 的推送，见 §6 通知 Host 路由）并可提示用户
   在主机设置页吊销该设备，否则它只会在本地解绑、继续接收离线推送。
+- `schedulesHost` 同属可选 v2 扩展：true 表示宿主级计划任务模型与
+  「Schedule 宿主级任务扩展」帧可用；缺失/false 时客户端只能使用会话级
+  schedule 帧。旧帧在宿主级模型上仍由 Bridge 映射，旧客户端无需升级。
 - v2 同版本新增可选字段时双方必须忽略未知字段。
 - 旧 Host 不认识 `deeppilot/setDeviceName` 时，设置页应显示“不支持设备重命名”的降级提示，
   不得把失败伪装成保存成功；新客户端仍须正常显示和删除设备。
@@ -1054,6 +1057,160 @@ updates work through relay mode. System delivery and refresh budgets still apply
 
 DSH `schedule/changed` 会被投影为无正文的 `s2c.schedule.changed`，客户端收到后
 重新请求当前可见 Session 的任务列表。APNs/Relay 不得携带提醒 prompt。
+
+## Schedule 宿主级任务扩展（可选 v2 能力）
+
+`welcome.capabilities.schedulesHost=true` 表示 Host 的计划任务已改为**宿主级任务
+模型**（DSH `0.2.2-alpha.3` 起）：任务不再绑定单一 Session，而是带一个交付目标
+（`target`），并可能有 `active` / `paused` / `ended` 状态。该位缺省 false，旧
+客户端忽略它即可。`schedulesHost=false` 时本节所有帧返回 `E_UNSUPPORTED`，
+客户端只能使用上一节的会话级帧。
+
+`schedules=true` 与 `schedulesHost` 相互独立：`schedules` 表示宿主挂载了
+Schedule 服务（旧帧可用），`schedulesHost` 表示新帧可用。宿主为宿主级模型时
+Bridge **仍继续服务旧帧**（映射规则见本节末），因此旧 App 不会因为宿主升级而
+失效；新 App 优先使用新帧。
+
+能力位由 Host 形状决定，不按版本号字符串判断。所有帧与旧帧一样要求设备
+scope `schedule.manage` 与 `sessions.read`，widget 短连接不允许调用。
+
+### 任务视图 `schedule.host.task`
+
+```json
+{
+  "id": "schedule-…",
+  "title": "检查构建",
+  "prompt": "检查构建状态",
+  "timing": { "kind": "daily", "daily": { "time": "09:00", "time_zone": "Asia/Shanghai" } },
+  "target": { "kind": "session", "sessionId": "session-…" },
+  "status": "active",
+  "scheduledAt": "2026-11-04T01:00:00.000Z",
+  "createdAt": "2026-11-03T12:00:00.000Z",
+  "updatedAt": "2026-11-03T12:00:00.000Z",
+  "executionActive": true,
+  "deliveryFloorEndsAt": "2026-11-04T02:00:00.000Z",
+  "lastDelivery": { "scheduledAt": "…", "deliveredAt": "…", "messageId": "message-…", "targetSessionId": "session-…" }
+}
+```
+
+- `timing.kind` 取 `after` / `at` / `every` / `daily` / `weekly` / `cron` / `rrule`：
+  `after` 用 `after_seconds`；`at` 用 `at`（RFC 3339 字符串或
+  `{date,time,time_zone}`）；`every` 用 `every_seconds`；`daily` / `weekly` / `cron`
+  用同名字段 `{time,time_zone}` / `{time,time_zone,weekdays}` / `{expression,time_zone}`；
+  `rrule` 用 `rrule` 字符串。与 DSH Schedule 结构一一对应，Host 负责完整校验。
+- `target.kind` 取 `session`（每次投递到已有会话，带 `sessionId`）、`new_once`
+  （首次投递新建一个会话并复用，响应里带 Host 预留的 `sessionId`）或 `new`
+  （每次投递新建会话）。`new_once` / `new` 可带 `create: {cwd?, agentPreset?}`。
+- `status` 取 `active` / `paused` / `ended`；只有 `active` 有定时义务。
+- `createdAt` / `updatedAt` / `executionActive` / `deliveryFloorEndsAt` /
+  `lastDelivery` 均为可选，客户端不得依赖其存在。`lastDelivery` 只含回执元数据，
+  不含 prompt 正文。Bridge 不返回 Host 内部的 `involvedSessionIds`。
+
+### 列表
+
+```json
+{ "type": "c2s.schedule.host.list", "id": "shl-1",
+  "payload": { "active": true, "limit": 50, "offset": 0 } }
+{ "type": "s2c.schedule.host.snapshot", "id": "shl-1",
+  "payload": { "tasks": [], "shown": 0, "total": 0, "limit": 50, "offset": 0 } }
+```
+
+`active` 可选：`true` 只列运行中、`false` 只列暂停/结束，省略列全部。
+`limit` 为 1–500 的安全整数，省略时 Host 默认 100；`offset` 为非负安全整数，
+省略时 0。`shown` 为本页条数、`total` 为过滤后总数，客户端据此做分页。
+
+### 查看
+
+```json
+{ "type": "c2s.schedule.host.view", "id": "shv-1", "payload": { "id": "schedule-…" } }
+{ "type": "s2c.schedule.host.task", "id": "shv-1", "payload": { "task": { "id": "schedule-…" } } }
+```
+
+任务不存在返回 `E_NOT_FOUND`。查看不会激活目标会话。
+
+### 创建
+
+```json
+{ "type": "c2s.schedule.host.create", "id": "shc-1", "payload": {
+  "clientRequestId": "1730000000000-…",
+  "title": "检查构建", "prompt": "检查构建状态",
+  "timing": { "kind": "every", "every_seconds": 3600 },
+  "target": { "kind": "session", "sessionId": "session-…" }
+} }
+```
+
+必须提供非空 `title`（最多 120 个 Unicode code points）、非空 `prompt`（最多
+256 KiB）与 `timing`；`target` 省略时按 Host 默认（首次投递新建并复用会话）。
+成功回 `s2c.schedule.updated`，payload 带 `clientRequestId`、`task` 与可选的
+`replayed`（不含 `sessionId`）。
+
+### 编辑（更新 / 删除 / 暂停恢复）
+
+```json
+{ "type": "c2s.schedule.host.edit", "id": "she-1", "payload": {
+  "clientRequestId": "1730000000000-…", "id": "schedule-…",
+  "expectedUpdatedAt": "2026-11-03T12:00:00.000Z",
+  "action": "update",
+  "patch": { "title": "…", "timing": { "kind": "at", "at": "2026-11-05T09:00:00Z" }, "active": false }
+} }
+{ "type": "c2s.schedule.host.edit", "id": "she-2", "payload": {
+  "clientRequestId": "1730000000000-…", "id": "schedule-…", "action": "delete"
+} }
+```
+
+`action` 取 `update` 或 `delete`。`patch` 至少有一个字段，可含 `title`、`prompt`、
+`timing`、`target`、`active`（`false` 暂停、`true` 恢复）；`timing` 改变会重算下次
+触发。`expectedUpdatedAt` 可选：等于最近一次读取的 `updatedAt` 时才能写入，不等
+返回 `E_BUSY`（冲突），客户端必须重新读任务，不得静默覆盖；省略时不校验冲突
+（旧客户端映射路径）。成功回 `s2c.schedule.updated`：更新带 `task`，删除带
+`deleted:true`。
+
+### 手动执行
+
+```json
+{ "type": "c2s.schedule.host.run", "id": "shr-1", "payload": {
+  "clientRequestId": "1730000000000-…", "id": "schedule-…" } }
+```
+
+立即投递一次；成功回 `s2c.schedule.updated` 带 `clientRequestId` 与 `task`。
+同一任务已有一次执行进行中时返回 `E_BUSY`；目标任务会话已归档时返回
+`E_NOT_FOUND`。该帧是变更操作，按 `clientRequestId` 幂等，结果未知时不得自动重试。
+
+### 投递上限
+
+```json
+{ "type": "c2s.schedule.host.limits", "id": "shm-1", "payload": {} }
+{ "type": "s2c.schedule.host.limits", "id": "shm-1", "payload": { "newSessionIntervalSeconds": 60 } }
+```
+
+`newSessionIntervalSeconds` 为每次以新建会话方式投递的最小间隔秒数；客户端只做
+展示与提前提示，不自行节流。
+
+### 投递历史
+
+沿用 `c2s.schedule.history` / `s2c.schedule.history`：宿主级模型下 `sessionId`
+可选并被忽略（`id` 是任务的唯一标识），返回结构不变（`records`、
+`earlierRecordsUnavailable`、`earlierRecordsPruned`、`retention`、`nextBefore`）。
+`before` 是排他游标；游标无效返回 `E_NOT_FOUND`。
+
+### 旧帧在宿主级模型上的映射
+
+`schedulesHost=true` 时旧帧仍然可用，由 Bridge 按下列规则映射，旧 App 无需升级：
+
+| 旧帧 | 映射 |
+|---|---|
+| `c2s.schedule.list {sessionId}` | 宿主级列表全量分页后过滤 `target.kind="session"` 且 `target.sessionId` 相同的任务，按 `scheduledAt` 升序；返回旧视图 |
+| `c2s.schedule.create {sessionId, 选择器}` | 选择器转成 `timing`；`target={kind:"session",sessionId}` |
+| `c2s.schedule.update {expected, title?, prompt?, change?}` | 读当前任务后与 `expected` 比较；不一致返回 `E_BUSY`；一致则用 `edit({action:"update", patch})`。旧视图没有 `updatedAt`，因此这是尽力而为的冲突保护 |
+| `c2s.schedule.delete {sessionId, id}` | `edit({action:"delete"})` |
+| `c2s.schedule.history` | 映射到宿主级历史（忽略 `sessionId`） |
+| `s2c.schedule.changed` | 两种模型共用；客户端收到后按自己当前视图重拉 |
+
+旧视图字段（`kind` / `afterSeconds` / `everySeconds` / `time` / `timeZone` /
+`weekdays` / `expression` / `scheduledAt` / `state`）由新任务视图反向投影：
+`state` 只由 `scheduledAt` 是否已过推导；`status="ended"` 的任务不出现在旧视图里。
+旧枚举没有 `rrule` 对应的 `kind`，为了不让旧 App 整页解码失败，旧视图列表
+**跳过 `rrule` 任务**；新帧完整支持。
 
 ## Session 分支扩展（可选 v2 能力）
 

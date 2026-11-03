@@ -38,6 +38,38 @@
 - 更新接受回执在目标校验和日志耐久写入后发送。最近结果保留供重连对账；同请求编号不能更换目标，也不能重复安装。日志不保存凭据或会话内容，设备归属仅保存摘要并只向所属设备返回。
 - “恢复”指 HMR 后重连并恢复当前会话。宿主无 HMR 时返回 `restart-required`；不会强杀宿主，不能声称已经自动重启。安装失败由宿主恢复旧版本，桥接只核验并呈现结果。
 
+## 宿主级计划任务（DSH 0.2.2-alpha.3）
+
+`0.2.2-alpha.3` 把自动化任务改为宿主级模型（任务带 `target`，状态有
+`active` / `paused` / `ended`），并重写了 `dsh-schedule` 服务面。插件按**服务形状**
+（有 `edit`、无 `update`）选择适配器，不看版本号字符串；旧宿主逐字节保持原行为。
+wire 契约见 [PROTOCOL.md](../PROTOCOL.md) 「Schedule 宿主级任务扩展」。
+
+| 上游接口 | 本次阅读 | 桥接用途 |
+|---|---|---|
+| `schedule.list({active?,limit?,offset?})` | 分页对象 `{items,shown,total,limit,offset}` | 新帧 `c2s.schedule.host.list`；旧帧全量分页后过滤目标会话 |
+| `schedule.view({id})` | 任务或 miss | `c2s.schedule.host.view` |
+| `schedule.create(request, actorSessionId?, signal)` | `timing` + `target` 请求体 | `c2s.schedule.host.create`；旧帧把选择器转 `timing` + `target:{kind:"session"}` |
+| `schedule.edit({id, action, patch?, expectedUpdatedAt?}, …)` | update/delete 合一 | `c2s.schedule.host.edit`；旧帧 update 用 `expected` 逐字段比较后转 `patch` |
+| `schedule.run({id})` | 手动执行，执行中返回 `schedule_execution_pending` | `c2s.schedule.host.run`（E_BUSY 提示稍后） |
+| `schedule.history({id,limit,before?})` | 与旧结构相同，不再校验会话归属 | 两种模型共用 `c2s.schedule.history`；宿主级忽略 `sessionId` |
+| `schedule.deliveryLimits()` | `{newSessionIntervalSeconds}` | `c2s.schedule.host.limits` 只做展示，不自行节流 |
+| 旧 `delete` / `update` / 按会话的 `list` | 仅在会话级宿主存在 | 旧帧原路径；宿主级宿主上由适配层映射 |
+
+差异对照补充：
+
+| 类别 | 状态 |
+|---|---|
+| 双方都有 | 列表、创建、编辑、删除、投递历史、变更事件 |
+| 上游有、我方未接 | `deleteInactive`（批量清理结束任务）、`catalog`（不分页全量）——手机无对应入口，暂不接入 |
+| 我方有、上游没有 | 旧 App 的会话级视图（由宿主级任务反向投影）、按会话过滤的列表 |
+| 双方都没有 | 任务执行结果回执、跨设备编辑锁（只用 `expectedUpdatedAt` 乐观冲突） |
+
+边界：旧视图过滤 `target.kind="session"` 且同会话、丢弃 `ended`、跳过 `rrule`（旧枚举无
+对应 kind，避免旧 App 整页解码失败）；旧 `update` 的冲突保护是「`expected` 与当前任务
+逐字段比较」的尽力而为，旧视图没有 `updatedAt`；新帧用 `expectedUpdatedAt` 做真正的
+乐观冲突检测。`run` 按 `clientRequestId` 幂等，结果未知时客户端不得自动重试。
+
 ## 验证入口
 
-插件用例：`tests/markdown-export.test.ts`、`tests/assistant-stream.test.ts`、`tests/plugin-update.test.ts`，以及 wire 注册表、历史适配和命令回归。iOS 测试及实机边界见私有项目的对接说明。真机、实际 npm 安装和 Funnel 验证不得由模拟或语法检查替代。
+插件用例：`tests/markdown-export.test.ts`、`tests/assistant-stream.test.ts`、`tests/plugin-update.test.ts`、`tests/schedule.test.ts`（双形态适配与六个新帧），以及 wire 注册表、历史适配和命令回归。iOS 测试及实机边界见私有项目的对接说明。真机、实际 npm 安装和 Funnel 验证不得由模拟或语法检查替代。

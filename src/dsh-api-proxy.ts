@@ -20,7 +20,16 @@ import type {
   ApiProxyLike,
   DirectoryListingLike,
   HistoryResult,
+  HostScheduleCreateRequestLike,
+  HostScheduleEditOutcome,
+  HostScheduleEditRequestLike,
+  HostScheduleLimitsView,
+  HostScheduleListResultLike,
+  HostScheduleRunOutcome,
+  HostScheduleTaskView,
+  HostScheduleViewOutcome,
   HostSessionModels,
+  LegacyScheduleApiLike,
   MuxFrameLike,
   PhoneSessionRow,
   ScheduleHistoryViewLike,
@@ -28,6 +37,14 @@ import type {
   SessionEventLike,
   WorkspaceViewLike,
 } from './host-api.ts'
+import type {
+  HostScheduleCreateSpec,
+  HostScheduleDeliveryReceipt,
+  HostSchedulePatch,
+  HostScheduleTarget,
+  HostScheduleTargetRequest,
+  HostScheduleTiming,
+} from './protocol.ts'
 
 interface RpcOk<T> { ok: true; value: T }
 interface RpcErr { ok: false; error: { code: string; message?: string } }
@@ -85,12 +102,42 @@ interface WorkspaceControllerLike {
   follow(signal: AbortSignal): AsyncIterable<{ type: string; value?: unknown }>
 }
 
-interface ScheduleControllerLike {
+/** 会话级 Schedule 控制器（DSH ≤ 0.2.2-alpha.2）：任务绑定单一 Session。 */
+interface LegacyScheduleControllerLike {
   list(request: { sessionId: string }): Promise<readonly unknown[]>
   history(request: { sessionId: string; id: string; limit: number; before?: string }): Promise<unknown>
   create(sessionId: string, request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>
   update(request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>
   delete(request: { sessionId: string; id: string }, signal?: AbortSignal): Promise<unknown>
+}
+
+/**
+ * 宿主级 Schedule 控制器（DSH 0.2.2-alpha.3 起）。
+ *
+ * 方法按真实服务面声明：`list` 返回分页对象、`view` 返回任务或 miss 结果、
+ * `create/edit/run` 返回任务/删除/冲突/进行中等结果对象，`edit` 取代了
+ * update/delete，`deliveryLimits` 是同步读取。返回值保持 unknown：适配层负责
+ * 形状归一化，控制器细节不外泄给 Bridge。
+ */
+interface HostScheduleControllerLike {
+  list(request?: { active?: boolean; limit?: number; offset?: number }): Promise<unknown>
+  view(request: { id: string }): Promise<unknown>
+  create(request: Record<string, unknown>, actorSessionId?: unknown, signal?: AbortSignal): Promise<unknown>
+  edit(request: Record<string, unknown>, actorSessionId?: unknown, signal?: AbortSignal): Promise<unknown>
+  run(request: { id: string }, signal?: AbortSignal): Promise<unknown>
+  history(request: { id: string; limit: number; before?: string }): Promise<unknown>
+  deliveryLimits(): unknown
+}
+
+type ScheduleControllerLike = LegacyScheduleControllerLike | HostScheduleControllerLike
+
+/**
+ * 形状探测：宿主级模型只有 `edit`（没有 `update`）。不按版本号字符串判断——
+ * 版本号无法说明 Schedule bundle 是否挂载、也无法覆盖回退组合。
+ */
+function isHostScheduleController(controller: ScheduleControllerLike): controller is HostScheduleControllerLike {
+  const value = controller as { edit?: unknown; update?: unknown }
+  return typeof value.edit === 'function' && typeof value.update !== 'function'
 }
 
 interface DirectoryPickerControllerLike {
@@ -201,7 +248,9 @@ export class DshApiProxy implements ApiProxyLike {
     const controller = this.ctx.get('schedule') as ScheduleControllerLike | undefined
     if (controller === undefined) return
     this.scheduleController = controller
-    this.scheduleApi = this.createScheduleApi(controller)
+    this.scheduleApi = isHostScheduleController(controller)
+      ? this.createHostScheduleApi(controller)
+      : this.createLegacyScheduleApi(controller)
   }
 
   get schedule(): ApiProxyLike['schedule'] {
@@ -209,8 +258,10 @@ export class DshApiProxy implements ApiProxyLike {
     return this.scheduleApi
   }
 
-  private createScheduleApi(controller: ScheduleControllerLike): NonNullable<ApiProxyLike['schedule']> {
+  /** 会话级适配器：行为与宿主级扩展加入前逐字节一致，只多一个判别位。 */
+  private createLegacyScheduleApi(controller: LegacyScheduleControllerLike): LegacyScheduleApiLike {
     return {
+      mode: 'legacy',
       list: async (request) => this.call(async () => ({
         sessionId: request.payload!.sessionId,
         tasks: (await controller.list({ sessionId: request.payload!.sessionId })).map(toScheduleTask),
@@ -247,6 +298,83 @@ export class DshApiProxy implements ApiProxyLike {
       delete: async (request) => this.call(async () => {
         const result = await controller.delete({ sessionId: request.payload!.sessionId, id: request.payload!.id }) as Record<string, unknown>
         return { id: String(result.id), deleted: result.deleted === true, ...(result.code !== undefined ? { code: String(result.code) } : {}) }
+      }),
+    }
+  }
+
+  /**
+   * 宿主级适配器：把 DSH `ScheduleService` 的分页列表/结果对象归一化成 Bridge
+   * 消费的稳定视图。
+   *
+   * 失败分两类：`view/edit/run/history` 的「找不到」是**结果对象**里的 code
+   * （非变更 miss，不抛错），这里翻译成 outcome 或带 code 的 Error；
+   * `create/edit/run` 的输入非法与目标已归档是 RemoteError 抛出，由
+   * `this.call` 收成 `{code}`，再由 Bridge 按错误词表映射。
+   */
+  private createHostScheduleApi(controller: HostScheduleControllerLike): NonNullable<ApiProxyLike['schedule']> {
+    return {
+      mode: 'host',
+      list: async (request) => this.call(async () => {
+        const payload = request.payload ?? {}
+        const value = await controller.list({
+          ...(payload.active !== undefined ? { active: payload.active } : {}),
+          ...(payload.limit !== undefined ? { limit: payload.limit } : {}),
+          ...(payload.offset !== undefined ? { offset: payload.offset } : {}),
+        }) as Record<string, unknown>
+        const items = Array.isArray(value.items) ? value.items : []
+        return {
+          tasks: items.map(toHostScheduleTask),
+          shown: finiteCount(value.shown, items.length),
+          total: finiteCount(value.total, items.length),
+          limit: finiteCount(value.limit, payload.limit ?? 100),
+          offset: finiteCount(value.offset, payload.offset ?? 0),
+        } satisfies HostScheduleListResultLike
+      }),
+      view: async (request) => this.call(async () => {
+        const value = await controller.view({ id: request.payload!.id }) as Record<string, unknown>
+        return toHostScheduleViewOutcome(value, request.payload!.id)
+      }),
+      create: async (request) => this.call(async () => {
+        const payload = request.payload!
+        const created = await controller.create({
+          title: payload.title,
+          prompt: payload.prompt,
+          timing: payload.timing,
+          ...(payload.target !== undefined ? { target: normalizeTargetRequest(payload.target) } : {}),
+        } satisfies HostScheduleCreateRequestLike)
+        return toHostScheduleTask(created)
+      }),
+      edit: async (request) => this.call(async () => {
+        const payload = request.payload!
+        const expected = payload.expectedUpdatedAt !== undefined
+          ? { expectedUpdatedAt: payload.expectedUpdatedAt }
+          : {}
+        const edit: HostScheduleEditRequestLike = payload.action === 'update'
+          ? { id: payload.id, action: 'update', patch: normalizeHostPatch(payload.patch), ...expected }
+          : { id: payload.id, action: 'delete', ...expected }
+        const value = await controller.edit(edit) as Record<string, unknown>
+        return toHostScheduleEditOutcome(value, payload.id)
+      }),
+      run: async (request) => this.call(async () => {
+        const value = await controller.run({ id: request.payload!.id }) as Record<string, unknown>
+        return toHostScheduleRunOutcome(value, request.payload!.id)
+      }),
+      history: async (request) => this.call(async () => {
+        const value = await controller.history({
+          id: request.payload!.id,
+          limit: request.payload!.limit,
+          ...(request.payload!.before !== undefined ? { before: request.payload!.before } : {}),
+        }) as Record<string, unknown>
+        if (typeof value.code === 'string') {
+          throw Object.assign(new Error(String(value.code)), { code: value.code })
+        }
+        return toScheduleHistory(value)
+      }),
+      limits: async () => this.call(async () => {
+        const value = controller.deliveryLimits() as { newSessionIntervalSeconds?: unknown } | undefined
+        return {
+          newSessionIntervalSeconds: Math.max(0, Math.trunc(Number(value?.newSessionIntervalSeconds) || 0)),
+        } satisfies HostScheduleLimitsView
       }),
     }
   }
@@ -631,6 +759,182 @@ function toScheduleHistory(value: unknown): ScheduleHistoryViewLike {
     ...(typeof row.nextBefore === 'string' ? { nextBefore: row.nextBefore } : {}),
   }
 }
+/* ---------- 宿主级 Schedule 的形状归一化 ---------- */
+
+/**
+ * 请求侧 target：`new_once`/`new` 的会话由 Host 预留或新建，客户端若把查看结果
+ * 里的 `sessionId` 原样回传，不向上游透传（Host 的创建/编辑请求没有这个字段）。
+ */
+function normalizeTargetRequest(value: HostScheduleTargetRequest): HostScheduleTargetRequest {
+  if (value.kind === 'session') {
+    return { kind: 'session', sessionId: String(value.sessionId ?? '') }
+  }
+  const create = toHostScheduleCreateSpec(value.create)
+  return { kind: value.kind, ...(create !== undefined ? { create } : {}) }
+}
+
+/** 编辑补丁归一化：字段按契约逐个透传，target 走请求侧投影。 */
+function normalizeHostPatch(value: HostSchedulePatch): HostSchedulePatch {
+  return {
+    ...(value.title !== undefined ? { title: value.title } : {}),
+    ...(value.prompt !== undefined ? { prompt: value.prompt } : {}),
+    ...(value.timing !== undefined ? { timing: value.timing } : {}),
+    ...(value.target !== undefined ? { target: normalizeTargetRequest(value.target) } : {}),
+    ...(value.active !== undefined ? { active: value.active } : {}),
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {}
+}
+
+/** 非负安全整数；形状不符时退回 fallback（分页字段只用于展示）。 */
+function finiteCount(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : fallback
+}
+
+function positiveSeconds(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function hostResultCode(value: Record<string, unknown>): string | undefined {
+  return typeof value.code === 'string' ? value.code : undefined
+}
+
+/** 结果对象里的「非变更 miss」不是抛错，这里翻译成 outcome 或带 code 的 Error。 */
+function throwHostResultCode(code: string): never {
+  throw Object.assign(new Error(code), { code })
+}
+
+function toHostScheduleCreateSpec(value: unknown): HostScheduleCreateSpec | undefined {
+  const row = toRecord(value)
+  const spec: HostScheduleCreateSpec = {
+    ...(typeof row.cwd === 'string' ? { cwd: row.cwd } : {}),
+    ...(typeof row.agentPreset === 'string' ? { agentPreset: row.agentPreset } : {}),
+  }
+  return Object.keys(spec).length > 0 ? spec : undefined
+}
+
+/**
+ * 交付目标投影。`session` 与 `new_once` 带 sessionId（后者是创建时 Host 预留
+ * 的会话）；`new` 每次投递新建会话。`create` 省略时按 Host 默认。
+ */
+function toHostScheduleTarget(value: unknown): HostScheduleTarget {
+  const target = toRecord(value)
+  const create = toHostScheduleCreateSpec(target.create)
+  if (target.kind === 'session') {
+    return { kind: 'session', sessionId: String(target.sessionId ?? '') }
+  }
+  if (target.kind === 'new_once') {
+    return {
+      kind: 'new_once',
+      sessionId: String(target.sessionId ?? ''),
+      ...(create !== undefined ? { create } : {}),
+    }
+  }
+  return { kind: 'new', ...(create !== undefined ? { create } : {}) }
+}
+
+function toHostScheduleReceipt(value: unknown): HostScheduleDeliveryReceipt {
+  const row = toRecord(value)
+  return {
+    scheduledAt: String(row.scheduledAt ?? ''),
+    deliveredAt: String(row.deliveredAt ?? ''),
+    messageId: String(row.messageId ?? ''),
+    targetSessionId: String(row.targetSessionId ?? ''),
+  }
+}
+
+/**
+ * timing 反向投影：DSH 存储记录用 camelCase（`afterSeconds`/`timeZone`），wire
+ * 用 PROTOCOL.md 的 snake_case 嵌套结构。
+ *
+ * `at` 存储后只剩 `scheduledAt`（原始绝对时刻不是独立字段），因此用排定时刻
+ * 回填——对 active 的一次性任务它就是目标时刻。
+ */
+function toHostScheduleTiming(row: Record<string, unknown>): HostScheduleTiming {
+  switch (row.kind) {
+    case 'after':
+      return { kind: 'after', after_seconds: positiveSeconds(row.afterSeconds) }
+    case 'every':
+      return { kind: 'every', every_seconds: positiveSeconds(row.everySeconds) }
+    case 'daily':
+      return { kind: 'daily', daily: localTimeInput(row) }
+    case 'weekly':
+      return {
+        kind: 'weekly',
+        weekly: {
+          ...localTimeInput(row),
+          weekdays: Array.isArray(row.weekdays)
+            ? row.weekdays.filter((day): day is number => typeof day === 'number')
+            : [],
+        },
+      }
+    case 'cron':
+      return {
+        kind: 'cron',
+        cron: { expression: String(row.expression ?? ''), time_zone: String(row.timeZone ?? '') },
+      }
+    case 'rrule':
+      return { kind: 'rrule', rrule: String(row.rrule ?? '') }
+    default:
+      return { kind: 'at', at: String(row.scheduledAt ?? '') }
+  }
+}
+
+function localTimeInput(row: Record<string, unknown>): { time: string; time_zone: string } {
+  return { time: String(row.time ?? ''), time_zone: String(row.timeZone ?? '') }
+}
+
+/** Host `ScheduleCatalogEntry` -> wire `schedule.host.task`（丢弃 involvedSessionIds）。 */
+function toHostScheduleTask(value: unknown): HostScheduleTaskView {
+  const row = toRecord(value)
+  return {
+    id: String(row.id ?? ''),
+    title: String(row.title ?? ''),
+    prompt: String(row.prompt ?? ''),
+    timing: toHostScheduleTiming(row),
+    target: toHostScheduleTarget(row.target),
+    // Host 只给这三个状态；形态异常时按 active 保留（至少让任务在列表里可见，
+    // 不能让一条真实任务因为字段异常而消失）。
+    status: row.status === 'paused' || row.status === 'ended' ? row.status : 'active',
+    scheduledAt: String(row.scheduledAt ?? ''),
+    ...(typeof row.createdAt === 'string' ? { createdAt: row.createdAt } : {}),
+    ...(typeof row.updatedAt === 'string' ? { updatedAt: row.updatedAt } : {}),
+    ...(typeof row.executionActive === 'boolean' ? { executionActive: row.executionActive } : {}),
+    ...(typeof row.deliveryFloorEndsAt === 'string' ? { deliveryFloorEndsAt: row.deliveryFloorEndsAt } : {}),
+    ...(isRecord(row.lastDelivery) ? { lastDelivery: toHostScheduleReceipt(row.lastDelivery) } : {}),
+  }
+}
+
+function toHostScheduleViewOutcome(value: Record<string, unknown>, id: string): HostScheduleViewOutcome {
+  const code = hostResultCode(value)
+  if (code === 'schedule_not_found') return { kind: 'not-found', id }
+  if (code !== undefined) throwHostResultCode(code)
+  return { kind: 'task', task: toHostScheduleTask(value) }
+}
+
+function toHostScheduleEditOutcome(value: Record<string, unknown>, id: string): HostScheduleEditOutcome {
+  const code = hostResultCode(value)
+  if (code === 'schedule_conflict') return { kind: 'conflict', id }
+  if (code === 'schedule_not_found') return { kind: 'not-found', id }
+  if (code !== undefined) throwHostResultCode(code)
+  if (value.deleted === true) return { kind: 'deleted', id: String(value.id ?? id) }
+  return { kind: 'task', task: toHostScheduleTask(value) }
+}
+
+function toHostScheduleRunOutcome(value: Record<string, unknown>, id: string): HostScheduleRunOutcome {
+  const code = hostResultCode(value)
+  if (code === 'schedule_execution_pending') return { kind: 'pending', id }
+  if (code === 'schedule_not_found') return { kind: 'not-found', id }
+  if (code !== undefined) throwHostResultCode(code)
+  return { kind: 'task', task: toHostScheduleTask(value) }
+}
+
 async function readWorkspaceBaseline(controller: WorkspaceControllerLike): Promise<{ items: WorkspaceViewLike[]; archivedSessionIds: string[] }> {
   const abort = new AbortController()
   const iterator = controller.follow(abort.signal)[Symbol.asyncIterator]()

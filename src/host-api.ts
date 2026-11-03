@@ -1,4 +1,10 @@
 import type { SessionExportFormat, SessionSummary } from './protocol.ts'
+import type {
+  HostSchedulePatch,
+  HostScheduleTargetRequest,
+  HostScheduleTask,
+  HostScheduleTiming,
+} from './protocol.ts'
 import type { DeviceScope } from './device-auth.ts'
 import type { PushNotification } from './protocol.ts'
 import type { WireErrorCode } from './wire-errors.ts'
@@ -64,6 +70,15 @@ interface WorkspaceApiLike {
     Promise<RpcResponseLike<{ archivedSessionIds: string[] }>>
 }
 
+/* ---------- Schedule：会话级（legacy）与宿主级（host）双形态 ----------
+ *
+ * DSH 0.2.2-alpha.3 把 `@deepseek-ai/dsh-schedule` 从 per-session 模型改成宿主级
+ * 模型（任务带交付 target；没有 update/delete，只有 edit；list 返回分页对象）。
+ * 插件必须双形态共存，因此 `ApiProxyLike.schedule` 是一个带判别位的联合：缺省
+ * `mode` 表示会话级（旧宿主与既有假 service 都是这个形状），`mode: 'host'` 表示
+ * 下面这套宿主级接口。Bridge 只认这两个分支，不再按版本号字符串猜测。
+ */
+
 export type ScheduleKind = 'after' | 'at' | 'every' | 'daily' | 'weekly' | 'cron'
 
 export interface ScheduleTaskViewLike {
@@ -96,7 +111,10 @@ export interface ScheduleHistoryViewLike {
   nextBefore?: string
 }
 
-export interface ScheduleApiLike {
+/** 会话级 Schedule 服务（DSH ≤ 0.2.2-alpha.2）：任务绑定单一 Session。 */
+export interface LegacyScheduleApiLike {
+  /** 判别位缺省即 legacy：旧宿主与既有测试夹具不必补字段。 */
+  readonly mode?: 'legacy'
   list(req: RpcRequestLike<{ sessionId: string }>):
     Promise<RpcResponseLike<{ sessionId: string; tasks: ScheduleTaskViewLike[] }>>
   history(req: RpcRequestLike<{ sessionId: string; id: string; limit: number; before?: string }>):
@@ -108,6 +126,84 @@ export interface ScheduleApiLike {
   delete(req: RpcRequestLike<{ sessionId: string; id: string }>):
     Promise<RpcResponseLike<{ id: string; deleted: boolean; code?: string }>>
 }
+
+/** 宿主级任务视图：与 wire 的 `HostScheduleTask` 同一形状（Bridge 直接透传）。 */
+export type HostScheduleTaskView = HostScheduleTask
+
+export interface HostScheduleListRequestLike {
+  /** true 只列运行中；false 只列暂停/结束；省略列全部。 */
+  active?: boolean
+  limit?: number
+  offset?: number
+}
+
+export interface HostScheduleListResultLike {
+  tasks: HostScheduleTaskView[]
+  shown: number
+  total: number
+  limit: number
+  offset: number
+}
+
+/** 查看结果：命中或非变更 miss（Host 用 code 表示 miss，不是抛错）。 */
+export type HostScheduleViewOutcome =
+  | { kind: 'task'; task: HostScheduleTaskView }
+  | { kind: 'not-found'; id: string }
+
+/** 编辑结果：更新后的任务、已删除、miss，或乐观锁冲突（wire 上回 E_BUSY）。 */
+export type HostScheduleEditOutcome =
+  | { kind: 'task'; task: HostScheduleTaskView }
+  | { kind: 'deleted'; id: string }
+  | { kind: 'not-found'; id: string }
+  | { kind: 'conflict'; id: string }
+
+/** 手动执行结果：已投递、已有执行在进行中（E_BUSY），或目标已不存在。 */
+export type HostScheduleRunOutcome =
+  | { kind: 'task'; task: HostScheduleTaskView }
+  | { kind: 'pending'; id: string }
+  | { kind: 'not-found'; id: string }
+
+export interface HostScheduleLimitsView {
+  /** 以新建会话方式投递的最小间隔秒数；客户端只展示，不自行节流。 */
+  newSessionIntervalSeconds: number
+}
+
+export interface HostScheduleCreateRequestLike {
+  title: string
+  prompt: string
+  timing: HostScheduleTiming
+  /** 省略时由 Host 默认：首次投递新建并复用会话。 */
+  target?: HostScheduleTargetRequest
+}
+
+export type HostScheduleEditRequestLike =
+  | { id: string; action: 'update'; patch: HostSchedulePatch; expectedUpdatedAt?: string | null }
+  | { id: string; action: 'delete'; expectedUpdatedAt?: string | null }
+
+/**
+ * 宿主级 Schedule 服务（DSH 0.2.2-alpha.3 起）。
+ *
+ * 探测只看形状：`edit` 存在且 `update` 不存在。`remoteXxx` 是同一服务的
+ * 「人类 Remote 调用」变体（不记录 acting Session）；Bridge 就是人类 Remote
+ * 调用方，因此直接用公开方法并省略 actorSessionId。
+ */
+export interface HostScheduleApiLike {
+  readonly mode: 'host'
+  list(req: RpcRequestLike<HostScheduleListRequestLike>):
+    Promise<RpcResponseLike<HostScheduleListResultLike>>
+  view(req: RpcRequestLike<{ id: string }>): Promise<RpcResponseLike<HostScheduleViewOutcome>>
+  create(req: RpcRequestLike<HostScheduleCreateRequestLike>):
+    Promise<RpcResponseLike<HostScheduleTaskView>>
+  edit(req: RpcRequestLike<HostScheduleEditRequestLike>):
+    Promise<RpcResponseLike<HostScheduleEditOutcome>>
+  run(req: RpcRequestLike<{ id: string }>): Promise<RpcResponseLike<HostScheduleRunOutcome>>
+  history(req: RpcRequestLike<{ id: string; limit: number; before?: string }>):
+    Promise<RpcResponseLike<ScheduleHistoryViewLike>>
+  limits(req: RpcRequestLike<Record<string, never>>):
+    Promise<RpcResponseLike<HostScheduleLimitsView>>
+}
+
+export type ScheduleApiLike = LegacyScheduleApiLike | HostScheduleApiLike
 
 interface HostApiLike {
   listDirectory?(req: RpcRequestLike<{ path?: string }>, signal?: AbortSignal):

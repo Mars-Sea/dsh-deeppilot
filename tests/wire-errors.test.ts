@@ -66,6 +66,10 @@ const SCHEDULE: Record<string, string> = {
   'schedule_not_found': 'E_NOT_FOUND',
   'delivery_cursor_not_found': 'E_NOT_FOUND',
   'schedule_conflict': 'E_BUSY',
+  // DSH 0.2.2-alpha.3 宿主级模型：手动执行进行中、目标会话已归档、写入前校验失败。
+  'schedule_execution_pending': 'E_BUSY',
+  'schedule/target-archived': 'E_NOT_FOUND',
+  'schedule/input-invalid': 'E_PROTOCOL',
   'invalid_prompt': 'E_PROTOCOL',
   'invalid_selector': 'E_PROTOCOL',
   'invalid_rule': 'E_PROTOCOL',

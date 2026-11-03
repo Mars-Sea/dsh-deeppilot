@@ -218,6 +218,124 @@ export interface ScheduleUpdatedPayload {
   deleted?: boolean
   replayed?: boolean
 }
+/* ---------- 宿主级计划任务（DSH 0.2.2-alpha.3 起，可选 v2 扩展） ----------
+ *
+ * 与上面的会话级 `ScheduleTaskView` 并存：旧宿主仍是 per-session 模型，新宿主把
+ * 任务提升为宿主级（每个任务带一个交付 `target` 与 `active/paused/ended` 状态）。
+ * PROTOCOL.md「Schedule 宿主级任务扩展」是这些形状的唯一来源；Bridge 用
+ * `welcome.capabilities.schedulesHost` 告知新帧是否可用，旧帧在宿主级模型上
+ * 由 Bridge 反向投影（旧 App 不需要升级）。
+ */
+
+/** 宿主级 timing 的判别 kind；比会话级多一个 `rrule`。 */
+export type HostScheduleTimingKind = 'after' | 'at' | 'every' | 'daily' | 'weekly' | 'cron' | 'rrule'
+
+/** `at` 的本地日历写法；与 DSH `LocalAtInput` 一一对应。 */
+export interface HostScheduleLocalAt { date: string; time: string; time_zone: string }
+
+export type HostScheduleTiming =
+  | { kind: 'after'; after_seconds: number }
+  | { kind: 'at'; at: string | HostScheduleLocalAt }
+  | { kind: 'every'; every_seconds: number }
+  | { kind: 'daily'; daily: { time: string; time_zone: string } }
+  | { kind: 'weekly'; weekly: { time: string; time_zone: string; weekdays: number[] } }
+  | { kind: 'cron'; cron: { expression: string; time_zone: string } }
+  | { kind: 'rrule'; rrule: string }
+
+/** `new_once` / `new` 目标建会话时的工作目录与预设（省略用 Host 默认）。 */
+export interface HostScheduleCreateSpec { cwd?: string; agentPreset?: string }
+
+/**
+ * 任务视图里的交付目标。`new_once` 的 `sessionId` 是 Host 创建时预留的会话，
+ * 首次投递后目标会转成 `session`。
+ */
+export type HostScheduleTarget =
+  | { kind: 'session'; sessionId: string }
+  | { kind: 'new_once'; sessionId: string; create?: HostScheduleCreateSpec }
+  | { kind: 'new'; create?: HostScheduleCreateSpec }
+/**
+ * 创建/编辑请求里客户端可给出的目标：`new_once` 的会话由 Host 预留，客户端不填
+ * `sessionId`。
+ */
+export type HostScheduleTargetRequest =
+  | { kind: 'session'; sessionId: string }
+  | { kind: 'new_once'; create?: HostScheduleCreateSpec }
+  | { kind: 'new'; create?: HostScheduleCreateSpec }
+
+/** 最近一次已确认投递的回执；不含 prompt 正文。 */
+export interface HostScheduleDeliveryReceipt {
+  scheduledAt: string
+  deliveredAt: string
+  messageId: string
+  targetSessionId: string
+}
+
+/**
+ * 宿主级任务视图。可选字段（createdAt/updatedAt/executionActive/
+ * deliveryFloorEndsAt/lastDelivery）客户端不得依赖；`involvedSessionIds` 是
+ * Host 内部字段，Bridge 不返回。
+ */
+export interface HostScheduleTask {
+  id: string
+  title: string
+  prompt: string
+  timing: HostScheduleTiming
+  target: HostScheduleTarget
+  status: 'active' | 'paused' | 'ended'
+  scheduledAt: string
+  createdAt?: string
+  updatedAt?: string
+  executionActive?: boolean
+  deliveryFloorEndsAt?: string
+  lastDelivery?: HostScheduleDeliveryReceipt
+}
+
+export interface HostScheduleListPayload { active?: boolean; limit?: number; offset?: number }
+export interface HostScheduleSnapshotPayload {
+  tasks: HostScheduleTask[]
+  shown: number
+  total: number
+  limit: number
+  offset: number
+}
+export interface HostScheduleViewPayload { id: string }
+export interface HostScheduleTaskPayload { task: HostScheduleTask }
+export interface HostScheduleCreatePayload {
+  clientRequestId: string
+  title: string
+  prompt: string
+  timing: HostScheduleTiming
+  /** 省略时按 Host 默认：首次投递新建会话并复用。 */
+  target?: HostScheduleTargetRequest
+}
+/** 编辑补丁：至少一个字段；省略的字段保持原值。 */
+export interface HostSchedulePatch {
+  title?: string
+  prompt?: string
+  timing?: HostScheduleTiming
+  target?: HostScheduleTargetRequest
+  /** false 暂停、true 恢复。 */
+  active?: boolean
+}
+export interface HostScheduleEditPayload {
+  clientRequestId: string
+  id: string
+  /** 可选乐观锁：等于最近读取的 updatedAt 才写入，不等回 E_BUSY。 */
+  expectedUpdatedAt?: string | null
+  action: 'update' | 'delete'
+  /** `action="update"` 时必须提供且至少一个字段。 */
+  patch?: HostSchedulePatch
+}
+export interface HostScheduleRunPayload { clientRequestId: string; id: string }
+export interface HostScheduleLimitsPayload { newSessionIntervalSeconds: number }
+/** 宿主级变更成功回执：不带 sessionId（任务不再属于单一会话）。 */
+export interface HostScheduleUpdatedPayload {
+  clientRequestId: string
+  task?: HostScheduleTask
+  deleted?: boolean
+  replayed?: boolean
+}
+
 export interface DirectoryListPayload { path?: string }
 export interface WorkspaceCreatePayload { path: string }
 export interface PromptImagePayload { mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string; name?: string }
@@ -288,6 +406,10 @@ export interface WelcomeCapabilities {
   projectSelection: boolean
   /** Host exposes the optional DSH Schedule service. */
   schedules?: boolean
+  /** 宿主级计划任务模型（DSH 0.2.2-alpha.3 起）：true 时
+   * 「Schedule 宿主级任务扩展」帧可用，schedulesHost=false/缺失时客户端只能
+   * 使用会话级 schedule 帧。与 `schedules` 相互独立（后者只表示服务存在）。 */
+  schedulesHost?: boolean
   /** Bridge has APNs configured; clients may send c2s.push.register. */
   push?: boolean
   widgetPush?: boolean

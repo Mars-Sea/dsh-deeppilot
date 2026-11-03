@@ -45,8 +45,10 @@ export const WIRE_ERROR_FALLBACK: WireErrorCode = 'E_INTERNAL'
  * 逐条保留，它们同时充当「命名空间换了但尾部没换」时的兜底——查表会先原样命中，
  * 再剥前缀命中，见 lookupCode）。
  *
- * schedule 域例外：定时任务服务（`@deepseek-ai/dsh-schedule`）至今仍抛扁平
- * snake_case（`schedule_not_found`），不要给它加命名空间。
+ * schedule 域同时存在两套词表：会话级 Schedule 服务至今抛扁平 snake_case
+ * （`schedule_not_found`），而 0.2.2-alpha.3 起的宿主级模型在写入前校验失败时抛
+ * 带命名空间的 `schedule/input-invalid` / `schedule/target-archived`。两套都写进
+ * 同一张表：查表原样命中优先，剥前缀只作兜底。
  */
 export type ErrorDomain = 'session' | 'model' | 'schedule' | 'command' | 'queue'
 
@@ -95,11 +97,19 @@ const DOMAIN_TABLES: Record<ErrorDomain, Readonly<Record<string, WireErrorCode>>
     'session-conflict': 'E_BUSY',
     'model-unavailable': 'E_NOT_FOUND',
   },
-  // 定时任务域的 Host 错误码（snake_case 是 Host Schedule 服务的词表，至今未变）。
+  // 定时任务域的 Host 错误码（snake_case 是会话级 Schedule 服务的词表，至今未变）。
   schedule: {
     'schedule_not_found': 'E_NOT_FOUND',
     'delivery_cursor_not_found': 'E_NOT_FOUND',
     'schedule_conflict': 'E_BUSY',
+    // DSH 0.2.2-alpha.3 的宿主级模型新增：手动执行已有一次进行中（或仍在投递
+    // 下限里），重试同一帧不会推进，按 E_BUSY 交给客户端提示稍后。
+    'schedule_execution_pending': 'E_BUSY',
+    // 目标会话已归档：投递永远到不了它，重试无意义，与 schedule_not_found 同档。
+    'schedule/target-archived': 'E_NOT_FOUND',
+    // 创建/编辑/执行在写入前校验失败（title/prompt/timing/target 形状）：请求
+    // 参数与声明不符，与其余 payload 类拒绝同档，客户端改参数才有意义。
+    'schedule/input-invalid': 'E_PROTOCOL',
     'invalid_prompt': 'E_PROTOCOL',
     'invalid_selector': 'E_PROTOCOL',
     'invalid_rule': 'E_PROTOCOL',
