@@ -126,6 +126,7 @@ export type C2SType =
   | 'c2s.schedule.host.create'
   | 'c2s.schedule.host.edit'
   | 'c2s.schedule.host.run'
+  | 'c2s.schedule.host.deleteEnded'
   | 'c2s.schedule.host.limits'
   | 'c2s.approval.respond'
   | 'c2s.question.respond'

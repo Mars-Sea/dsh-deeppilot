@@ -1567,6 +1567,39 @@ export class HostBridge {
     return { ok: false, code: result.code, message: result.message ?? result.code, replayed: result.replayed }
   }
 
+  /**
+   * 删除宿主上全部已结束（`status="ended"`）的任务，返回删除条数。
+   *
+   * 与其他变更帧共用 scheduleMutations journal：同一 clientRequestId 重放时直接回放
+   * 首次结果，不会再删一次。成功后广播 `s2c.schedule.changed`；失败时同样广播——上游
+   * 文档说明失败的批次无法确定哪些行已删除，客户端应重新读取列表。
+   */
+  async deleteEndedHostSchedules(
+    deviceId: string,
+    payload: { clientRequestId: string },
+  ): Promise<ScheduleBridgeResult<{ deleted?: number }>> {
+    const schedule = this.hostSchedule
+    if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'host-level schedules unavailable on this host version' }
+    const result = await this.scheduleMutations.dispatch(
+      deviceId,
+      payload.clientRequestId,
+      { operation: 'deleteEnded' },
+      async () => {
+        const response = await schedule.deleteEnded({ rpcId: randomUUID(), payload: {} })
+        if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule delete ended returned no result' }
+        if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
+        return { ok: true, value: response.result.value }
+      },
+    )
+    this.record('s2c.schedule.changed', {})
+    if (result.ok) {
+      // schedule journal 不落盘成功值（persistValues=false），重放时拿不到条数，只回 replayed。
+      const value = result.value as { deleted: number } | undefined
+      return { ok: true, value: value ?? {}, replayed: result.replayed }
+    }
+    return { ok: false, code: result.code, message: result.message ?? result.code, replayed: result.replayed }
+  }
+
   async scheduleLimits(): Promise<ScheduleBridgeResult<{ newSessionIntervalSeconds: number }>> {
     const schedule = this.hostSchedule
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'host-level schedules unavailable on this host version' }

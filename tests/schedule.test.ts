@@ -197,6 +197,7 @@ function hostScheduleController(
     createInvalid?: boolean
     unknownError?: boolean
     historyMissing?: boolean
+    deleteEndedFails?: boolean
   } = {},
 ) {
   const rows = new Map(seed.map((row) => [String(row.id), { ...row }]))
@@ -281,6 +282,16 @@ function hostScheduleController(
     deliveryLimits: () => {
       calls.push({ operation: 'limits', payload: {} })
       return { newSessionIntervalSeconds: 60 }
+    },
+    // 与 alpha.3 一致：只删 status="ended"，返回 { deleted }。
+    deleteInactive: async () => {
+      calls.push({ operation: 'deleteInactive', payload: {} })
+      if (options.deleteEndedFails) throw Object.assign(new Error('boom'), { code: 'schedule/something-else' })
+      let deleted = 0
+      for (const [id, row] of rows) {
+        if (row.status === 'ended') { rows.delete(id); deleted += 1 }
+      }
+      return { deleted }
     },
   }
 }
@@ -553,6 +564,45 @@ test('Bridge 新帧：列表/查看/创建/编辑/执行/上限与幂等、错�
     const limits = await bridge.scheduleLimits()
     assert.deepEqual(limits, { ok: true, value: { newSessionIntervalSeconds: 60 } })
 
+    // 清理已结束任务：只删 ended，按 clientRequestId 幂等（重放不再删一次），成功与失败都广播 changed。
+    const cleanupCalls: HostCall[] = []
+    const cleanupBridge = new HostBridge(hostProxy(cleanupCalls, [
+      hostTask({ id: 'ended-1', status: 'ended' }),
+      hostTask({ id: 'ended-2', status: 'ended' }),
+      hostTask({ id: 'paused-1', status: 'paused' }),
+      hostTask({ id: 'active-1' }),
+    ]) as ApiProxyLike)
+    try {
+      const cleanupId = requestId()
+      const cleaned = await cleanupBridge.deleteEndedHostSchedules('device-1', { clientRequestId: cleanupId })
+      assert.equal(cleaned.ok, true)
+      if (cleaned.ok) {
+        assert.equal(cleaned.value.deleted, 2)
+        assert.notEqual(cleaned.replayed, true, '首次执行不是重放')
+      }
+      const replayed = await cleanupBridge.deleteEndedHostSchedules('device-1', { clientRequestId: cleanupId })
+      assert.equal(replayed.ok, true)
+      if (replayed.ok) {
+        // journal 不落盘成功值：重放只标 replayed，不带条数。
+        assert.equal(replayed.value.deleted, undefined)
+        assert.equal(replayed.replayed, true)
+      }
+      assert.equal(cleanupCalls.filter((call) => call.operation === 'deleteInactive').length, 1, '重放不得再次调用上游')
+      const again = await cleanupBridge.deleteEndedHostSchedules('device-1', { clientRequestId: requestId() })
+      assert.equal(again.ok, true)
+      if (again.ok) assert.equal(again.value.deleted, 0, '已结束任务清空后再清理删除 0 条')
+    } finally {
+      cleanupBridge.dispose()
+    }
+    const cleanupFailBridge = new HostBridge(hostProxy([], [hostTask()], { deleteEndedFails: true }) as ApiProxyLike)
+    try {
+      const failed = await cleanupFailBridge.deleteEndedHostSchedules('device-1', { clientRequestId: requestId() })
+      assert.equal(failed.ok, false)
+      if (!failed.ok) assert.equal(failed.code, 'E_INTERNAL')
+    } finally {
+      cleanupFailBridge.dispose()
+    }
+
     // Host 写入前校验失败（RemoteError schedule/input-invalid）-> E_PROTOCOL。
     const invalidBridge = new HostBridge(hostProxy([], [hostTask()], { createInvalid: true }) as ApiProxyLike)
     try {
@@ -679,6 +729,11 @@ test('宿主级帧的 validate/handle 与能力门', async () => {
   assert.equal(reason(row('c2s.schedule.host.edit'), { clientRequestId: id, id: 'i', action: 'update', patch: {} }), 'invalid schedule host edit patch')
   assert.equal(reason(row('c2s.schedule.host.run'), { clientRequestId: id, id: 'i' }), undefined)
   assert.equal(reason(row('c2s.schedule.host.limits'), {}), undefined)
+  assert.equal(reason(row('c2s.schedule.host.deleteEnded'), { clientRequestId: id }), undefined)
+  assert.equal(reason(row('c2s.schedule.host.deleteEnded'), {}), 'invalid schedule host delete ended fields')
+  assert.deepEqual(capabilityRejection(row('c2s.schedule.host.deleteEnded'), { historyPaging: true } as never), {
+    code: 'E_UNSUPPORTED', message: 'capability unavailable on this host version',
+  })
 
   // 能力门：schedulesHost=false 时新帧一律 E_UNSUPPORTED。
   assert.deepEqual(capabilityRejection(row('c2s.schedule.host.list'), { historyPaging: true } as never), {
@@ -739,6 +794,13 @@ test('宿主级帧的 validate/handle 与能力门', async () => {
 
     await row('c2s.schedule.host.limits').handle(ctx, {})
     assert.deepEqual(sent.at(-1), { type: 's2c.schedule.host.limits', payload: { newSessionIntervalSeconds: 60 } })
+
+    const cleanupId = requestId()
+    await row('c2s.schedule.host.deleteEnded').handle(ctx, { clientRequestId: cleanupId })
+    assert.deepEqual(sent.at(-1), { type: 's2c.schedule.updated', payload: { clientRequestId: cleanupId, deletedEnded: 0 } })
+    await row('c2s.schedule.host.deleteEnded').handle(ctx, { clientRequestId: cleanupId })
+    assert.deepEqual(sent.at(-1), { type: 's2c.schedule.updated', payload: { clientRequestId: cleanupId, replayed: true } },
+      '重放不再调用上游，条数未知时省略 deletedEnded')
   } finally {
     bridge.dispose()
   }

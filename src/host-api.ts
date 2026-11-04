@@ -163,6 +163,11 @@ export type HostScheduleRunOutcome =
   | { kind: 'pending'; id: string }
   | { kind: 'not-found'; id: string }
 
+/** 清理已结束任务的结果：删除的条数（宿主上没有已结束任务时为 0）。 */
+export interface HostScheduleDeleteEndedResult {
+  deleted: number
+}
+
 export interface HostScheduleLimitsView {
   /** 以新建会话方式投递的最小间隔秒数；客户端只展示，不自行节流。 */
   newSessionIntervalSeconds: number
@@ -201,6 +206,9 @@ export interface HostScheduleApiLike {
     Promise<RpcResponseLike<ScheduleHistoryViewLike>>
   limits(req: RpcRequestLike<Record<string, never>>):
     Promise<RpcResponseLike<HostScheduleLimitsView>>
+  /** 删除宿主上全部 `status="ended"` 的任务；进行中与暂停的任务不受影响。 */
+  deleteEnded(req: RpcRequestLike<Record<string, never>>):
+    Promise<RpcResponseLike<HostScheduleDeleteEndedResult>>
 }
 
 export type ScheduleApiLike = LegacyScheduleApiLike | HostScheduleApiLike

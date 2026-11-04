@@ -1,4 +1,4 @@
-import type { MessageProjection, SessionEventKind } from './protocol.ts'
+import type { MessageProjection, SessionEventKind, ToolEditProjection } from './protocol.ts'
 import type { SessionEventLike } from './host-api.ts'
 import { projectedDocument } from './document-payload.ts'
 
@@ -94,6 +94,7 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
             // Echo the invocation id so clients can pair the later result with
             // this exact row instead of guessing.
             ...(data?.callId ? { callId: String(data.callId) } : {}),
+            ...editField(data?.name, data?.arguments),
           },
           ts: tsOf(event)
         }
@@ -364,6 +365,11 @@ function chunkText(data: unknown): string {
   return typeof direct.text === 'string' ? direct.text : '';
 }
 
+function editField(name: unknown, raw: unknown): { edit?: ToolEditProjection } {
+  const edit = toolEditOf(name, raw)
+  return edit ? { edit } : {}
+}
+
 function summarizeArgs(raw: unknown): string {
   if (typeof raw !== 'string' || raw.length === 0) return '';
   try {
@@ -375,6 +381,65 @@ function summarizeArgs(raw: unknown): string {
     return truncate(parts.join(' '), 90);
   } catch {
     return truncate(raw, 90);
+  }
+}
+
+/** 宿主的文件编辑工具名（DSH `dsh-tool-str-replace-editor`）。 */
+const EDITOR_TOOL_NAME = 'str_replace_editor'
+/** 改动正文单侧上限（UTF-8 字节）；超出则两侧都不发，只标 truncated。 */
+export const MAX_TOOL_EDIT_TEXT_BYTES = 16 * 1024
+
+/**
+ * 把编辑类工具调用的原始参数归一化成 `ToolEditProjection`。
+ *
+ * 只认 `str_replace_editor` 的 `str_replace` / `create` / `insert`（`view` 不改文件），
+ * 其他工具或无法解析的参数返回 undefined，工具行保持原样。与 iOS `ToolEditDiff.parse`
+ * 的解析口径一致：`new_str` 缺失视为删除（空串）。
+ */
+export function toolEditOf(name: unknown, raw: unknown): ToolEditProjection | undefined {
+  if (name !== EDITOR_TOOL_NAME || typeof raw !== 'string' || raw.length === 0) return undefined
+  let args: Record<string, unknown>
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+    args = parsed as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+  const path = args.path
+  if (typeof path !== 'string' || path.length === 0) return undefined
+  let edit: ToolEditProjection
+  switch (args.command) {
+    case 'str_replace':
+      if (typeof args.old_str !== 'string') return undefined
+      edit = { path, operation: 'replace', oldText: args.old_str, newText: typeof args.new_str === 'string' ? args.new_str : '' }
+      break
+    case 'create':
+      if (typeof args.file_text !== 'string') return undefined
+      edit = { path, operation: 'create', newText: args.file_text }
+      break
+    case 'insert':
+      if (typeof args.new_str !== 'string') return undefined
+      edit = {
+        path, operation: 'insert', newText: args.new_str,
+        ...(Number.isSafeInteger(args.insert_line) ? { insertLine: args.insert_line as number } : {}),
+      }
+      break
+    default:
+      return undefined
+  }
+  const oversized = [edit.oldText, edit.newText]
+    .some((text) => text !== undefined && Buffer.byteLength(text, 'utf8') > MAX_TOOL_EDIT_TEXT_BYTES)
+  return oversized ? withoutEditBodies(edit) : edit
+}
+
+/** 去掉改动正文，只留路径、操作与 truncated 标记（超限或整条消息超限时用）。 */
+function withoutEditBodies(edit: ToolEditProjection): ToolEditProjection {
+  return {
+    path: edit.path,
+    operation: edit.operation,
+    ...(edit.insertLine !== undefined ? { insertLine: edit.insertLine } : {}),
+    truncated: true,
   }
 }
 
@@ -416,7 +481,12 @@ export function projectHistory(events: Array<{ event: SessionEventLike; view?: u
         const row: MessageProjection = {
           ...base,
           role: 'tool',
-          tool: { name: String(data?.name ?? 'tool'), state: 'running', summary: summarizeArgs(data?.arguments) },
+          tool: {
+            name: String(data?.name ?? 'tool'),
+            state: 'running',
+            summary: summarizeArgs(data?.arguments),
+            ...editField(data?.name, data?.arguments),
+          },
         };
         messages.push(row);
         if (data?.callId) toolByCall.set(String(data.callId), row);
@@ -469,6 +539,8 @@ export function limitMessageProjection(message: MessageProjection): MessageProje
         ...message.tool,
         name: truncateUtf8(message.tool.name, 4 * 1024),
         summary: truncateUtf8(message.tool.summary, 64 * 1024),
+        // 整条消息超限时先丢改动正文（不截半段，半段对比会误导），只留路径与 truncated。
+        ...(message.tool.edit ? { edit: withoutEditBodies(message.tool.edit) } : {}),
       },
     } : {}),
     ...(message.attachments ? {

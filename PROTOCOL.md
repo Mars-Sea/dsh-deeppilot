@@ -209,7 +209,7 @@ scope 与操作映射：
 | `sessions.manage` | 创建/重命名/归档/取消会话，创建工作区，切换模型，`c2s.plugin.update.apply` 安装更新 |
 | `interactions.respond` | pending 快照、回答 approval 与 question |
 | `notifications.register` | 注册 APNs token 与通知偏好 |
-| `schedule.manage` | 定时任务/提醒：`c2s.schedule.list`、`c2s.schedule.history`、`c2s.schedule.create`、`c2s.schedule.update`、`c2s.schedule.delete`，以及宿主级扩展的 `c2s.schedule.host.list`、`c2s.schedule.host.view`、`c2s.schedule.host.create`、`c2s.schedule.host.edit`、`c2s.schedule.host.run`、`c2s.schedule.host.limits`；同时需要 `sessions.read` 才能读取任务内容 |
+| `schedule.manage` | 定时任务/提醒：`c2s.schedule.list`、`c2s.schedule.history`、`c2s.schedule.create`、`c2s.schedule.update`、`c2s.schedule.delete`，以及宿主级扩展的 `c2s.schedule.host.list`、`c2s.schedule.host.view`、`c2s.schedule.host.create`、`c2s.schedule.host.edit`、`c2s.schedule.host.run`、`c2s.schedule.host.deleteEnded`、`c2s.schedule.host.limits`；同时需要 `sessions.read` 才能读取任务内容 |
 
 缺少所需 scope 时服务端回 `E_FORBIDDEN`，连接保持打开。当前产品默认配对授予
 全部 scope，普通设置页不提供逐项权限控制，只提供全局连接开关和逐设备删除。
@@ -356,6 +356,20 @@ Message 投影：
 ```
 
 - `role`：user | assistant | tool | system | error；`tool` 仅 tool 行存在，state 为 running | ok | error。
+- `tool.edit`：文件编辑类工具调用的改动内容（v2 追加式扩展，不设能力位，旧客户端忽略）。
+  只在宿主工具为 `str_replace_editor` 且命令为 `str_replace` / `create` / `insert` 时出现，
+  `view` 与其他工具不带。Bridge 把宿主参数名归一化，客户端不得依赖宿主工具参数命名：
+
+  ```json
+  "tool": { "name": "str_replace_editor", "state": "ok", "summary": "path=src/a.ts …",
+    "edit": { "path": "src/a.ts", "operation": "replace", "oldText": "…", "newText": "…" } }
+  ```
+
+  `operation` 为 `replace`（`oldText` → `newText`，`newText` 为空串表示删除）、`create`
+  （只有 `newText`，即新文件全文）或 `insert`（`newText` 插到 `insertLine` 行之后，0 为文件开头，
+  可缺省）。`oldText` 或 `newText` 任一超过 16 KiB（UTF-8）时两者都不发，只带 `path`、
+  `operation` 与 `truncated:true`；整条消息超过 256 KB 时同样先去掉正文。改动只是工具调用的参数，
+  客户端拿不到文件全文，因此只能展示片段内的差异；工具结果为失败时改动可能没有写入。
 - `role: system` 表示宿主注入的模型侧上下文（运行时快照、后台任务通知、工作区指令、技能内容等），
   不是真人发言。DSH Host 会把这类 `agent.inject()` 内容与真人 prompt 同样记为 user-role 消息，
   但其消息 `source.kind` 不是 `'user'`；Bridge 参照 Host 轨迹视图的分类规则，把这类行投影为
@@ -453,7 +467,7 @@ tool.end / turn.start / turn.end；其余 kind 为兼容 Host 后续事件投影
 
 - message.delta/message.final 共用同一会话内 seq；data.text 为增量/全文。极端超大增量同样会被限制在 256KB 内，并在 data 附 `truncated:true`。
 - thinking.delta 的 data.text 为推理增量，seq 与同会话其他事件一致；客户端应把连续增量折叠进同一条"思考"行（role=assistant、thinking 累积、streaming=true），final 到达后由带 `thinking` 字段的正式行替换。
-- tool.start 的 `data.tool` 为 `{name, state:"running", summary}`；Host 事件携带调用 id 时额外附带 `tool.callId`。tool.end 的 data 附带 ok 布尔与该结果事件自身的 seq，并在 Host 事件携带调用 id 时附带 `callId`——`seq` 标识的是 result 事件本身，客户端必须用 `callId`（缺失时按"最旧的未完成工具行"兜底）把结果合并回对应的 tool.start 行，不得按 seq 匹配。 `tool.end.data` 可选附带 `summary` 和 `attachments`（与 MessageProjection 相同的有界摘要与持久附件元数据，不含图片字节）；客户端合并到对应工具行，未见起始行时可按结果自身 seq 创建独立结果行。这是 v2 向后兼容扩展，旧客户端忽略新增字段。
+- tool.start 的 `data.tool` 为 `{name, state:"running", summary}`；Host 事件携带调用 id 时额外附带 `tool.callId`；文件编辑类调用另附 `tool.edit`（结构与限制见 Message 投影的 `tool.edit`），客户端在结果合并后保留它。tool.end 的 data 附带 ok 布尔与该结果事件自身的 seq，并在 Host 事件携带调用 id 时附带 `callId`——`seq` 标识的是 result 事件本身，客户端必须用 `callId`（缺失时按"最旧的未完成工具行"兜底）把结果合并回对应的 tool.start 行，不得按 seq 匹配。 `tool.end.data` 可选附带 `summary` 和 `attachments`（与 MessageProjection 相同的有界摘要与持久附件元数据，不含图片字节）；客户端合并到对应工具行，未见起始行时可按结果自身 seq 创建独立结果行。这是 v2 向后兼容扩展，旧客户端忽略新增字段。
 - turn.end 的 data 附带 ok 布尔；projection 的 data 为 key/value（如 todos）。
 
 ## 4b. 项目选择与新建会话
@@ -1201,6 +1215,22 @@ scope `schedule.manage` 与 `sessions.read`，widget 短连接不允许调用。
 立即投递一次；成功回 `s2c.schedule.updated` 带 `clientRequestId` 与 `task`。
 同一任务已有一次执行进行中时返回 `E_BUSY`；目标任务会话已归档时返回
 `E_NOT_FOUND`。该帧是变更操作，按 `clientRequestId` 幂等，结果未知时不得自动重试。
+
+### 清理已结束任务
+
+```json
+{ "type": "c2s.schedule.host.deleteEnded", "id": "shd-1", "payload": {
+  "clientRequestId": "1730000000000-…" } }
+{ "type": "s2c.schedule.updated", "id": "shd-1", "payload": {
+  "clientRequestId": "1730000000000-…", "deletedEnded": 3 } }
+```
+
+一次删除宿主上全部 `status="ended"` 的任务；`active` 与 `paused` 不受影响，删除不可
+恢复。成功回 `s2c.schedule.updated`，`deletedEnded` 为删除条数（没有已结束任务时为 0）。
+该帧按 `clientRequestId` 幂等：重放时不再删除，回执带 `replayed:true` 且**省略**
+`deletedEnded`（Bridge 不保存成功结果），客户端以重新读取的列表为准。无论成功还是失败，
+Bridge 都会广播 `s2c.schedule.changed`：上游说明失败的批次可能已删掉部分行。结果未知时
+不得自动重试。客户端必须先让用户二次确认再发送。
 
 ### 投递上限
 

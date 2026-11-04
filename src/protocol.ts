@@ -329,12 +329,16 @@ export interface HostScheduleEditPayload {
   patch?: HostSchedulePatch
 }
 export interface HostScheduleRunPayload { clientRequestId: string; id: string }
+/** 清理宿主上全部已结束任务；按 clientRequestId 幂等。 */
+export interface HostScheduleDeleteEndedPayload { clientRequestId: string }
 export interface HostScheduleLimitsPayload { newSessionIntervalSeconds: number }
 /** 宿主级变更成功回执：不带 sessionId（任务不再属于单一会话）。 */
 export interface HostScheduleUpdatedPayload {
   clientRequestId: string
   task?: HostScheduleTask
   deleted?: boolean
+  /** `c2s.schedule.host.deleteEnded` 的回执：删除的已结束任务条数；重放（replayed）时省略。 */
+  deletedEnded?: number
   replayed?: boolean
 }
 
@@ -552,6 +556,22 @@ export interface SessionsDeltaPayload { upserted: SessionSummary[]; removedIds: 
 export type MessageRole = 'user' | 'assistant' | 'tool' | 'system' | 'error'
 export type ToolState = 'running' | 'ok' | 'error'
 
+/**
+ * 文件编辑类工具调用的改动内容（v2 追加式扩展，见 PROTOCOL.md「工具改动对比」）。
+ * Bridge 把宿主 `str_replace_editor` 的参数名（old_str/new_str/file_text/insert_line）
+ * 归一化成这里的字段，手机端不依赖宿主工具参数命名。`oldText` / `newText` 各自超过
+ * 16 KiB（UTF-8）时都不发，只带 `truncated: true`。
+ */
+export interface ToolEditProjection {
+  path: string
+  operation: 'replace' | 'create' | 'insert'
+  oldText?: string
+  newText?: string
+  /** `insert` 专用：在该行之后插入，0 表示文件开头。 */
+  insertLine?: number
+  truncated?: boolean
+}
+
 /** Provenance of host-injected context; present only on `role: "system"` rows.
  * Mirrors the durable DSH message source (`dsh-llm` MessageSource): `label`
  * names the producer (plugin name, skill name, instruction paths…), `form` is
@@ -583,7 +603,7 @@ export interface MessageProjection {
   /** Reasoning ("thinking") text accompanying the answer, when present. */
   thinking?: string
   streaming?: boolean
-  tool?: { name: string; state: ToolState; summary: string }
+  tool?: { name: string; state: ToolState; summary: string; edit?: ToolEditProjection }
   attachments?: MessageAttachment[]
   /** Present only on system rows: provenance of the injected context.
    * The DSH host logs synthetic agent.inject() content (runtime-context

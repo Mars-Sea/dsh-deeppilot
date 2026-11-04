@@ -476,6 +476,34 @@ export const scheduleRows: readonly WireFrameRow[] = [
     },
   },
   {
+    type: 'c2s.schedule.host.deleteEnded',
+    stage: 'authenticated',
+    scopes: SCHEDULE_SCOPES,
+    capability: 'schedulesHost',
+    doc: 'PROTOCOL.md c2s.schedule.host.deleteEnded',
+    validate: (payload) => {
+      const checked = payloadObject(payload)
+      if (!checked.ok) return checked
+      if (!validSendId(checked.value.clientRequestId)) {
+        return reject('E_PROTOCOL', 'invalid schedule host delete ended fields')
+      }
+      return checked
+    },
+    handle: async (ctx, payload) => {
+      const result = await ctx.bridge.deleteEndedHostSchedules(
+        ctx.deviceId!,
+        { clientRequestId: payload.clientRequestId as string },
+      )
+      if (!result.ok) return ctx.fail(result.code, result.message)
+      ctx.send('s2c.schedule.updated', {
+        clientRequestId: payload.clientRequestId,
+        // 重放时条数未知（journal 不保存成功值），省略 deletedEnded，只标 replayed。
+        ...(result.value.deleted !== undefined ? { deletedEnded: result.value.deleted } : {}),
+        ...(result.replayed ? { replayed: true } : {}),
+      })
+    },
+  },
+  {
     type: 'c2s.schedule.host.limits',
     stage: 'authenticated',
     scopes: SCHEDULE_SCOPES,

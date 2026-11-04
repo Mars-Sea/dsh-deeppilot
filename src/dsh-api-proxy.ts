@@ -21,6 +21,7 @@ import type {
   DirectoryListingLike,
   HistoryResult,
   HostScheduleCreateRequestLike,
+  HostScheduleDeleteEndedResult,
   HostScheduleEditOutcome,
   HostScheduleEditRequestLike,
   HostScheduleLimitsView,
@@ -127,6 +128,8 @@ interface HostScheduleControllerLike {
   run(request: { id: string }, signal?: AbortSignal): Promise<unknown>
   history(request: { id: string; limit: number; before?: string }): Promise<unknown>
   deliveryLimits(): unknown
+  /** 上游名沿用 alpha.2 的 inactive，alpha.3 实际删除的是 `status="ended"` 的任务。 */
+  deleteInactive(): Promise<unknown>
 }
 
 type ScheduleControllerLike = LegacyScheduleControllerLike | HostScheduleControllerLike
@@ -375,6 +378,12 @@ export class DshApiProxy implements ApiProxyLike {
         return {
           newSessionIntervalSeconds: Math.max(0, Math.trunc(Number(value?.newSessionIntervalSeconds) || 0)),
         } satisfies HostScheduleLimitsView
+      }),
+      deleteEnded: async () => this.call(async () => {
+        const value = await controller.deleteInactive() as { deleted?: unknown } | undefined
+        return {
+          deleted: Math.max(0, Math.trunc(Number(value?.deleted) || 0)),
+        } satisfies HostScheduleDeleteEndedResult
       }),
     }
   }

@@ -54,14 +54,15 @@ wire 契约见 [PROTOCOL.md](../PROTOCOL.md) 「Schedule 宿主级任务扩展�
 | `schedule.run({id})` | 手动执行，执行中返回 `schedule_execution_pending` | `c2s.schedule.host.run`（E_BUSY 提示稍后） |
 | `schedule.history({id,limit,before?})` | 与旧结构相同，不再校验会话归属 | 两种模型共用 `c2s.schedule.history`；宿主级忽略 `sessionId` |
 | `schedule.deliveryLimits()` | `{newSessionIntervalSeconds}` | `c2s.schedule.host.limits` 只做展示，不自行节流 |
+| `schedule.deleteInactive()` | `{deleted}`；alpha.3 删 `status="ended"`（alpha.2 判 `inactive`） | `c2s.schedule.host.deleteEnded`，回执 `deletedEnded`；手机端二次确认后才发 |
 | 旧 `delete` / `update` / 按会话的 `list` | 仅在会话级宿主存在 | 旧帧原路径；宿主级宿主上由适配层映射 |
 
 差异对照补充：
 
 | 类别 | 状态 |
 |---|---|
-| 双方都有 | 列表、创建、编辑、删除、投递历史、变更事件 |
-| 上游有、我方未接 | `deleteInactive`（批量清理结束任务）、`catalog`（不分页全量）——手机无对应入口，暂不接入 |
+| 双方都有 | 列表、创建、编辑、删除、清理已结束任务、投递历史、变更事件 |
+| 上游有、我方未接 | `catalog`（不分页全量）——手机会话内入口改用分页列表连续翻页取全量，不需要单独的帧 |
 | 我方有、上游没有 | 旧 App 的会话级视图（由宿主级任务反向投影）、按会话过滤的列表 |
 | 双方都没有 | 任务执行结果回执、跨设备编辑锁（只用 `expectedUpdatedAt` 乐观冲突） |
 
@@ -72,4 +73,4 @@ wire 契约见 [PROTOCOL.md](../PROTOCOL.md) 「Schedule 宿主级任务扩展�
 
 ## 验证入口
 
-插件用例：`tests/markdown-export.test.ts`、`tests/assistant-stream.test.ts`、`tests/plugin-update.test.ts`、`tests/schedule.test.ts`（双形态适配与六个新帧），以及 wire 注册表、历史适配和命令回归。iOS 测试及实机边界见私有项目的对接说明。真机、实际 npm 安装和 Funnel 验证不得由模拟或语法检查替代。
+插件用例：`tests/markdown-export.test.ts`、`tests/assistant-stream.test.ts`、`tests/plugin-update.test.ts`、`tests/schedule.test.ts`（双形态适配与七个新帧），以及 wire 注册表、历史适配和命令回归。iOS 测试及实机边界见私有项目的对接说明。真机、实际 npm 安装和 Funnel 验证不得由模拟或语法检查替代。

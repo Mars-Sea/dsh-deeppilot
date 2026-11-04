@@ -478,6 +478,21 @@ interface SessionSummary {
 }
 type MessageRole = 'user' | 'assistant' | 'tool' | 'system' | 'error';
 type ToolState = 'running' | 'ok' | 'error';
+/**
+ * 文件编辑类工具调用的改动内容（v2 追加式扩展，见 PROTOCOL.md「工具改动对比」）。
+ * Bridge 把宿主 `str_replace_editor` 的参数名（old_str/new_str/file_text/insert_line）
+ * 归一化成这里的字段，手机端不依赖宿主工具参数命名。`oldText` / `newText` 各自超过
+ * 16 KiB（UTF-8）时都不发，只带 `truncated: true`。
+ */
+interface ToolEditProjection {
+  path: string;
+  operation: 'replace' | 'create' | 'insert';
+  oldText?: string;
+  newText?: string;
+  /** `insert` 专用：在该行之后插入，0 表示文件开头。 */
+  insertLine?: number;
+  truncated?: boolean;
+}
 /** Provenance of host-injected context; present only on `role: "system"` rows.
  * Mirrors the durable DSH message source (`dsh-llm` MessageSource): `label`
  * names the producer (plugin name, skill name, instruction paths…), `form` is
@@ -511,6 +526,7 @@ interface MessageProjection {
     name: string;
     state: ToolState;
     summary: string;
+    edit?: ToolEditProjection;
   };
   attachments?: MessageAttachment[];
   /** Present only on system rows: provenance of the injected context.
@@ -841,6 +857,10 @@ type HostScheduleRunOutcome = {
   kind: 'not-found';
   id: string;
 };
+/** 清理已结束任务的结果：删除的条数（宿主上没有已结束任务时为 0）。 */
+interface HostScheduleDeleteEndedResult {
+  deleted: number;
+}
 interface HostScheduleLimitsView {
   /** 以新建会话方式投递的最小间隔秒数；客户端只展示，不自行节流。 */
   newSessionIntervalSeconds: number;
@@ -886,6 +906,8 @@ interface HostScheduleApiLike {
     before?: string;
   }>): Promise<RpcResponseLike<ScheduleHistoryViewLike>>;
   limits(req: RpcRequestLike<Record<string, never>>): Promise<RpcResponseLike<HostScheduleLimitsView>>;
+  /** 删除宿主上全部 `status="ended"` 的任务；进行中与暂停的任务不受影响。 */
+  deleteEnded(req: RpcRequestLike<Record<string, never>>): Promise<RpcResponseLike<HostScheduleDeleteEndedResult>>;
 }
 type ScheduleApiLike = LegacyScheduleApiLike | HostScheduleApiLike;
 interface HostApiLike {
@@ -1154,7 +1176,7 @@ type HostScheduleEditValue = {
   deleted: true;
   id: string;
 };
-export declare class HostBridge {
+declare class HostBridge {
   private readonly apiProxy;
   private readonly historyBufferMax;
   /** 三个 journal 的落盘失败诊断输出；缺省即静默。不打任何消息体。 */
@@ -1392,6 +1414,18 @@ export declare class HostBridge {
     clientRequestId: string;
     id: string;
   }): Promise<ScheduleBridgeResult<HostScheduleTaskView>>;
+  /**
+   * 删除宿主上全部已结束（`status="ended"`）的任务，返回删除条数。
+   *
+   * 与其他变更帧共用 scheduleMutations journal：同一 clientRequestId 重放时直接回放
+   * 首次结果，不会再删一次。成功后广播 `s2c.schedule.changed`；失败时同样广播——上游
+   * 文档说明失败的批次无法确定哪些行已删除，客户端应重新读取列表。
+   */
+  deleteEndedHostSchedules(deviceId: string, payload: {
+    clientRequestId: string;
+  }): Promise<ScheduleBridgeResult<{
+    deleted?: number;
+  }>>;
   scheduleLimits(): Promise<ScheduleBridgeResult<{
     newSessionIntervalSeconds: number;
   }>>;
@@ -1427,7 +1461,7 @@ export declare class HostBridge {
   respondApproval(requestId: string, decision: 'allow' | 'deny', reason?: string): Promise<PendingResponseOutcome>;
   respondQuestion(requestId: string, answers: unknown): Promise<PendingResponseOutcome>;
 }
-export interface Config {
+interface Config {
   /** Master switch; when false the plugin activates and does nothing. */
   enabled?: boolean;
   /** Protocol-v2 device registry JSON path. */
@@ -1480,7 +1514,7 @@ export interface Config {
     relayToken?: string;
   };
 }
-export declare const Config: z<Schemastery.ObjectS<NoInfer<{
+declare const Config: z<Schemastery.ObjectS<NoInfer<{
   enabled: z<boolean, boolean, "volatile-defined">;
   devicesPath: z<string, string, "defined">;
   historyBufferMax: z<number, number, "defined">;
@@ -1586,9 +1620,9 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
   }>>, "defined">;
 }>>, "plain">;
 /** Prune only when the provider supplies an authoritative token-lifecycle verdict. */
-export declare function shouldPrunePushToken(outcome: 'sent' | 'invalid-token' | 'failed', reason?: string): boolean;
+declare function shouldPrunePushToken(outcome: 'sent' | 'invalid-token' | 'failed', reason?: string): boolean;
 /** APNs requires both registration and the same content permission as WS. */
-export declare function mayReceivePush(device: {
+declare function mayReceivePush(device: {
   scopes?: readonly string[];
 }, notification: unknown): boolean;
 /**
@@ -1597,7 +1631,7 @@ export declare function mayReceivePush(device: {
  * re-derive it; an explicitly configured relay token remains user-owned
  * configuration and is never silently rewritten.
  */
-export declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 'sent' | 'invalid-token' | 'failed', reason: string | undefined, opts: {
+declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 'sent' | 'invalid-token' | 'failed', reason: string | undefined, opts: {
   usedCellToken: boolean;
   hasEnrollKey: boolean;
   tokenStillCurrent: boolean;
@@ -1616,9 +1650,9 @@ export declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', ou
  * Protocol: PROTOCOL.md is normative; src/protocol.ts and the private app's
  * Swift models mirror that v2 contract.
  */
-export declare const name = "deeppilot";
+declare const name = "deeppilot";
 /** No web-service requirement: the plugin owns its own transport listeners. */
-export declare const inject: string[];
-export declare function apply(ctx: Context, options: unknown): void;
-export {};
+declare const inject: string[];
+declare function apply(ctx: Context, options: unknown): void;
+export { Config, HostBridge, apply, inject, mayReceivePush, name, shouldPrunePushToken, shouldReEnrollRelayToken };
 //# sourceMappingURL=index.d.ts.map
