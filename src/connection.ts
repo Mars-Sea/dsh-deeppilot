@@ -5,6 +5,7 @@ import type { BridgeSink, HostBridge } from './host-bridge.ts'
 import type { DeviceStore } from './token.ts'
 import type { DeviceScope } from './device-auth.ts'
 import { MAX_OUTBOUND_BUFFER_BYTES } from './connection-policy.ts'
+import { encodeBinaryFrame } from './binary-frame.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import type { WireErrorCode } from './wire-errors.ts'
 import type { DiagnosticsRecorder } from './diagnostics.ts'
@@ -135,6 +136,7 @@ export class BridgeConnection implements BridgeSink {
       get debug() { return deps.debug === true },
       log: (message) => deps.log(message),
       send: (type: S2CType, payload, id) => connection.send(type, payload, id),
+      sendBinary: (type: S2CType, payload, body, id) => connection.send(type, payload, id, undefined, body),
       fail: (id, code, message) => connection.fail(id, code, message),
       close: (code, reason) => connection.close(code, reason),
       canReceive: (scope) => connection.canReceive(scope),
@@ -338,7 +340,8 @@ export class BridgeConnection implements BridgeSink {
     }
   }
 
-  private send(type: string, payload: unknown, id?: string, seq?: number): void {
+  /** `body` 存在时按二进制帧发送（见 binary-frame.ts），头部仍是同一个 envelope。 */
+  private send(type: string, payload: unknown, id?: string, seq?: number, body?: Uint8Array): void {
     const envelope: Envelope = {
       v: PROTOCOL_VERSION,
       type,
@@ -352,7 +355,7 @@ export class BridgeConnection implements BridgeSink {
       this.close(1013, 'client too slow')
       return
     }
-    this.ws.send(JSON.stringify(envelope))
+    this.ws.send(body === undefined ? JSON.stringify(envelope) : encodeBinaryFrame(envelope, body))
   }
 
   private fail(id: string | undefined, code: WireErrorCode, message: string): void {

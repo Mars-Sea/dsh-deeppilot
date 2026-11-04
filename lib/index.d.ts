@@ -28,6 +28,7 @@ declare const ERROR_CODES: {
   readonly E_UNSUPPORTED: 'protocol version or capability unsupported';
   readonly E_INTERNAL: 'internal error';
   readonly E_STEER_UNAVAILABLE: 'queued item can no longer steer the current turn';
+  readonly E_TOO_LARGE: 'response exceeds the client frame limit';
 };
 type WireErrorCode = keyof typeof ERROR_CODES;
 /** 落盘条目：两个通用字段 + codec 私有字段。 */
@@ -400,6 +401,11 @@ interface WelcomeCapabilities {
    * the phone replace this plugin with a published version. Absent ⇒ the phone
    * can only link out to npm. */
   pluginUpdate?: boolean;
+  /** Bridge answers c2s.session.export / c2s.session.attachment requests that
+   * carry `binary: true` with binary frames (raw bytes after a JSON header,
+   * see binary-frame.ts). Plugin-level, independent of the host. Absent ⇒ the
+   * client must keep requesting base64 text frames. */
+  binaryFrames?: boolean;
 }
 type SessionStatus = "running" | "idle" | "error" | "unknown";
 /**

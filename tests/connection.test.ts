@@ -7,6 +7,7 @@ import { BridgeConnection, AUTH_TIMEOUT_MS, MAX_OUTBOUND_BUFFER_BYTES, PRE_AUTH_
 import { HostBridge } from '../src/host-bridge.ts'
 import type { ApiProxyLike } from '../src/host-bridge.ts'
 import { DeviceStore } from '../src/token.ts'
+import { BINARY_CHUNK_BYTES, MAX_BINARY_ATTACHMENT_BYTES, decodeBinaryFrame } from '../src/binary-frame.ts'
 import type { DeviceScope } from '../src/device-auth.ts'
 import { authenticateTestSocket, createTestIdentity, registerTestIdentity, type TestIdentity } from './auth-fixture.ts'
 
@@ -30,8 +31,12 @@ class FakeWebSocket {
     this.handlers.set(event, handler)
   }
 
-  send(data: string): void {
-    this.sent.push(JSON.parse(data))
+  send(data: string | Buffer): void {
+    if (typeof data === 'string') return void this.sent.push(JSON.parse(data))
+    // 二进制帧：头部照常进 sent，原始字节挂在 body 上供断言。
+    const decoded = decodeBinaryFrame(data)
+    assert.ok(decoded, 'binary frame must decode')
+    this.sent.push({ ...(decoded.header as object), body: decoded.body })
   }
 
   close(code?: number, reason?: string): void {
@@ -595,6 +600,136 @@ test('attachment read-back validates the payload and relays host image data', as
   assert.equal(lastFrame(ws).type, 's2c.ack')
   assert.equal(lastFrame(ws).id, 'a2')
   assert.deepEqual(lastFrame(ws).payload, { mediaType: 'image/png', data: 'aGk=' })
+})
+
+test('attachment read-back respects the client frame limit instead of overflowing it', async () => {
+  // 1.5 MiB 的 base64：超过旧 App 的 1 MiB 默认上限，但在 2 MiB 固定上限之内。
+  const data = 'A'.repeat(1536 * 1024)
+  const { ws, authenticate } = await makeConnection({
+    proxyOverrides: {
+      sessions: {
+        ...makeProxy().sessions,
+        attachment: async () => ({ result: { ok: true, value: { attachment: { mediaType: 'image/png' }, data } } }),
+      },
+    },
+  })
+  authenticate()
+  ws.sent.length = 0
+
+  // 旧 App 不带 maxFrameBytes：按 1 MiB 拒绝，不发出会让它断线的大帧。
+  ws.receive({ v: 2, type: 'c2s.session.attachment', id: 'legacy', payload: { sessionId: 's1', attachmentId: 'att-9' } })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).id, 'legacy')
+  assert.equal(lastFrame(ws).payload.code, 'E_TOO_LARGE')
+  assert.deepEqual(ws.closes, [])
+
+  ws.receive({ v: 2, type: 'c2s.session.attachment', id: 'modern', payload: { sessionId: 's1', attachmentId: 'att-9', maxFrameBytes: 32 * 1024 * 1024 } })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(lastFrame(ws).type, 's2c.ack')
+  assert.equal(lastFrame(ws).id, 'modern')
+  assert.equal(lastFrame(ws).payload.data.length, data.length)
+})
+
+test('attachment read-back caps frames at half the outbound buffer even for large client limits', async () => {
+  const data = 'A'.repeat(MAX_OUTBOUND_BUFFER_BYTES / 2)
+  const { ws, authenticate } = await makeConnection({
+    proxyOverrides: {
+      sessions: {
+        ...makeProxy().sessions,
+        attachment: async () => ({ result: { ok: true, value: { attachment: { mediaType: 'image/png' }, data } } }),
+      },
+    },
+  })
+  authenticate()
+  ws.sent.length = 0
+
+  ws.receive({ v: 2, type: 'c2s.session.attachment', id: 'big', payload: { sessionId: 's1', attachmentId: 'att-9', maxFrameBytes: 32 * 1024 * 1024 } })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).payload.code, 'E_TOO_LARGE')
+})
+
+test('attachment read-back waits for the outbound buffer to drain before sending', async () => {
+  const { ws, authenticate } = await makeConnection()
+  authenticate()
+  ws.sent.length = 0
+  ws.bufferedAmount = 1024 * 1024
+
+  ws.receive({ v: 2, type: 'c2s.session.attachment', id: 'queued', payload: { sessionId: 's1', attachmentId: 'att-9', maxFrameBytes: 32 * 1024 * 1024 } })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(ws.sent.some((frame) => frame.id === 'queued'), false, '缓冲未排空前不应发送')
+
+  ws.bufferedAmount = 0
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(lastFrame(ws).type, 's2c.ack')
+  assert.equal(lastFrame(ws).id, 'queued')
+})
+
+function attachmentConnection(data: string) {
+  return makeConnection({
+    proxyOverrides: {
+      sessions: {
+        ...makeProxy().sessions,
+        attachment: async () => ({ result: { ok: true, value: { attachment: { mediaType: 'image/png' }, data } } }),
+      },
+    },
+  })
+}
+
+test('welcome advertises binaryFrames regardless of host capabilities', async () => {
+  const { ws, authenticate } = await makeConnection()
+  authenticate()
+  const welcome = ws.sent.find((frame) => frame.type === 's2c.welcome')
+  assert.equal(welcome.payload.capabilities.binaryFrames, true)
+})
+
+test('binary attachment read-back streams raw chunks past the single-frame cap, then a checksum ack', async () => {
+  // 3 MiB 原图：远超文本模式的 2 MiB 单帧上限，二进制分块照常送达。
+  const image = Buffer.alloc(3 * 1024 * 1024 + 7, 0x5a)
+  const { ws, authenticate } = await attachmentConnection(image.toString('base64'))
+  authenticate()
+  ws.sent.length = 0
+
+  ws.receive({ v: 2, type: 'c2s.session.attachment', id: 'bin', payload: { sessionId: 's1', attachmentId: 'att-9', binary: true } })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const chunks = ws.sent.filter((frame) => frame.type === 's2c.session.attachment.chunk')
+  assert.equal(chunks.length, Math.ceil(image.length / BINARY_CHUNK_BYTES))
+  assert.deepEqual(chunks.map((frame) => frame.payload.index), chunks.map((_, index) => index))
+  assert.ok(chunks.every((frame) => frame.id === 'bin' && frame.body.length <= BINARY_CHUNK_BYTES && frame.payload.data === undefined))
+  assert.deepEqual(Buffer.concat(chunks.map((frame) => frame.body)), image)
+  assert.equal(lastFrame(ws).type, 's2c.ack')
+  assert.deepEqual(lastFrame(ws).payload, { mediaType: 'image/png', chunks: chunks.length, bytes: image.length })
+  assert.deepEqual(ws.closes, [])
+})
+
+test('binary attachment read-back rejects images over the whole-image cap', async () => {
+  const image = Buffer.alloc(MAX_BINARY_ATTACHMENT_BYTES + 1)
+  const { ws, authenticate } = await attachmentConnection(image.toString('base64'))
+  authenticate()
+  ws.sent.length = 0
+
+  ws.receive({ v: 2, type: 'c2s.session.attachment', id: 'huge', payload: { sessionId: 's1', attachmentId: 'att-9', binary: true } })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(ws.sent.some((frame) => frame.type === 's2c.session.attachment.chunk'), false)
+  assert.equal(lastFrame(ws).type, 's2c.error')
+  assert.equal(lastFrame(ws).payload.code, 'E_TOO_LARGE')
+})
+
+test('binary attachment chunks wait for the outbound buffer between chunks', async () => {
+  const image = Buffer.alloc(BINARY_CHUNK_BYTES * 2, 1)
+  const { ws, authenticate } = await attachmentConnection(image.toString('base64'))
+  authenticate()
+  ws.sent.length = 0
+  ws.bufferedAmount = 1024 * 1024
+
+  ws.receive({ v: 2, type: 'c2s.session.attachment', id: 'slow', payload: { sessionId: 's1', attachmentId: 'att-9', binary: true } })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(ws.sent.length, 0, '缓冲未排空前不应发送任何块')
+  ws.bufferedAmount = 0
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(ws.sent.filter((frame) => frame.type === 's2c.session.attachment.chunk').length, 2)
+  assert.equal(lastFrame(ws).type, 's2c.ack')
 })
 
 test('protocol version mismatch closes with 4500 after an error frame', async () => {

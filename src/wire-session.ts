@@ -11,8 +11,13 @@
 
 import { validSendId } from './connection-policy.ts'
 import { normalizePageLimit } from './host-event-projection.ts'
+import { BINARY_CHUNK_BYTES, MAX_BINARY_ATTACHMENT_BYTES } from './binary-frame.ts'
+import type { SessionAttachmentBinaryAck } from './protocol.ts'
 import {
+  ATTACHMENT_ENVELOPE_HEADROOM_BYTES,
   IMAGE_MEDIA_TYPES,
+  LEGACY_CLIENT_MAX_FRAME_BYTES,
+  MAX_ATTACHMENT_FRAME_BYTES,
   MAX_BASE64_CHARS_PER_IMAGE,
   MAX_DOCUMENT_MEDIA_TYPE_CHARS,
   MAX_DOCUMENT_NAME_CHARS,
@@ -389,6 +394,11 @@ export const sessionRows: readonly WireFrameRow[] = [
       const invalid = requireSessionId(checked.value)
       if (invalid) return invalid
       if (!isText(checked.value.attachmentId)) return reject('E_PROTOCOL', 'invalid attachmentId')
+      const maxFrameBytes = checked.value.maxFrameBytes
+      if (maxFrameBytes !== undefined && (!Number.isSafeInteger(maxFrameBytes) || (maxFrameBytes as number) <= 0)) {
+        return reject('E_PROTOCOL', 'invalid maxFrameBytes')
+      }
+      if (checked.value.binary !== undefined && typeof checked.value.binary !== 'boolean') return reject('E_PROTOCOL', 'invalid binary')
       return checked
     },
     handle: async (ctx, payload) => {
@@ -396,6 +406,38 @@ export const sessionRows: readonly WireFrameRow[] = [
       if (attachmentId.length === 0) return ctx.fail('E_PROTOCOL', 'sessionId and attachmentId required')
       const image = await ctx.bridge.attachmentData(payload.sessionId as string, attachmentId)
       if (!image) return ctx.fail('E_NOT_FOUND', 'attachment unavailable')
+      if (payload.binary === true && ctx.sendBinary) {
+        // 二进制分块：不受单帧上限约束，只受整图上限约束。宿主给的是 base64，这里解一次即可。
+        const bytes = Buffer.from(image.data, 'base64')
+        if (bytes.length === 0) return ctx.fail('E_NOT_FOUND', 'attachment unavailable')
+        if (bytes.length > MAX_BINARY_ATTACHMENT_BYTES) {
+          return ctx.fail('E_TOO_LARGE', `attachment ${bytes.length} bytes exceeds limit`)
+        }
+        let index = 0
+        try {
+          for (let offset = 0; offset < bytes.length; offset += BINARY_CHUNK_BYTES) {
+            await ctx.waitForWritable?.()
+            ctx.sendBinary('s2c.session.attachment.chunk', { index: index++ }, bytes.subarray(offset, offset + BINARY_CHUNK_BYTES))
+          }
+        } catch {
+          return // 连接已关闭，结果无人接收。
+        }
+        const ack: SessionAttachmentBinaryAck = { ...(image.mediaType !== undefined ? { mediaType: image.mediaType } : {}), chunks: index, bytes: bytes.length }
+        return ctx.send('s2c.ack', ack)
+      }
+      // 没带 maxFrameBytes 的是旧 App：超过 1 MiB 的帧会让它断线重连，所以先在这里拒绝，
+      // 让它显示占位图。base64 与 mediaType 都是 ASCII，字符数即字节数。
+      const clientLimit = (payload.maxFrameBytes as number | undefined) ?? LEGACY_CLIENT_MAX_FRAME_BYTES
+      const frameBytes = image.data.length + (image.mediaType?.length ?? 0) + ATTACHMENT_ENVELOPE_HEADROOM_BYTES
+      if (frameBytes > Math.min(clientLimit, MAX_ATTACHMENT_FRAME_BYTES)) {
+        return ctx.fail('E_TOO_LARGE', `attachment frame ${frameBytes} bytes exceeds limit`)
+      }
+      // 多张图片同时回读时逐个等缓冲排空再发，避免几块大帧叠进发送缓冲触发 1013。
+      try {
+        await ctx.waitForWritable?.()
+      } catch {
+        return // 连接已关闭，结果无人接收。
+      }
       ctx.send('s2c.ack', image)
     },
   },

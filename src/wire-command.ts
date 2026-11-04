@@ -2,6 +2,7 @@ import { isText, payloadObject, reject, type CheckedPayload, type WireFrameRow }
 import { hostFailureOf, wireErrorOf } from './wire-errors.ts'
 import type { CommandAttachment } from './command-api.ts'
 import type { SessionExportFormat } from './protocol.ts'
+import { BINARY_CHUNK_BYTES } from './binary-frame.ts'
 
 function sessionPayload(value: unknown): CheckedPayload {
   const result = payloadObject(value)
@@ -49,6 +50,7 @@ export const commandRows: readonly WireFrameRow[] = [
       const result = sessionPayload(value)
       if (!result.ok) return result
       if (result.value.format !== undefined && result.value.format !== 'zip' && result.value.format !== 'markdown') return reject('E_PROTOCOL', '导出格式无效')
+      if (result.value.binary !== undefined && typeof result.value.binary !== 'boolean') return reject('E_PROTOCOL', '传输方式无效')
       return result
     },
     handle: async (ctx, payload) => {
@@ -63,19 +65,33 @@ export const commandRows: readonly WireFrameRow[] = [
           : await ctx.bridge.exportSession(payload.sessionId as string, signal, format)
         reader = response.body!.getReader()
         signal.addEventListener('abort', cancel, { once: true })
+        // 客户端带 binary:true（且已看到 binaryFrames 能力）才走二进制帧；旧客户端的帧逐字节不变。
+        const binary = payload.binary === true && ctx.sendBinary !== undefined
         let index = 0, bytes = 0
+        const sendChunk = async (chunk: Uint8Array) => {
+          bytes += chunk.length
+          await ctx.waitForWritable?.()
+          if (binary) ctx.sendBinary!('s2c.session.export.chunk', { index: index++ }, chunk)
+          else ctx.send('s2c.session.export.chunk', { index: index++, data: Buffer.from(chunk).toString('base64') })
+        }
+        // 二进制模式攒满 256 KiB 再发：宿主流每次只给几十 KiB，逐次转发会产生大量小帧。
+        let carry: Buffer | undefined
         while (true) {
           signal.throwIfAborted()
           const next = await reader.read()
           if (next.done) break
-          for (let offset = 0; offset < next.value.length; offset += 48 * 1024) {
-            const chunk = next.value.subarray(offset, offset + 48 * 1024)
-            bytes += chunk.length
-            await ctx.waitForWritable?.()
-            ctx.send('s2c.session.export.chunk', { index: index++, data: Buffer.from(chunk).toString('base64') })
+          if (!binary) {
+            for (let offset = 0; offset < next.value.length; offset += 48 * 1024) await sendChunk(next.value.subarray(offset, offset + 48 * 1024))
+            continue
+          }
+          carry = carry ? Buffer.concat([carry, next.value]) : Buffer.from(next.value)
+          while (carry.length >= BINARY_CHUNK_BYTES) {
+            await sendChunk(carry.subarray(0, BINARY_CHUNK_BYTES))
+            carry = carry.subarray(BINARY_CHUNK_BYTES)
           }
         }
         signal.throwIfAborted()
+        if (carry !== undefined && carry.length > 0) await sendChunk(carry)
         // 缺省格式的旧客户端按原回执结束；显式选择格式才附媒体类型，避免改变旧帧字节。
         ctx.send('s2c.ack', { sessionId: payload.sessionId, fileName: format === 'markdown' ? 'dsh-session.md' : 'dsh-session-log.zip', chunks: index, bytes,
           ...(format === undefined ? {} : { mediaType: format === 'markdown' ? 'text/markdown; charset=utf-8' : 'application/zip' }) })
