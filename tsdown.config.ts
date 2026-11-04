@@ -19,7 +19,8 @@ const host = defineConfig({
   clean: true,
   sourcemap: true,
   dts: true,
-  outExtension: () => ({ js: '.js', dts: '.d.ts' }),
+  // tsdown 0.23 起只认 outExtensions（0.22 已支持）；包入口固定指向 lib/index.js 与 lib/index.d.ts。
+  outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
 })
 
 const client = defineConfig({
