@@ -1,4 +1,4 @@
-# DeepPilot 0.9.14 — DSH 兼容声明改为滚动区间（支持 DSH 0.2.1-rc.5 及之后），并适配 0.2.2-alpha.3 的宿主级计划任务
+# DeepPilot 0.9.14 — DSH 兼容声明改为滚动区间（支持 DSH 0.2.1-rc.5 及之后），并适配 0.2.2-alpha.3 的宿主级计划任务；导出与附件改用二进制分块帧；工具行附带文件改动对比
 
 ## 一、English
 
@@ -32,11 +32,13 @@
    releases the previous list admitted (`0.2.0-rc.2`, `0.2.1-alpha.3/4/5`,
    `0.2.1-rc.2/3/4`) — are refused by the activation gate after upgrading the
    plugin. Upgrading the host to any release inside the range restores it.
-5. **The bridge protocol stays v2; one optional capability is added.**
-   `welcome.capabilities.schedulesHost` and six new schedule frames
-   (`c2s.schedule.host.list` / `view` / `create` / `edit` / `run` / `limits`)
-   are additive: an older App ignores them and keeps the per-session frames,
-   and the plugin's own `engines.node` stays `>=22`. No config field changed.
+5. **The bridge protocol stays v2; two optional capabilities are added.**
+   `welcome.capabilities.schedulesHost` with seven new schedule frames
+   (`c2s.schedule.host.list` / `view` / `create` / `edit` / `run` /
+   `deleteEnded` / `limits`),
+   and `welcome.capabilities.binaryFrames` (item 8), are additive: an older App
+   ignores them and keeps the per-session frames and base64 text frames, and
+   the plugin's own `engines.node` stays `>=22`. No config field changed.
 6. **Schedule is adapted to the DSH 0.2.2-alpha.3 host-level model.** That
    release rewrote `dsh-schedule` (no `update`/`delete`, `edit` replaces them,
    paginated `list`, `timing`/`target` request body), which broke the phone's
@@ -48,9 +50,41 @@
    delete on that host. Pulse-free details: legacy views filter to the target
    session, drop `ended`, skip `rrule` (the old kind enum has no equivalent),
    and detect conflicts by comparing the full `expected` record; new frames
-   carry `expectedUpdatedAt`. The wire contract is in `PROTOCOL.md`.
+   carry `expectedUpdatedAt`. `c2s.schedule.host.deleteEnded` removes every
+   ended task on the host in one call (paused and active tasks stay) and
+   replies with the `deletedEnded` count; the App asks for confirmation first.
+   The wire contract is in `PROTOCOL.md`.
+7. **Large attachments no longer drop the phone's connection.** The attachment
+   read-back sent a whole image as one base64 text frame; apps before this
+   release only accept frames up to 1 MiB, so an original above roughly
+   768 KiB disconnected the phone and made it reconnect in a loop.
+   `c2s.session.attachment` now takes an optional `maxFrameBytes` (1 MiB when
+   absent). When the estimated frame exceeds `min(maxFrameBytes, 2 MiB)` the
+   plugin answers the new error code `E_TOO_LARGE` instead of sending it, and it
+   waits for the send buffer to drain before each image. Visible effect: an
+   older App shows a placeholder for images above roughly 768 KiB instead of
+   disconnecting.
+8. **Export and attachments can use binary chunked frames.** The plugin
+   declares `welcome.capabilities.binaryFrames` (a plugin capability, not a
+   Host one). A request carrying `binary: true` gets binary frames —
+   `[format u8 = 1][header length u32 BE][header JSON][raw bytes]`, see
+   `PROTOCOL.md` §1.1 — with no base64 overhead: `c2s.session.export` sends
+   256 KiB blocks (text frames stay 48 KiB) with the same final receipt, and
+   `c2s.session.attachment` streams `s2c.session.attachment.chunk` frames
+   followed by a `{ mediaType?, chunks, bytes }` receipt, up to 12 MiB per
+   image (larger originals get `E_TOO_LARGE`). Requests without `binary` are
+   byte-for-byte unchanged; a non-boolean `binary` is `E_PROTOCOL`. The Funnel
+   helper passes binary WebSocket frames through unchanged.
+9. **Tool rows carry the file change.** For the host `str_replace_editor`
+   `str_replace` / `create` / `insert` calls, the plugin normalizes the
+   arguments into an optional `tool.edit`
+   (`{path, operation, oldText?, newText?, insertLine?, truncated?}`) on both
+   live `tool.start` events and history pages, so the App can show a line diff
+   in the conversation. Either side above 16 KiB (UTF-8) sends only the path,
+   operation and `truncated: true`. The field is additive with no capability
+   bit; older Apps ignore it and `tool.summary` is unchanged.
 
-**Verification:** `npm test` 689 tests (687 pass, 1 environment-gated skip, 1
+**Verification:** `npm test` 705 tests (703 pass, 1 environment-gated skip, 1
 intentional TODO, 0 fail); `typecheck`; `build` (regenerated `lib/`); the
 config-schema check against the `0.2.1-rc.5` CLI; `smoke:helper` on
 darwin-arm64; `go test ./...`; `bin/SHA256SUMS` 6/6; an isolated `0.2.1-rc.5`
@@ -81,9 +115,10 @@ real iPhone pairing, Funnel end-to-end, and model turns.
 4. **一处用户可见的行为变化。** 低于新下界的宿主——上一份名单放行的七版
    （`0.2.0-rc.2`、`0.2.1-alpha.3/4/5`、`0.2.1-rc.2/3/4`）——在升级插件后会被
    激活门拒绝；把宿主升到区间内的任意版本即可恢复。
-5. **桥接协议仍为 v2，只新增一个可选能力位。** `welcome.capabilities.schedulesHost`
-   与六个新帧（`c2s.schedule.host.list` / `view` / `create` / `edit` / `run` /
-   `limits`）都是追加式扩展：旧 App 忽略它们，继续用会话级帧；插件自身的
+5. **桥接协议仍为 v2，新增两个可选能力位。** `welcome.capabilities.schedulesHost`
+   及七个新帧（`c2s.schedule.host.list` / `view` / `create` / `edit` / `run` /
+   `deleteEnded` / `limits`），以及 `welcome.capabilities.binaryFrames`（见第 8 条），都是追加式
+   扩展：旧 App 忽略它们，继续用会话级帧和 base64 文本帧；插件自身的
    `engines.node` 仍是 `>=22`，配置字段没有改动。
 6. **计划任务适配 DSH 0.2.2-alpha.3 的宿主级模型。** 该版本重写了 `dsh-schedule`
    （没有 `update`/`delete`，由 `edit` 取代；`list` 改为分页对象；请求体改为
@@ -92,9 +127,30 @@ real iPhone pairing, Funnel end-to-end, and model turns.
    路径逐字节不变；宿主级路径新增上述能力位与新帧，并把旧帧映射到宿主级任务，
    使旧 App 在该宿主上仍能列表/新建/编辑/删除。旧视图过滤当前会话目标、丢弃
    `ended`、跳过 `rrule`（旧 kind 枚举没有对应值），冲突保护用完整 `expected` 记录
-   逐字段比较；新帧用 `expectedUpdatedAt`。线上契约见 `PROTOCOL.md`。
+   逐字段比较；新帧用 `expectedUpdatedAt`。`c2s.schedule.host.deleteEnded` 一次删除宿主上
+   全部已结束任务（暂停与运行中的不受影响），回执带删除条数 `deletedEnded`；App 先二次
+   确认再发送。线上契约见 `PROTOCOL.md`。
+7. **大图附件不再导致手机断线。** 附件回读原来把整张图 base64 后放进一个文本帧；
+   本版之前的 App 只收 1 MiB 以内的帧，原图超过约 768 KiB 就会断线并反复重连。
+   `c2s.session.attachment` 新增可选字段 `maxFrameBytes`（缺省按 1 MiB）；估算帧
+   超过 `min(maxFrameBytes, 2 MiB)` 时回新错误码 `E_TOO_LARGE` 而不下发，每张图
+   发送前等发送缓冲排空。用户可见：旧 App 遇到约 768 KiB 以上的图片显示占位图，
+   不再断线。
+8. **导出与附件支持二进制分块帧。** 插件在 `welcome.capabilities` 声明
+   `binaryFrames`（插件自身能力，不依赖宿主）。请求带 `binary: true` 时改发二进制帧——
+   `[格式 u8 = 1][头部长度 u32 大端][头部 JSON][原始字节]`，见 `PROTOCOL.md` §1.1——
+   省去 base64 开销：`c2s.session.export` 每块 256 KiB（文本帧仍为 48 KiB），最终
+   回执不变；`c2s.session.attachment` 连续下发 `s2c.session.attachment.chunk`，最后
+   回执 `{ mediaType?, chunks, bytes }`，单张原图上限 12 MiB（超过回 `E_TOO_LARGE`）。
+   不带 `binary` 的请求逐字节不变；`binary` 非布尔回 `E_PROTOCOL`。Funnel helper
+   原样转发二进制 WebSocket 帧。
+9. **工具行附带文件改动。** 对宿主 `str_replace_editor` 的 `str_replace` / `create` /
+   `insert` 调用，插件把参数归一化为可选字段 `tool.edit`
+   （`{path, operation, oldText?, newText?, insertLine?, truncated?}`），实时 `tool.start`
+   与历史分页都带，App 据此在会话里显示行级对比。任一侧正文超过 16 KiB（UTF-8）时只发
+   路径、操作与 `truncated: true`。追加式扩展、不设能力位，旧 App 忽略，`tool.summary` 不变。
 
-**验证：** `npm test` 689 项（687 通过、1 项环境门禁跳过、1 项有意 TODO、
+**验证：** `npm test` 705 项（703 通过、1 项环境门禁跳过、1 项有意 TODO、
 0 失败）；`typecheck`；`build`（重新生成 `lib/`）；config schema 检查（针对
 `0.2.1-rc.5` CLI）；`smoke:helper`（darwin-arm64）；`go test ./...`；
 `bin/SHA256SUMS` 6/6；隔离 `0.2.1-rc.5` 宿主上插件成功组合、启动，
