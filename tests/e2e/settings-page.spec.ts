@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -6,6 +6,75 @@ const addPhone = (page: Page) => page.getByRole('button', { name: '添加手机'
 const more = (page: Page, name = 'iPhone 17 Pro') => page.getByLabel(`设备“${name}”的更多操作`, { exact: true })
 const operations = async (page: Page): Promise<Record<string, number>> =>
   JSON.parse((await page.getByTestId('fixture-operations').textContent())!)
+
+// 与未嵌入插件页面的同一官方组件比较，防止通用样式或触屏规则覆盖宿主开关。
+const hostSwitchStyle = (switchElement: Locator) => switchElement.evaluate((el) => {
+  const style = getComputedStyle(el)
+  const thumb = getComputedStyle(el.querySelector('span')!)
+  return {
+    track: ['width', 'height', 'padding', 'border-radius', 'corner-shape', 'background-color']
+      .map((property) => style.getPropertyValue(property)),
+    thumb: ['width', 'height', 'border-radius', 'corner-shape', 'background-color', 'transform']
+      .map((property) => thumb.getPropertyValue(property)),
+    before: getComputedStyle(el, '::before').content,
+    after: getComputedStyle(el, '::after').content,
+  }
+})
+
+for (const theme of ['light', 'dark']) {
+  test(`${theme}：四个开关直接沿用宿主组件的轨道、滑块和焦点样式`, async ({ page }) => {
+    await page.goto(`/?theme=${theme}`)
+    await page.getByRole('button', { name: /诊断工具/ }).click()
+    const switches = page.locator('.pbb-section [role="switch"]')
+    await expect(switches).toHaveCount(4)
+    for (const control of await switches.all()) {
+      const checked = await control.getAttribute('aria-checked')
+      const reference = page.getByTestId('host-switch-reference').locator(`[aria-checked="${checked}"]`)
+      expect(await hostSwitchStyle(control)).toEqual(await hostSwitchStyle(reference))
+      expect(await control.getAttribute('class')).toBe(await reference.getAttribute('class'))
+      // 实际键盘导航才触发 :focus-visible，鼠标操作后的程序化 focus 不会触发。
+      await control.focus()
+      await control.press('Tab')
+      await page.keyboard.press('Shift+Tab')
+      await expect(control).toBeFocused()
+      await expect(control).toHaveCSS('outline-style', 'solid')
+      await expect(control).toHaveCSS('outline-width', '2px')
+    }
+  })
+}
+
+test('四个宿主开关支持鼠标与空格，每次按新状态回写一次', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: /诊断工具/ }).click()
+  const controls = [
+    ['允许手机连接', 'enabled', true], ['局域网连接', 'local', false],
+    ['远程连接', 'remote', true], ['调试日志', 'debug', false],
+  ] as const
+  for (const [name, operation, initial] of controls) {
+    const control = page.getByRole('switch', { name, exact: true })
+    await expect(control).toHaveAttribute('aria-checked', String(initial))
+    await control.click()
+    await expect(control).toHaveAttribute('aria-checked', String(!initial))
+    expect((await operations(page))[operation]).toBe(1)
+    await control.press('Space')
+    await expect(control).toHaveAttribute('aria-checked', String(initial))
+    expect((await operations(page))[operation]).toBe(2)
+  }
+})
+
+test('配置不可用时四个宿主开关禁用，不回写配置', async ({ page }) => {
+  await page.goto('/?scenario=config-unavailable')
+  await page.getByRole('button', { name: /诊断工具/ }).click()
+  const switches = page.locator('.pbb-section [role="switch"]')
+  await expect(switches).toHaveCount(4)
+  for (const control of await switches.all()) {
+    await expect(control).toBeDisabled()
+    await expect(control).toHaveCSS('opacity', '0.5')
+    await control.evaluate((el) => (el as HTMLButtonElement).click())
+  }
+  const recorded = await operations(page)
+  expect([recorded.enabled, recorded.local, recorded.remote, recorded.debug]).toEqual([0, 0, 0, 0])
+})
 
 for (const theme of ['light', 'dark']) {
   for (const width of [1000, 390, 320]) {
@@ -226,11 +295,14 @@ test('重命名失败保留编辑内容，中文说明包含原始错误码', as
   expect((await operations(page)).renames).toBe(0)
 })
 
-test('触屏操作维持 44px 点击区域，减少动态效果时没有移动动画', async ({ browser }) => {
+test('自有操作触屏区域维持 44px，开关沿用宿主尺寸，减少动态效果时没有移动动画', async ({ browser }) => {
   const context = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' })
   const page = await context.newPage()
   await page.goto('http://127.0.0.1:4781/')
   await expect(addPhone(page)).toHaveCSS('min-height', '44px')
   await expect(page.locator('.pbb-section')).toHaveCSS('animation-name', 'none')
+  const control = page.getByRole('switch', { name: '允许手机连接', exact: true })
+  const reference = page.getByTestId('host-switch-reference').locator('[aria-checked="true"]')
+  expect(await hostSwitchStyle(control)).toEqual(await hostSwitchStyle(reference))
   await context.close()
 })

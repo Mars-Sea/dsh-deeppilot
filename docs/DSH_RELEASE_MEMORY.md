@@ -5,6 +5,30 @@
 > move the lower bound, at each `0.x` minor boundary, or when a host inside the
 > range breaks at runtime.
 
+## UI integration check — native settings switches (2026-11-05)
+
+- **Runtime surface:** `@deepseek-ai/dsh-client-ui-primitives` is an implicit
+  browser baseline module. The installed frontend bundles for the supported
+  floor `0.2.1-rc.5` and local host `0.2.2-rc.1` both seed the module and export
+  `Switch`; the general settings page uses the same component.
+- **Decision:** four DeepPilot settings switches use the host component with
+  `checked`, `disabled`, `label`, and `onChange(next)`. No switch CSS override,
+  runtime dependency, or explicit client injection is added. The exact floor
+  version is a development-only type/fixture dependency; the production bundle
+  keeps its host-module require. Compatibility declarations stay unchanged.
+- **Scope:** frontend-only. Host activation metadata, production dependencies,
+  and the phone protocol are unchanged; this source/module-table check does
+  not claim phone integration or a published release.
+- **Verification:** typecheck and build pass; the production bundle requires
+  the host primitives module. Unit tests: 721 pass, zero fail, one skip, one
+  existing TODO (a first run hit an unrelated push-test temporary-directory
+  cleanup race; the full rerun passed). Browser E2E: 21 pass, including official
+  switch style comparison, keyboard/mouse changes, disabled states, and config
+  writes. The real `0.2.2-rc.1` host at `127.0.0.1:3080` was reloaded: DeepPilot
+  renders the same switch/thumb classes as general settings, with a 36×20px
+  track and 16px thumb, and no custom pseudo-elements. Live network switches
+  were inspected without changing their values.
+
 ## Audit record — `dsh-v0.2.2-rc.1` (rebuild of alpha.3, no runtime change)
 
 - **Release (2026-11-04):** `dsh-v0.2.2-rc.1`, now npm `next`; `latest` stays

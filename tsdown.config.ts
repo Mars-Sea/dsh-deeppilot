@@ -33,7 +33,8 @@ const client = defineConfig({
   dts: false,
   clean: false,
   deps: {
-    neverBundle: ['react', 'react/jsx-runtime', '@deepseek-ai/cordis'],
+    // primitives 由 DSH 的平台模块表提供；必须取宿主组件，不能打包另一份 UI。
+    neverBundle: ['react', 'react/jsx-runtime', '@deepseek-ai/cordis', '@deepseek-ai/dsh-client-ui-primitives'],
     // Snapshot storage is vendored in src/client/snapshot-store.ts. Do not
     // externalize dsh-client-store: it is not published/seeded consistently
     // in 0.1.2 Web hosts.

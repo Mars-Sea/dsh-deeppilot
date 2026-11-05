@@ -8,7 +8,6 @@ view 四件套——shape 与该先例一致，但**不继承它唯一的泄漏*
 语义值，i18n key 的映射留在页面（措辞归页面，测试不跟着措辞漂）。
  */
 
-import { createElement as h } from 'react'
 import type { DeepPilotReport } from '../report-wire.ts'
 import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, MAX_FUNNEL_CONNECTIONS_PER_SOURCE } from '../funnel-policy.ts'
 import { DEFAULT_LOCAL_PORT, MAX_LOCAL_PORT, MIN_LOCAL_PORT } from '../local-policy.ts'
@@ -188,43 +187,4 @@ export function visibleDevices(report: DeepPilotReport | null): SettingsDevice[]
 /** 设备展示名：自定义名优先，都没有则空串（兜底文案归页面）。 */
 export function deviceLabel(device: { deviceName: string; customName?: string }): string {
   return (device.customName ?? device.deviceName).trim()
-}
-
-// ---------- 连接磁贴 ----------
-
-/** 渲染一块连接磁贴。纯数据函数：九参进，元素树出。 */
-export function renderConnectionTile(
-  key: string,
-  title: string,
-  description: string,
-  checked: boolean,
-  ready: boolean,
-  dot: string,
-  statusLabel: string,
-  onToggle: () => void,
-  extra: any = null,
-): any {
-  return h('div', { className: 'pbb-connectionTile', key },
-    h('div', { className: 'pbb-connectionTileHeader' },
-      h('span', { className: 'pbb-switchTitle pbb-dotRow' },
-        h('span', {
-          className: 'pbb-dot' + dot,
-          role: 'img',
-          'aria-label': statusLabel,
-          title: statusLabel,
-        }),
-        title),
-      h('button', {
-        type: 'button',
-        role: 'switch',
-        'aria-checked': checked,
-        'aria-label': title,
-        disabled: !ready,
-        className: 'pbb-switch' + (checked ? ' pbb-switchOn' : ''),
-        onClick: onToggle,
-      })),
-    h('span', { className: 'pbb-connectionState' }, statusLabel),
-    h('p', { className: 'pbb-connectionDescription' }, description),
-    extra,
-  )
 }

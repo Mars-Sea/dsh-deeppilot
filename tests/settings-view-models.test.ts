@@ -19,7 +19,6 @@ import {
   initialNumericDraft,
   numericDraftReduce,
   numericDraftView,
-  renderConnectionTile,
   serviceStatus,
   visibleDevices,
 } from '../src/client/settings-view-models.ts'
@@ -151,34 +150,4 @@ test('设备名：自定义名优先，空白回空串由页面兜底', () => {
   assert.equal(deviceLabel({ deviceName: 'iPhone', customName: '我的手机' }), '我的手机')
   assert.equal(deviceLabel({ deviceName: ' iPhone ' }), 'iPhone')
   assert.equal(deviceLabel({ deviceName: '   ' }), '', '页面据此决定用 devices.unnamed 兜底')
-})
-
-// ---------- 连接磁贴 ----------
-
-test('连接磁贴把点位与状态标签带进 aria 与 title', () => {
-  const tile = renderConnectionTile(
-    'local', '局域网', '已开启', true, true, ' pbb-dotOk', '在线', () => {},
-  ) as { key: string; props: Record<string, any> }
-  assert.equal(tile.props.className, 'pbb-connectionTile')
-  assert.equal(tile.key, 'local', 'React 把 key 提到元素上，不在 props 里')
-  const header = tile.props.children[0] as { props: Record<string, any> }
-  const dotRow = header.props.children[0] as { props: Record<string, any> }
-  const dot = dotRow.props.children[0] as { props: Record<string, any> }
-  assert.equal(dot.props.className, 'pbb-dot pbb-dotOk')
-  assert.equal(dot.props['aria-label'], '在线')
-  assert.equal(dot.props.title, '在线', '鼠标悬停也要能读到状态')
-  const button = header.props.children[1] as { props: Record<string, any> }
-  assert.equal(button.props['aria-checked'], true)
-  assert.equal(button.props.disabled, false)
-  assert.equal(button.props.className, 'pbb-switch pbb-switchOn')
-})
-
-test('未就绪时开关禁用；extra 原样挂在末尾', () => {
-  const extra = { marker: true }
-  const tile = renderConnectionTile('remote', '远程', '关闭', false, false, '', '已关闭', () => {}, extra) as { key: string; props: Record<string, any> }
-  assert.equal(tile.key, 'remote')
-  const header = tile.props.children[0] as { props: Record<string, any> }
-  const button = header.props.children[1] as { props: Record<string, any> }
-  assert.equal(button.props.disabled, true, '状态未就绪时不允许拨动')
-  assert.equal(tile.props.children[3], extra)
 })

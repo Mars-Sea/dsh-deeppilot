@@ -5,7 +5,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
-import * as clientEntry from '../src/client/index.ts'
+import { loadClientEntry } from './load-client-entry.ts'
+
+const clientEntry = loadClientEntry()
 
 /** Numeric state mirroring Cordis's `const enum FiberState` (value 2 = ACTIVE). */
 const ACTIVE = 2

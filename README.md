@@ -142,8 +142,9 @@ default.
 Each device's **More actions** control contains its fingerprint, rename action,
 and deletion action; deletion still requires confirmation. Connection options,
 connection help, diagnostic tools, and system information start collapsed.
-Desktop secondary buttons are 28px high and **Add phone** is 30px; touch targets
-remain at least 44px. See [settings UI and validation](docs/SETTINGS_UI.md).
+Desktop secondary buttons are 28px high and **Add phone** is 30px; custom action
+touch targets remain at least 44px. All toggles use DSH's built-in `Switch`
+without custom switch styles. See [settings UI and validation](docs/SETTINGS_UI.md).
 
 The settings page's **Diagnostic tools** group has a `debug` toggle.
 Turning it on prints per-frame and push diagnostics to the DSH host's terminal

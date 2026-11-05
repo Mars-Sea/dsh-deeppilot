@@ -15,6 +15,7 @@ const allowed = new Set([
   'react',
   'react/jsx-runtime',
   '@deepseek-ai/cordis',
+  '@deepseek-ai/dsh-client-ui-primitives',
 ])
 const requires = [...source.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)].map((match) => match[1])
 const unexpected = [...new Set(requires.filter((name) => !allowed.has(name)))]
@@ -24,6 +25,9 @@ if (unexpected.length > 0) {
 }
 if (!requires.includes('react')) {
   throw new Error('client bundle is missing its React runtime require')
+}
+if (!requires.includes('@deepseek-ai/dsh-client-ui-primitives')) {
+  throw new Error('client bundle must request the host UI primitives instead of bundling a private copy')
 }
 for (const removed of ['@deepseek-ai/dsh-client-runtime/client', '@deepseek-ai/dsh-client-store']) {
   if (requires.includes(removed)) throw new Error(`client bundle retained unavailable runtime require: ${removed}`)

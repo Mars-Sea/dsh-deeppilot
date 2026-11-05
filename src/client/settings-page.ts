@@ -1,4 +1,5 @@
 import { createElement as h, useEffect, useId, useReducer, useRef, useState } from 'react'
+import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import { DeviceActions } from './device-actions.ts'
 import { settingsIcon } from './settings-icons.ts'
 import * as QRCode from 'qrcode/lib/browser.js'
@@ -693,7 +694,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
   // 在两块之间来回找。report 为 null（报告未就绪）时整块跳过。
   const diagnosticsSection = report === null ? null : h('div', { className: 'pbb-helpSection' },
     h('div', { className: 'pbb-row' },
-      h('div', { className: 'pbb-switchText' },
+      h('div', { className: 'pbb-controlText' },
         h('span', { className: 'pbb-testTitle' }, t(props.t, 'diagnostics.title')),
         h('span', { className: 'pbb-testDescription' }, t(props.t, 'diagnostics.description'))),
       h('button', {
@@ -849,8 +850,8 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     h('section', { className: 'pbb-card pbb-connections', 'aria-label': t(props.t, 'connection.title') },
       h('div', { className: 'pbb-cardBody' },
         h('div', { className: 'pbb-masterRow' },
-          h('div', { className: 'pbb-switchText' },
-            h('span', { className: 'pbb-switchTitle' }, switchTitle),
+          h('div', { className: 'pbb-controlText' },
+            h('span', { className: 'pbb-controlTitle' }, switchTitle),
             h('div', { className: 'pbb-serviceSummary' },
               h('span', { className: 'pbb-serviceState' + (service.kind === 'ready' ? ' pbb-ok' : service.kind === 'attention' ? ' pbb-bad' : '') },
                 settingsIcon(service.kind === 'ready' ? 'ready' : service.kind === 'attention' ? 'attention' : 'info', 13)),
@@ -858,34 +859,28 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
               h('span', { className: 'pbb-metaDivider', 'aria-hidden': true }),
               h('span', null, t(props.t, 'panel.activeConnections') + ' '
                 + (report === null ? '—' : String(report.activeConnections))))),
-          h('button', {
-            type: 'button',
-            role: 'switch',
-            'aria-checked': enabled,
-            'aria-label': switchTitle,
+          h(Switch, {
+            checked: enabled,
+            label: switchTitle,
             disabled: !switchReady,
-            className: 'pbb-switch' + (enabled ? ' pbb-switchOn' : ''),
-            onClick: () => {
-              if (can('setEnabled')) props.setDeepPilotEnabled!(!enabled)
+            onChange: (next: boolean) => {
+              if (can('setEnabled')) props.setDeepPilotEnabled!(next)
             },
           }),
         ),
         h('div', { className: 'pbb-channel' },
           h('div', { className: 'pbb-row pbb-channelRow' },
             settingsIcon('wifi'),
-            h('div', { className: 'pbb-switchText' },
-              h('span', { className: 'pbb-switchTitle' },
+            h('div', { className: 'pbb-controlText' },
+              h('span', { className: 'pbb-controlTitle' },
                 t(props.t, 'local.title')),
               h('div', { className: 'pbb-channelState' }, h('span', { className: localMeta?.label === 'online' ? 'pbb-ok' : localMeta?.label === 'error' ? 'pbb-bad' : undefined }, localStateText))),
-            h('button', {
-              type: 'button',
-              role: 'switch',
-              'aria-checked': localEnabled,
-              'aria-label': t(props.t, 'local.title'),
+            h(Switch, {
+              checked: localEnabled,
+              label: t(props.t, 'local.title'),
               disabled: !localSwitchReady,
-              className: 'pbb-switch' + (localEnabled ? ' pbb-switchOn' : ''),
-              onClick: () => {
-                if (can('setLocalEnabled')) props.setDeepPilotLocalEnabled!(!localEnabled)
+              onChange: (next: boolean) => {
+                if (can('setLocalEnabled')) props.setDeepPilotLocalEnabled!(next)
               },
             }),
             h('button', {
@@ -905,9 +900,9 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
             report !== null && report.local.phase === 'online'
               ? h('p', { className: 'pbb-diag pbb-endpoint' }, report.local.endpoints.join(' · ')) : null,
             h('div', { className: 'pbb-limitRow' },
-              h('div', { className: 'pbb-switchText' },
-                h('label', { className: 'pbb-switchTitle', htmlFor: 'deeppilot-local-port' }, t(props.t, 'local.portTitle')),
-                h('span', { className: 'pbb-switchDesc' }, t(props.t, 'local.portDescription')),
+              h('div', { className: 'pbb-controlText' },
+                h('label', { className: 'pbb-controlTitle', htmlFor: 'deeppilot-local-port' }, t(props.t, 'local.portTitle')),
+                h('span', { className: 'pbb-controlDescription' }, t(props.t, 'local.portDescription')),
                 !localPortView.valid
                   ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'local.portInvalid'))
                   : localPortDraft.message
@@ -946,8 +941,8 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
             ),
             report !== null && report.local.phase === 'online' && report.local.tlsFingerprint
               ? h('div', { className: 'pbb-limitRow' },
-                  h('div', { className: 'pbb-switchText' },
-                    h('span', { className: 'pbb-switchTitle' }, t(props.t, 'local.tlsFingerprint')),
+                  h('div', { className: 'pbb-controlText' },
+                    h('span', { className: 'pbb-controlTitle' }, t(props.t, 'local.tlsFingerprint')),
                     h('code', { className: 'pbb-token' }, report.local.tlsFingerprint)))
               : null,
           )),
@@ -955,19 +950,16 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
         h('div', { className: 'pbb-channel' },
           h('div', { className: 'pbb-row pbb-channelRow' },
             settingsIcon('globe'),
-            h('div', { className: 'pbb-switchText' },
-              h('span', { className: 'pbb-switchTitle' },
+            h('div', { className: 'pbb-controlText' },
+              h('span', { className: 'pbb-controlTitle' },
                 t(props.t, 'remote.title')),
               h('div', { className: 'pbb-channelState' }, h('span', { className: remoteMeta?.label === 'online' ? 'pbb-ok' : (remoteMeta?.label === 'error' || remoteMeta?.label === 'unavailable') ? 'pbb-bad' : undefined }, remoteStateText), h('span', { className: 'pbb-metaDivider', 'aria-hidden': true }), h('span', null, 'Tailscale Funnel'))),
-            h('button', {
-              type: 'button',
-              role: 'switch',
-              'aria-checked': remoteEnabled,
-              'aria-label': t(props.t, 'remote.title'),
+            h(Switch, {
+              checked: remoteEnabled,
+              label: t(props.t, 'remote.title'),
               disabled: !remoteSwitchReady,
-              className: 'pbb-switch' + (remoteEnabled ? ' pbb-switchOn' : ''),
-              onClick: () => {
-                if (can('setRemoteEnabled')) props.setDeepPilotRemoteEnabled!(!remoteEnabled)
+              onChange: (next: boolean) => {
+                if (can('setRemoteEnabled')) props.setDeepPilotRemoteEnabled!(next)
               },
             }),
             h('button', {
@@ -989,9 +981,9 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
             report !== null && report.remote.phase === 'online'
               ? h('p', { className: 'pbb-diag pbb-endpoint' }, report.remote.publicURL) : null,
             h('div', { className: 'pbb-limitRow' },
-              h('div', { className: 'pbb-switchText' },
-                h('label', { className: 'pbb-switchTitle', htmlFor: 'deeppilot-funnel-source-limit' }, t(props.t, 'remote.limitTitle')),
-                h('span', { className: 'pbb-switchDesc' }, t(props.t, 'remote.limitDescription')),
+              h('div', { className: 'pbb-controlText' },
+                h('label', { className: 'pbb-controlTitle', htmlFor: 'deeppilot-funnel-source-limit' }, t(props.t, 'remote.limitTitle')),
+                h('span', { className: 'pbb-controlDescription' }, t(props.t, 'remote.limitDescription')),
                 !remoteLimitView.valid
                   ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'remote.limitInvalid'))
                   : remoteLimitDraft.message
@@ -1119,7 +1111,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
       fold(troubleshootingOpen, h('div', { className: 'pbb-cardBody', id: troubleshootingId },
         h('div', { className: 'pbb-testGrid' },
           h('div', { className: 'pbb-testItem' },
-            h('div', { className: 'pbb-switchText' },
+            h('div', { className: 'pbb-controlText' },
               h('span', { className: 'pbb-testTitle' }, t(props.t, 'push.relayTitle')),
               h('span', { className: 'pbb-testDescription' }, t(props.t, 'push.relayDefault'))),
             h('button', {
@@ -1129,7 +1121,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
               onClick: runRelayTest,
             }, relayTestBusy ? t(props.t, 'push.relayTesting') : t(props.t, 'push.testRelay'))),
           h('div', { className: 'pbb-testItem' },
-            h('div', { className: 'pbb-switchText' },
+            h('div', { className: 'pbb-controlText' },
               h('span', { className: 'pbb-testTitle' }, t(props.t, 'push.testPush')),
               h('span', { className: 'pbb-testDescription' }, t(props.t, 'push.pushDefault'))),
             h('button', {
@@ -1139,18 +1131,15 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
               onClick: sendPushTest,
             }, pushTestBusy ? t(props.t, 'push.pushSending') : t(props.t, 'push.testPush'))),
           h('div', { className: 'pbb-testItem' },
-            h('div', { className: 'pbb-switchText' },
+            h('div', { className: 'pbb-controlText' },
               h('span', { className: 'pbb-testTitle' }, t(props.t, 'troubleshooting.debugTitle')),
               h('span', { className: 'pbb-testDescription' }, t(props.t, 'troubleshooting.debugDescription'))),
-            h('button', {
-              type: 'button',
-              role: 'switch',
-              'aria-checked': debugEnabled,
-              'aria-label': t(props.t, 'troubleshooting.debugTitle'),
+            h(Switch, {
+              checked: debugEnabled,
+              label: t(props.t, 'troubleshooting.debugTitle'),
               disabled: !debugSwitchReady,
-              className: 'pbb-switch' + (debugEnabled ? ' pbb-switchOn' : ''),
-              onClick: () => {
-                if (can('setDebug')) props.setDeepPilotDebug!(!debugEnabled)
+              onChange: (next: boolean) => {
+                if (can('setDebug')) props.setDeepPilotDebug!(next)
               },
             }))),
         relayTestError ? h('p', { className: 'pbb-diag pbb-diagBad', role: 'alert' }, relayTestError) : null,

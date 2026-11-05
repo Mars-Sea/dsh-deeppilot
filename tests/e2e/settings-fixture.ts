@@ -1,5 +1,6 @@
 import { createElement as h, useCallback, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import { DeepPilotSettingsPage } from '../../src/client/settings-page.ts'
 import { injectCss } from '../../src/client/styles.ts'
 import { interpolate, translateOrThrow, type SupportedLocale } from '../../src/client/i18n.ts'
@@ -51,7 +52,7 @@ function Fixture(): any {
   const [localPort, setLocalPort] = useState(3098)
   const [limit, setLimit] = useState(8)
   const [debug, setDebug] = useState(false)
-  const operations = useRef({ grants: 0, renames: 0, revokes: 0, ports: 0, limits: 0, pushes: 0 })
+  const operations = useRef({ grants: 0, renames: 0, revokes: 0, ports: 0, limits: 0, pushes: 0, enabled: 0, local: 0, remote: 0, debug: 0 })
   const [revision, setRevision] = useState(0)
   const record = (key: keyof typeof operations.current): void => {
     operations.current[key] += 1
@@ -67,10 +68,10 @@ function Fixture(): any {
     useDeepPilotLocalPort: (select) => select({ status: 'ready', value: localPort }),
     useDeepPilotRemoteConnectionLimit: (select) => select({ status: 'ready', value: limit }),
     useDeepPilotDebug: (select) => select({ status: 'ready', enabled: debug }),
-    setDeepPilotEnabled: (enabled) => setReport((r) => ({ ...r, enabled })),
-    setDeepPilotLocalEnabled: (enabled) => setReport((r) => ({ ...r, local: { ...r.local, phase: enabled ? 'online' : 'disabled' } })),
-    setDeepPilotRemoteEnabled: (enabled) => setReport((r) => ({ ...r, remote: { ...r.remote, phase: enabled ? 'online' : 'disabled' } })),
-    setDeepPilotDebug: setDebug,
+    setDeepPilotEnabled: (enabled) => { record('enabled'); setReport((r) => ({ ...r, enabled })) },
+    setDeepPilotLocalEnabled: (enabled) => { record('local'); setReport((r) => ({ ...r, local: { ...r.local, phase: enabled ? 'online' : 'disabled' } })) },
+    setDeepPilotRemoteEnabled: (enabled) => { record('remote'); setReport((r) => ({ ...r, remote: { ...r.remote, phase: enabled ? 'online' : 'disabled' } })) },
+    setDeepPilotDebug: (enabled) => { record('debug'); setDebug(enabled) },
     setDeepPilotLocalPort: (value) => { record('ports'); setLocalPort(value) },
     setDeepPilotRemoteConnectionLimit: (value) => { record('limits'); setLimit(value) },
     beginPairing: async (): Promise<PairingGrantSnapshot> => {
@@ -94,8 +95,18 @@ function Fixture(): any {
   }
   if (scenario === 'loading') props.useDeepPilotReport = (select) => select({ status: 'loading', report: null, message: '' })
   if (scenario === 'report-error') props.useDeepPilotReport = (select) => select({ status: 'error', report: null, message: 'E_FIXTURE_REPORT' })
+  if (scenario === 'config-unavailable') {
+    props.useDeepPilotEnabled = (select) => select({ status: 'unavailable', enabled: report.enabled })
+    props.useDeepPilotLocalEnabled = (select) => select({ status: 'unavailable', enabled: false })
+    props.useDeepPilotRemoteEnabled = (select) => select({ status: 'unavailable', enabled: true })
+    props.useDeepPilotDebug = (select) => select({ status: 'unavailable', enabled: false })
+  }
   return h('div', null,
     h(DeepPilotSettingsPage, props),
+    // 保留渲染以读取滑块 transform；display:none 的后代没有可比较的变换矩阵。
+    h('div', { 'aria-hidden': true, inert: true, style: { position: 'fixed', left: '-10000px', top: 0 }, 'data-testid': 'host-switch-reference' },
+      h(Switch, { checked: true, label: '宿主参考开关：开启', onChange: () => {} }),
+      h(Switch, { checked: false, label: '宿主参考开关：关闭', onChange: () => {} })),
     h('output', { hidden: true, 'data-testid': 'fixture-operations', 'data-revision': revision }, JSON.stringify(operations.current)))
 }
 

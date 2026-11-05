@@ -88,3 +88,11 @@ test('injectCss is inert without a document', () => {
     globals.document = previous
   }
 })
+
+test('page stylesheet does not draw or resize host switches', () => {
+  const tags = withFakeDocument((tags) => { injectCss(); return tags })
+  assert.doesNotMatch(tags[0]!.textContent, /\.pbb-switch(?:On)?(?=[{:.,\s])/,
+    'track, thumb, and on/off state belong to the host component')
+  assert.match(tags[0]!.textContent, /button:not\(\[role="switch"\]\)/,
+    'generic button focus and font rules must leave the host switch alone')
+})
