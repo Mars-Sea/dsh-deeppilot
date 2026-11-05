@@ -101,11 +101,19 @@
    `settings.section.icon` slot instead of the default gear. Older hosts ignore
    both and keep their current display.
 
-**Verification:** `npm test` 706 tests (704 pass, 1 environment-gated skip, 1
+12. **DSH `0.2.2-rc.1` (npm `next`) is checked and admitted.** It ships the same
+   code as `0.2.2-alpha.3`; an isolated rc.1 host composes and starts the
+   plugin. The published `0.9.13` is refused on rc.1, so `next`-channel users
+   need this release. The optional vendor peers append `cordis ~4.1.0` and
+   `schemastery ~3.19.0`, the versions rc.1 vendors; activation never read them.
+
+**Verification:** `npm test` 708 tests (706 pass, 1 environment-gated skip, 1
 intentional TODO, 0 fail); `typecheck`; `build` (regenerated `lib/`); the
 config-schema check against the `0.2.1-rc.5` CLI; `smoke:helper` on
-darwin-arm64; `go test ./...`; `bin/SHA256SUMS` 6/6; an isolated `0.2.1-rc.5`
-host that composes, starts, and answers `/phone/health` with 200. Not covered:
+darwin-arm64; `go test ./...`; `bin/SHA256SUMS` 6/6; a byte-identical
+six-platform helper rebuild; isolated `0.2.1-rc.5` and `0.2.2-rc.1` hosts that
+compose, start, and answer `/phone/health` with 200, with the settings page
+checked in the browser on both. Not covered:
 real iPhone pairing, Funnel end-to-end, and model turns.
 
 ## 二、简体中文
@@ -179,11 +187,17 @@ real iPhone pairing, Funnel end-to-end, and model turns.
    DeepPilot 一行通过新插槽 `settings.section.icon` 显示单色线性手机图标，取代默认
    齿轮。旧宿主忽略这两项，显示保持不变。
 
-**验证：** `npm test` 706 项（704 通过、1 项环境门禁跳过、1 项有意 TODO、
+12. **已核对并放行 DSH `0.2.2-rc.1`（npm `next`）。** 它与 `0.2.2-alpha.3` 代码相同；
+   隔离的 rc.1 宿主可组合、启动插件。已发布的 `0.9.13` 在 rc.1 上会被拒绝激活，
+   `next` 通道用户需要升级到本版。可选的 vendor peer 追加 `cordis ~4.1.0` 与
+   `schemastery ~3.19.0`（rc.1 自带的版本）；激活从不读取这两项。
+
+**验证：** `npm test` 708 项（706 通过、1 项环境门禁跳过、1 项有意 TODO、
 0 失败）；`typecheck`；`build`（重新生成 `lib/`）；config schema 检查（针对
 `0.2.1-rc.5` CLI）；`smoke:helper`（darwin-arm64）；`go test ./...`；
-`bin/SHA256SUMS` 6/6；隔离 `0.2.1-rc.5` 宿主上插件成功组合、启动，
-`/phone/health` 返回 200。**未覆盖：** 真机配对、Funnel 端到端、模型回合。
+`bin/SHA256SUMS` 6/6；六平台 helper 重建逐字节一致；隔离的 `0.2.1-rc.5` 与
+`0.2.2-rc.1` 宿主上插件均成功组合、启动，`/phone/health` 返回 200，两者的设置页
+均在浏览器中核对。**未覆盖：** 真机配对、Funnel 端到端、模型回合。
 
 ## 三、本地发布清单（待发布工作树）
 

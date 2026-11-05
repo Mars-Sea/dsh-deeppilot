@@ -1176,7 +1176,7 @@ type HostScheduleEditValue = {
   deleted: true;
   id: string;
 };
-declare class HostBridge {
+export declare class HostBridge {
   private readonly apiProxy;
   private readonly historyBufferMax;
   /** 三个 journal 的落盘失败诊断输出；缺省即静默。不打任何消息体。 */
@@ -1461,7 +1461,7 @@ declare class HostBridge {
   respondApproval(requestId: string, decision: 'allow' | 'deny', reason?: string): Promise<PendingResponseOutcome>;
   respondQuestion(requestId: string, answers: unknown): Promise<PendingResponseOutcome>;
 }
-interface Config {
+export interface Config {
   /** Master switch; when false the plugin activates and does nothing. */
   enabled?: boolean;
   /** Protocol-v2 device registry JSON path. */
@@ -1514,7 +1514,7 @@ interface Config {
     relayToken?: string;
   };
 }
-declare const Config: z<Schemastery.ObjectS<NoInfer<{
+export declare const Config: z<Schemastery.ObjectS<NoInfer<{
   enabled: z<boolean, boolean, "volatile-defined">;
   devicesPath: z<string, string, "defined">;
   historyBufferMax: z<number, number, "defined">;
@@ -1620,9 +1620,9 @@ declare const Config: z<Schemastery.ObjectS<NoInfer<{
   }>>, "defined">;
 }>>, "plain">;
 /** Prune only when the provider supplies an authoritative token-lifecycle verdict. */
-declare function shouldPrunePushToken(outcome: 'sent' | 'invalid-token' | 'failed', reason?: string): boolean;
+export declare function shouldPrunePushToken(outcome: 'sent' | 'invalid-token' | 'failed', reason?: string): boolean;
 /** APNs requires both registration and the same content permission as WS. */
-declare function mayReceivePush(device: {
+export declare function mayReceivePush(device: {
   scopes?: readonly string[];
 }, notification: unknown): boolean;
 /**
@@ -1631,7 +1631,7 @@ declare function mayReceivePush(device: {
  * re-derive it; an explicitly configured relay token remains user-owned
  * configuration and is never silently rewritten.
  */
-declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 'sent' | 'invalid-token' | 'failed', reason: string | undefined, opts: {
+export declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 'sent' | 'invalid-token' | 'failed', reason: string | undefined, opts: {
   usedCellToken: boolean;
   hasEnrollKey: boolean;
   tokenStillCurrent: boolean;
@@ -1650,9 +1650,9 @@ declare function shouldReEnrollRelayToken(transport: 'apns' | 'relay', outcome: 
  * Protocol: PROTOCOL.md is normative; src/protocol.ts and the private app's
  * Swift models mirror that v2 contract.
  */
-declare const name = "deeppilot";
+export declare const name = "deeppilot";
 /** No web-service requirement: the plugin owns its own transport listeners. */
-declare const inject: string[];
-declare function apply(ctx: Context, options: unknown): void;
-export { Config, HostBridge, apply, inject, mayReceivePush, name, shouldPrunePushToken, shouldReEnrollRelayToken };
+export declare const inject: string[];
+export declare function apply(ctx: Context, options: unknown): void;
+export {};
 //# sourceMappingURL=index.d.ts.map

@@ -27,12 +27,12 @@
   stderr, 7 `deeppilot` hits; `/phone/health` 200 (`protocolVersion` 2,
   `serverVersion` 0.9.14, `dataPlane` active); `deeppilot/host-id` and
   `lan-tls/` created.
-- **Open item (install-time only):** peers `@deepseek-ai/cordis`
-  (`~4.0.4 || ~4.0.5-alpha.1 || ~4.0.6-alpha.1`) and `@deepseek-ai/schemastery`
-  (`~3.18.x`) do not admit the vendored `4.1.0` / `3.19.0`. Both are optional
-  peers and the evaluator ignores them (`engines.dsh` decides), so activation is
-  unaffected; appending `~4.1.0` / `~3.19.0` is a declaration change pending
-  decision.
+- **Vendor peers (install-time only), decided 2026-11-05:** the previous
+  `@deepseek-ai/cordis` / `@deepseek-ai/schemastery` peers did not admit the
+  vendored `4.1.0` / `3.19.0`. Both are optional peers the evaluator ignores
+  (`engines.dsh` decides), so activation was never affected. `0.9.14` appends
+  `~4.1.0` / `~3.19.0` (append, not replace: earlier hosts still vendor the
+  older pairs); `tests/compatibility-metadata.test.ts` pins both.
 - **Not covered:** no real-device pairing, Funnel end-to-end, model turn, or
   `npm install` from the registry via the host's plugin manager.
 

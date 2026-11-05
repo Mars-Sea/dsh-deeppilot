@@ -98,6 +98,21 @@ carries the old top-level `debug: true` is accepted but that value is ignored:
 verbose logging must be turned on again from the settings page. No other config
 field changed shape, and the old key is not read anywhere in this version.
 
+## 0.2.2-rc.1 audit outcome
+
+- **Same code as `0.2.2-alpha.3`.** 330 shared packages, zero structural
+  manifest changes, and only four non-manifest files differ (a build-commit
+  constant and three client bundles' version strings). The evaluator is
+  byte-identical, so the alpha.3 findings, including the host-level schedule
+  adapter, apply unchanged.
+- **Vendor peers.** The host vendors `cordis 4.1.0` and `schemastery 3.19.0`,
+  the alpha.3 code renumbered as releases. The ranges append `~4.1.0` and
+  `~3.19.0`; earlier clauses stay because earlier hosts still vendor them. DSH's
+  evaluator ignores both peers; only npm's install-time resolution reads them.
+- **Activation and boot.** The real rc.1 evaluator admits `0.9.14` and refuses
+  the published `0.9.13`. An isolated rc.1 host composes and starts the plugin,
+  and `/phone/health` answers 200 with `protocolVersion` 2.
+
 ## 0.2.1-rc.5 audit outcome
 
 The artifact-level audit of `dsh-v0.2.1-rc.5` (published to the npm registry

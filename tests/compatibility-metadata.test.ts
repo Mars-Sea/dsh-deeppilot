@@ -189,11 +189,12 @@ test('vendor peers admit the release each supported host line vendors', () => {
   // baseline pins the oldest pair, the 0.2.1 alpha hosts vendor the prerelease
   // pair, `0.2.1-alpha.5` through `0.2.1-rc.5` vendor the promoted GA pair, and
   // `0.2.2-alpha.2` moves the pair to `cordis 4.0.6-alpha.1` /
-  // `schemastery 3.18.6-alpha.1`. The prerelease clauses are appended, never
-  // substituted: the GA pair is still vendored by every earlier host line.
+  // `schemastery 3.18.6-alpha.1`; `0.2.2-rc.1` vendors the same code renumbered
+  // as `cordis 4.1.0` / `schemastery 3.19.0`. Clauses are appended, never
+  // substituted: each older pair is still vendored by an earlier host line.
   const pinned: [string, string[]][] = [
-    ['@deepseek-ai/cordis', ['4.0.4', '4.0.5-alpha.2', '4.0.5', '4.0.6-alpha.1']],
-    ['@deepseek-ai/schemastery', ['3.18.4', '3.18.5-alpha.2', '3.18.5', '3.18.6-alpha.1']],
+    ['@deepseek-ai/cordis', ['4.0.4', '4.0.5-alpha.2', '4.0.5', '4.0.6-alpha.1', '4.0.6-alpha.2', '4.1.0']],
+    ['@deepseek-ai/schemastery', ['3.18.4', '3.18.5-alpha.2', '3.18.5', '3.18.6-alpha.1', '3.18.6-alpha.2', '3.19.0']],
   ]
   for (const [name, versions] of pinned) {
     const range = packageJson.peerDependencies?.[name]
