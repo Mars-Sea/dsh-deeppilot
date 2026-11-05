@@ -32,6 +32,11 @@ Host on your own computer and does not replace or modify the DSH Web UI.
 - Connect over the LAN (TLS with a Host-issued certificate pinned during
   pairing) or the optional embedded Tailscale Funnel.
 - Receive live notifications and optional APNs notifications while offline.
+- Quiet scheduled runs (DSH 0.2.2+): write a rule into a scheduled task's
+  prompt, such as "if everything is normal, don't notify me". The agent can
+  then skip that run's "task completed" notification with the
+  `deeppilot_skip_completion_notice` tool. Approvals, questions and errors
+  still notify, and tasks without such a rule notify on every run as before.
 - Self-update hint: the settings page footer shows the installed plugin
   version, with an inline "new version" link to the matching GitHub
   release when one exists (background check, stable releases only, no

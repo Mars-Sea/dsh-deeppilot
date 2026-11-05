@@ -710,6 +710,11 @@ Web 或另一 Client 先回答时，Gateway cancellation 会让插件发布对�
   一旦能力为 true，就必须关闭这些回退分支。
 - 触发规则（F-9）：对未打开该会话的在线设备，在 turn 结束、出现
   pending.approval / pending.question 或会话 error 时发送；离线设备走同事实的 APNs 投影。
+- 计划任务按需完成通知：`schedulesHost=true` 的 Host 上，插件向计划任务会话提供 Agent
+  工具 `deeppilot_skip_completion_notice`。由计划任务投递触发、且用户本轮未插话的一轮，
+  若 Agent 调用了该工具并成功结束，Bridge 不发这一轮的 `turn.completed` notify 与 APNs；
+  `s2c.session.event(turn.end)` 照常记录，`session.error`、`approval.required`、
+  `question.asked` 照常发送。线格式不变，客户端无需感知。
 - `notificationId` 标识同一个逻辑通知，在实时 WS、WS 重放和 APNs 投影之间保持稳定；
   客户端应按该字段幂等去重。notify 计入 seq 游标参与重放。
 - `title` / `body` 是可直接展示的回退文本；客户端可按已知 category 使用本地化标题，

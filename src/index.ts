@@ -11,6 +11,7 @@ import { PushGateway } from './push-gateway.ts'
 import { createLocalTransport, createRemoteTransport } from './transport-reconciler.ts'
 import { ConnectionGate } from './connection-gate.ts'
 import { HostBridge } from './host-bridge.ts'
+import { registerQuietCompletionTool, type ToolsServiceLike } from './quiet-completion.ts'
 import { DshApiProxy, type DshInteractionKind } from './dsh-api-proxy.ts'
 import { applyReportRemote } from './report-remote.ts'
 import type { DeepPilotReport } from './report-wire.ts'
@@ -782,6 +783,23 @@ export function apply(ctx: Context, options: unknown): void {
         if (state.bridge === bridge) state.bridge = undefined
         bridge.dispose()
       }, 'deeppilot: host streams')
+      // 计划任务按需完成通知（#35）：只在宿主级计划任务（0.2.2 起）上注册。0.2.1 的
+      // tools.register 不支持 `when`，工具会变成所有会话可见，见 quiet-completion.ts。
+      // 等 schedule 服务就绪再判断：它可能晚于桥接层挂载（见 DshApiProxy.resolveSchedule）。
+      // 放在 host streams 的清理之后：注册失败也不能让桥接层失去卸载路径。
+      ;(apiCtx as unknown as { inject: (deps: string[], fn: (sub: unknown) => void) => void }).inject(
+        ['tools', 'schedule'],
+        (sub) => {
+          if (bridge.capabilities.schedulesHost !== true) return
+          const tools = (sub as { tools?: ToolsServiceLike }).tools
+          if (typeof tools?.register !== 'function') return
+          ;(sub as SubContext).effect(
+            () => registerQuietCompletionTool(tools, bridge.quietCompletion, (message) => log(message)),
+            'deeppilot: quiet completion tool',
+          )
+          void bridge.seedQuietCompletionSessions()
+        },
+      )
     },
   )
 

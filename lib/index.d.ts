@@ -1140,6 +1140,36 @@ interface PushOutlet {
    */
   isAvailable(): boolean;
 }
+interface QuietCompletionResult {
+  suppressed: boolean;
+  note?: string;
+}
+declare class QuietCompletionTracker {
+  /**
+   * 收到过计划任务投递的会话。粘性集合：加入后不再移除，工具不按轮出现或消失。
+   * 宿主每次工具列表变化都会往会话追加一条工具增减消息并让提示词缓存失效，
+   * 按轮开关会让同一会话反复产生这类消息。
+   */
+  private readonly scheduleSessions;
+  private readonly turns;
+  /** 启动时用宿主任务列表里的投递目标会话预热，避免重启后工具先消失再出现。 */
+  seed(sessionIds: Iterable<string>): void;
+  /** 工具 `when` 条件：只有计划任务会话能看到这个工具。 */
+  isScheduleSession(sessionId: string): boolean;
+  /**
+   * 观察一条 user/message 的来源。`schedule` 标记本轮为计划任务轮次；`user`（或旧宿主
+   * 没有来源，按用户消息处理）表示用户插话，本轮回到普通轮次、撤销已请求的静默；
+   * 其他注入上下文（技能、运行时快照等）不影响判定。
+   */
+  noteUserMessage(sessionId: string, sourceKind: string | undefined): void;
+  /** 工具执行：只在计划任务轮次内生效。 */
+  requestQuiet(sessionId: string | undefined): QuietCompletionResult;
+  /**
+   * turn.end 时调用并清空本轮状态。返回 true 表示本轮完成通知应被抑制：
+   * 只有成功结束、计划任务轮次、且 Agent 请求了静默三者同时成立。
+   */
+  consumeTurnEnd(sessionId: string, ok: boolean): boolean;
+}
 interface PromptDocument {
   name: string;
   mediaType: string;
@@ -1191,6 +1221,8 @@ export declare class HostBridge {
    * and restore them. Excluded from `summaries` and from the live broadcast. */
   private archivedSummaries;
   private subagentSessionIds;
+  /** 计划任务按需完成通知（quiet-completion.ts）：index.ts 用它注册 Agent 工具。 */
+  readonly quietCompletion: QuietCompletionTracker;
   /**
    * 每个会话最近一次已知的队列（inbox 投影的折叠结果）及其指纹。来源是实时
    * 投影通知或打开会话时读到的基线；指纹用来丢掉内容没变的重复通知。
@@ -1274,6 +1306,13 @@ export declare class HostBridge {
   private record;
   /** Start consuming host + mux streams. Idempotent; aborts on dispose(). */
   start(): void;
+  /**
+   * 用宿主任务列表里的投递目标会话预热计划任务会话集合，避免插件重启后工具
+   * 先消失、等下一次投递再出现（每次变化都会给会话追加工具增减消息）。
+   * `new` 目标没有固定会话，只能从最近一次投递回执里取。失败只记日志：集合仍会
+   * 在下一次投递时补上。由 index.ts 在 schedule 服务就绪、注册工具时调用。
+   */
+  seedQuietCompletionSessions(): Promise<void>;
   dispose(): void;
   private runHostStream;
   private runMuxStream;
