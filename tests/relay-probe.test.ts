@@ -111,3 +111,23 @@ test('pushTestSchema accepts the delivery report and rejects junk', () => {
   assert.throws(() => pushTestSchema.parse({ transport: 'pigeon', overall: 'sent', results: [] }))
   assert.throws(() => pushTestSchema.parse({ transport: 'apns', overall: 'exploded', results: [] }))
 })
+
+test('health step shows a valid relay version; older or invalid versions keep the plain message', async () => {
+  const probe = (healthBody: unknown) => runRelayProbe({
+    url: URL_BASE,
+    manualToken: true,
+    fetchImpl: fetchMock(() => ({ status: 200, body: healthBody })),
+  })
+  const withVersion = await probe({ ok: true, version: '0.2.0', build: 'relay-healthz-20261105' })
+  assert.equal(withVersion.steps[0].message, '中继服务可达（版本 0.2.0）')
+  assert.equal(withVersion.overall, 'ok')
+
+  const older = await probe({ ok: true })
+  assert.equal(older.steps[0].message, '中继服务可达')
+
+  for (const version of ['<b>0.2</b>', 'x'.repeat(33), '', 2]) {
+    const invalid = await probe({ ok: true, version })
+    assert.equal(invalid.steps[0].message, '中继服务可达')
+    assert.equal(invalid.steps[0].ok, true)
+  }
+})

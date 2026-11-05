@@ -2,7 +2,9 @@
  * Relay connectivity self-test used by the settings page "测试中继" button.
  *
  * Two steps mirror what zero-touch enrollment actually does:
- *   1. health  — GET {url}/healthz        → is the relay reachable?
+ *   1. health  — GET {url}/healthz        → is the relay reachable? The
+ *      relay's `version` (relay 0.2.0+) is appended to the message for
+ *      troubleshooting; it never affects the verdict.
  *   2. enroll  — POST {url}/v1/enroll     → does the shared key grant a token?
  *
  * The enroll step doubles as a repair path: a token it issues is handed back
@@ -46,6 +48,18 @@ export interface RelayProbeOptions {
 
 const DEFAULT_TIMEOUT_MS = 6_000
 
+/**
+ * semver-shaped characters only, bounded: the value comes from a remote
+ * server and is rendered verbatim in the settings page.
+ */
+const RELAY_VERSION_PATTERN = /^[0-9A-Za-z.+-]{1,32}$/
+
+/** Display-only relay version from a /healthz body; undefined for older relays or unsafe values. */
+function relayVersionOf(body: unknown): string | undefined {
+  const version = (body as { version?: unknown } | null)?.version
+  return typeof version === 'string' && RELAY_VERSION_PATTERN.test(version) ? version : undefined
+}
+
 async function requestJson(
   fetchImpl: typeof fetch,
   url: string,
@@ -83,7 +97,9 @@ export async function runRelayProbe(options: RelayProbeOptions): Promise<RelayTe
     )
     const latencyMs = Date.now() - startedAt
     if (status === 200 && (body as { ok?: unknown })?.ok === true) {
-      steps.push({ id: 'health', ok: true, message: '中继服务可达', latencyMs })
+      const version = relayVersionOf(body)
+      const message = version ? `中继服务可达（版本 ${version}）` : '中继服务可达'
+      steps.push({ id: 'health', ok: true, message, latencyMs })
     } else {
       steps.push({ id: 'health', ok: false, message: `中继响应异常（HTTP ${status}）`, latencyMs })
     }
