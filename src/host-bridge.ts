@@ -49,7 +49,9 @@ import {
   messageText,
   projectEvent,
   projectHistory,
+  userMessageSourceKind,
 } from './host-event-projection.ts'
+import { QuietCompletionTracker } from './quiet-completion.ts'
 import { documentPromptBlock, type PromptDocument } from './document-payload.ts'
 import type { DispatchJournal } from './dispatch-journal.ts'
 import { pushScopeFor } from './connection-policy.ts'
@@ -125,6 +127,8 @@ export class HostBridge {
    * and restore them. Excluded from `summaries` and from the live broadcast. */
   private archivedSummaries = new Map<string, SessionSummary>()
   private subagentSessionIds = new Set<string>()
+  /** 计划任务按需完成通知（quiet-completion.ts）：index.ts 用它注册 Agent 工具。 */
+  readonly quietCompletion = new QuietCompletionTracker()
   /**
    * 每个会话最近一次已知的队列（inbox 投影的折叠结果）及其指纹。来源是实时
    * 投影通知或打开会话时读到的基线；指纹用来丢掉内容没变的重复通知。
@@ -429,6 +433,33 @@ export class HostBridge {
     void this.refreshSummaries();
   }
 
+  /**
+   * 用宿主任务列表里的投递目标会话预热计划任务会话集合，避免插件重启后工具
+   * 先消失、等下一次投递再出现（每次变化都会给会话追加工具增减消息）。
+   * `new` 目标没有固定会话，只能从最近一次投递回执里取。失败只记日志：集合仍会
+   * 在下一次投递时补上。由 index.ts 在 schedule 服务就绪、注册工具时调用。
+   */
+  async seedQuietCompletionSessions(): Promise<void> {
+    if (this.hostSchedule === undefined) return
+    const sessionIds: string[] = []
+    let offset = 0
+    for (;;) {
+      const result = await this.listHostSchedules({ limit: HOST_SCHEDULE_PAGE_SIZE, offset })
+      if (!result.ok) {
+        this.log?.(`quiet completion seed skipped: ${result.code}`)
+        return
+      }
+      for (const task of result.value.tasks) {
+        if (task.target.kind !== 'new') sessionIds.push(task.target.sessionId)
+        if (task.lastDelivery) sessionIds.push(task.lastDelivery.targetSessionId)
+      }
+      offset += result.value.tasks.length
+      if (result.value.tasks.length === 0 || offset >= result.value.total) break
+    }
+    if (this.disposed) return
+    this.quietCompletion.seed(sessionIds)
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -533,6 +564,9 @@ export class HostBridge {
           this.record('s2c.skills.changed', { sessionId });
         }
         this.noteActivity(sessionId, event);
+        if (event.type === 'user/message') {
+          this.quietCompletion.noteUserMessage(sessionId, userMessageSourceKind(event.data), event.seq);
+        }
         this.captureAssistantText(sessionId, event);
         const projection = projectEvent(sessionId, event);
         this.captureActivity(sessionId, event, projection?.data.tool as { name?: string; summary?: string } | undefined);
@@ -541,7 +575,14 @@ export class HostBridge {
             data: { ...projection.data, ...(streamId && projection.kind === 'message.final' ? { streamId } : {}) } });
         }
         if (projection?.kind === 'turn.end') {
-          this.emitTurnCompletedNotify(sessionId, projection.data.ok === true);
+          const ok = projection.data.ok === true;
+          // 计划任务轮次中 Agent 请求了静默：turn.end 本身照常记录，只跳过完成通知。
+          const turn = (event.data as { turn?: unknown } | undefined)?.turn;
+          if (this.quietCompletion.consumeTurnEnd(sessionId, ok, typeof turn === 'number' ? turn : undefined, event.seq)) {
+            this.log?.(`completion notice skipped by scheduled run session=${sessionId}`);
+          } else {
+            this.emitTurnCompletedNotify(sessionId, ok);
+          }
         }
         break;
       }

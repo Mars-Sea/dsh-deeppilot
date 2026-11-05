@@ -1140,6 +1140,42 @@ interface PushOutlet {
    */
   isAvailable(): boolean;
 }
+interface QuietCompletionResult {
+  suppressed: boolean;
+  note?: string;
+}
+interface TurnVerdict {
+  /** 本轮最近一条驱动消息是计划任务投递（且其后没有用户消息）。 */
+  scheduled: boolean;
+  /** 本轮 `turn/start` 的轮次号；日志里读不到时为 undefined。 */
+  turn?: number;
+}
+declare class QuietCompletionTracker {
+  /**
+   * 判定过计划任务轮次的会话。粘性集合：加入后不再移除，工具不按轮出现或消失。
+   * 宿主每次工具列表变化都会往会话追加一条工具增减消息并让提示词缓存失效，
+   * 按轮开关会让同一会话反复产生这类消息。
+   */
+  private readonly scheduleSessions;
+  private readonly quiet;
+  /** 启动时用宿主任务列表里的投递目标会话预热，避免重启后工具先消失再出现。 */
+  seed(sessionIds: Iterable<string>): void;
+  isScheduleSession(sessionId: string): boolean;
+  /** 加入粘性集合；返回是否为新加入（调用方据此记一次日志）。 */
+  markScheduleSession(sessionId: string): boolean;
+  /** 工具执行：只在计划任务轮次内生效。 */
+  requestQuiet(sessionId: string | undefined, verdict: TurnVerdict, seq: number): QuietCompletionResult;
+  /**
+   * 桥接层观察到 user/message：用户在请求静默之后插话（日志位置更晚）就撤销静默，
+   * 本轮照常提醒。计划任务与注入上下文不影响。
+   */
+  noteUserMessage(sessionId: string, sourceKind: string | undefined, seq: number | undefined): void;
+  /**
+   * turn.end 时调用。返回 true 表示本轮完成通知应被抑制：成功结束、且本轮请求过静默。
+   * 轮次号能对上时按轮次号判定；迟到的上一轮 turn.end 保留本轮的请求。
+   */
+  consumeTurnEnd(sessionId: string, ok: boolean, turn: number | undefined, seq: number | undefined): boolean;
+}
 interface PromptDocument {
   name: string;
   mediaType: string;
@@ -1191,6 +1227,8 @@ export declare class HostBridge {
    * and restore them. Excluded from `summaries` and from the live broadcast. */
   private archivedSummaries;
   private subagentSessionIds;
+  /** 计划任务按需完成通知（quiet-completion.ts）：index.ts 用它注册 Agent 工具。 */
+  readonly quietCompletion: QuietCompletionTracker;
   /**
    * 每个会话最近一次已知的队列（inbox 投影的折叠结果）及其指纹。来源是实时
    * 投影通知或打开会话时读到的基线；指纹用来丢掉内容没变的重复通知。
@@ -1274,6 +1312,13 @@ export declare class HostBridge {
   private record;
   /** Start consuming host + mux streams. Idempotent; aborts on dispose(). */
   start(): void;
+  /**
+   * 用宿主任务列表里的投递目标会话预热计划任务会话集合，避免插件重启后工具
+   * 先消失、等下一次投递再出现（每次变化都会给会话追加工具增减消息）。
+   * `new` 目标没有固定会话，只能从最近一次投递回执里取。失败只记日志：集合仍会
+   * 在下一次投递时补上。由 index.ts 在 schedule 服务就绪、注册工具时调用。
+   */
+  seedQuietCompletionSessions(): Promise<void>;
   dispose(): void;
   private runHostStream;
   private runMuxStream;

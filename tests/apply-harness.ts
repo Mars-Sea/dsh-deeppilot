@@ -259,10 +259,24 @@ class FakeSubContext {
   readonly effects: EffectRecord[] = []
   /** report-remote.ts 直接属性读 remoteCtx.typert。 */
   readonly typert: unknown
+  /** 计划任务按需完成通知直接属性读 ctx.tools（宿主把注入的服务挂在上下文属性上）。 */
+  readonly tools: unknown
 
-  constructor(private readonly services: Map<string, unknown>) {
+  constructor(
+    private readonly services: Map<string, unknown>,
+    /** 嵌套 inject 产生的子上下文登记到顶层同一张表，disposeEffects 一并清理。 */
+    private readonly registry: FakeSubContext[] = [],
+  ) {
     this.reflect = new FakeReflect(services)
     this.typert = services.get('typert')
+    this.tools = services.get('tools')
+  }
+
+  /** 真实宿主的子上下文同样能 inject；apply() 在数据面里嵌套等待 tools / schedule。 */
+  inject(_deps: string[], fn: (sub: unknown) => void): void {
+    const sub = new FakeSubContext(this.services, this.registry)
+    this.registry.push(sub)
+    fn(sub)
   }
 
   get(name: string): unknown { return this.services.get(name) }
@@ -313,7 +327,7 @@ export class FakeContext {
   }
 
   inject(_deps: string[], fn: (sub: unknown) => void): void {
-    const sub = new FakeSubContext(this.services)
+    const sub = new FakeSubContext(this.services, this.subContexts)
     this.subContexts.push(sub)
     fn(sub)
   }

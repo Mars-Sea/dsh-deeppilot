@@ -154,6 +154,13 @@ function userMessageSource(data: unknown): Record<string, unknown> | undefined {
   return undefined;
 }
 
+/** Source kind of one user/message payload (`user`, `schedule`, injected
+ * context kinds, …); undefined on legacy hosts that record no source. */
+export function userMessageSourceKind(data: unknown): string | undefined {
+  const kind = userMessageSource(data)?.kind;
+  return typeof kind === 'string' ? kind : undefined;
+}
+
 /** Wire role for one user/message payload. A payload without any readable
  * source degrades to 'user' so history written by older hosts stays visible;
  * a present source follows the host's own trajectory rule — anything whose
