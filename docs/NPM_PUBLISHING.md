@@ -188,6 +188,21 @@
     暂存流程与批准步骤已写入第二、三节与 `AGENTS.md`；工作流末尾核对在暂存模式下
     的标红问题本轮未改，留待下次发布前决定是否检测 staged 后按成功处理。
 
+12. `0.9.14` 的实际发布结果（2026-11-05）：`release/0.9.14` 快进推到 `main`
+    （`40fe063..9ff31ba`），该提交的 CI（运行号 `41953217573`）与 CodeQL
+    （`41953216405`）均绿；附注标签 `v0.9.14` 指向
+    `9ff31ba16a50a7707d8de18e0a72cc166fb03f61`。`publish.yml` 运行 `41953700019`
+    （`latest`）**整次为绿**：末尾核对重试 12 次（约 3.5 分钟）后，暂存版本在此期间
+    获批，核对通过——批准落在重试窗口内时不会标红，批准晚于窗口仍会按第 11 条标红。
+    注册表 `latest = 0.9.14`；来源证明类型为 `https://slsa.dev/provenance/v1`、
+    `gitCommit` 为该提交、工作流引用 `refs/tags/v0.9.14`；69 个条目、解包
+    131,580,166 字节，与本地 `npm pack --dry-run` 一致（压缩包 SHA1 因在 CI 重新打包
+    而与本地预演不同）。随后在全新隔离 `DSH_HOME` 中从 npm 安装
+    `dsh-deeppilot@0.9.14`（真实目录，不是 link，无 peer 警告），用真实
+    `0.2.2-rc.1` 宿主启动：`--dump-config` 退出码 0、无跳过，插件自有端口
+    `/phone/health` 返回 200，`serverVersion` 为 `0.9.14`、`protocolVersion` 2、
+    `dataPlane: true`；GitHub Release 在这一步通过后才公开并标记 Latest。
+
 ## 五、官方资料
 
 1. [npm 可信发布配置与限制](https://docs.npmjs.com/trusted-publishers/)
