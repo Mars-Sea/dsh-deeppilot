@@ -84,7 +84,15 @@
    operation and `truncated: true`. The field is additive with no capability
    bit; older Apps ignore it and `tool.summary` is unchanged.
 
-**Verification:** `npm test` 705 tests (703 pass, 1 environment-gated skip, 1
+10. **Phones paired before 0.8.3 can use automations.** Their stored scopes
+   predate `schedule.manage`, and reconnecting never adds new scopes, so every
+   automation request failed with `E_FORBIDDEN` (`scope schedule.manage
+   required`). On load, the plugin now adds `schedule.manage` to any
+   non-revoked device whose scopes are exactly the five pre-0.8.3 defaults and
+   writes the registry back; any other set is left as stored. No re-pairing
+   needed.
+
+**Verification:** `npm test` 706 tests (704 pass, 1 environment-gated skip, 1
 intentional TODO, 0 fail); `typecheck`; `build` (regenerated `lib/`); the
 config-schema check against the `0.2.1-rc.5` CLI; `smoke:helper` on
 darwin-arm64; `go test ./...`; `bin/SHA256SUMS` 6/6; an isolated `0.2.1-rc.5`
@@ -150,7 +158,12 @@ real iPhone pairing, Funnel end-to-end, and model turns.
    与历史分页都带，App 据此在会话里显示行级对比。任一侧正文超过 16 KiB（UTF-8）时只发
    路径、操作与 `truncated: true`。追加式扩展、不设能力位，旧 App 忽略，`tool.summary` 不变。
 
-**验证：** `npm test` 705 项（703 通过、1 项环境门禁跳过、1 项有意 TODO、
+10. **0.8.3 之前配对的手机可以用自动化任务了。** 这些设备存的权限早于 `schedule.manage`，
+   重连也不会补新权限，所以自动化任务的请求一律回 `E_FORBIDDEN`（`scope schedule.manage
+   required`）。插件载入设备注册表时，对权限恰好等于 0.8.3 之前五项默认的未撤销设备补上
+   `schedule.manage` 并写回；其他组合原样保留。无需重新配对。
+
+**验证：** `npm test` 706 项（704 通过、1 项环境门禁跳过、1 项有意 TODO、
 0 失败）；`typecheck`；`build`（重新生成 `lib/`）；config schema 检查（针对
 `0.2.1-rc.5` CLI）；`smoke:helper`（darwin-arm64）；`go test ./...`；
 `bin/SHA256SUMS` 6/6；隔离 `0.2.1-rc.5` 宿主上插件成功组合、启动，

@@ -133,6 +133,32 @@ export function normalizeDeviceScopes(value: unknown): DeviceScope[] {
   return [...new Set(value.filter((scope): scope is DeviceScope => typeof scope === 'string' && allowed.has(scope)))]
 }
 
+/**
+ * 0.8.3 之前的「全部权限」：当时还没有 `schedule.manage`。App 配对时一直申请
+ * DeviceScope 的全部取值，设置页也没有收窄权限的入口，所以存量记录恰好等于这五项，
+ * 只说明「配对时这项权限还不存在」，不是有意关闭。
+ */
+const LEGACY_FULL_SCOPES: readonly DeviceScope[] = [
+  'sessions.read',
+  'prompt.send',
+  'sessions.manage',
+  'interactions.respond',
+  'notifications.register',
+]
+
+/**
+ * 存量设备权限升级：恰好等于旧版全部权限时补上之后新增的默认权限，返回新列表；
+ * 其余情况（含任何非完整集合）返回 null，原样保留。只放宽「旧版全量」这一种形态，
+ * 避免把将来可能出现的、有意收窄过的记录一并放开。
+ */
+export function upgradeLegacyFullScopes(value: unknown): DeviceScope[] | null {
+  if (!Array.isArray(value)) return null
+  const current = new Set(value)
+  if (current.size !== LEGACY_FULL_SCOPES.length) return null
+  if (!LEGACY_FULL_SCOPES.every((scope) => current.has(scope))) return null
+  return [...DEFAULT_DEVICE_SCOPES]
+}
+
 /** One active, single-use pairing grant per plugin runtime. */
 export class PairingCodeManager {
   private active: PairingGrant | null = null

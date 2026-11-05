@@ -9,6 +9,7 @@ import {
   deviceIdForPublicKey,
   fingerprintForPublicKey,
   normalizeDeviceScopes,
+  upgradeLegacyFullScopes,
   type DeviceScope,
 } from './device-auth.ts'
 
@@ -137,8 +138,21 @@ export class DeviceStore {
       const raw = JSON.parse(await readFile(expandHome(filePath), 'utf8')) as {
         devices?: DeviceRecord[]
       }
+      let upgraded = 0
       for (const rec of raw.devices ?? []) {
-        if (typeof rec.deviceId === 'string') store.devices.set(rec.deviceId, rec)
+        if (typeof rec.deviceId !== 'string') continue
+        // 0.8.3 之前配对的设备只存了当时的五项全量权限，连接时不会补新权限，
+        // 自动化任务一直 E_FORBIDDEN（scope schedule.manage required）。载入时一次性补齐并落盘。
+        const next = rec.revokedAt === undefined ? upgradeLegacyFullScopes(rec.scopes) : null
+        if (next !== null) {
+          rec.scopes = next
+          upgraded += 1
+        }
+        store.devices.set(rec.deviceId, rec)
+      }
+      if (upgraded > 0) {
+        console.log(formatLogLine('info', `device scopes upgraded for ${upgraded} legacy device(s): schedule.manage added`))
+        void store.flush()
       }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code

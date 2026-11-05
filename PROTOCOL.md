@@ -213,6 +213,9 @@ scope 与操作映射：
 
 缺少所需 scope 时服务端回 `E_FORBIDDEN`，连接保持打开。当前产品默认配对授予
 全部 scope，普通设置页不提供逐项权限控制，只提供全局连接开关和逐设备删除。
+插件载入设备注册表时，若某台未撤销设备的 scope 恰好是 `schedule.manage` 出现前的
+五项全量（`sessions.read`、`prompt.send`、`sessions.manage`、`interactions.respond`、
+`notifications.register`），会一次性补上 `schedule.manage` 并写回；其他组合原样保留。
 `c2s.ping` 与 `c2s.resume` 是已认证连接的控制帧，不额外要求业务 scope。
 
 #### 下行（S→C）广播权限

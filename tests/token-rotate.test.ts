@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -107,6 +107,35 @@ test('concurrent registrations never leave a half-written devices-v2.json behind
     const parsed = JSON.parse(raw) as { version: number; devices: Array<{ deviceId: string }> }
     assert.equal(parsed.version, 2)
     assert.equal(new Set(parsed.devices.map((d) => d.deviceId)).size, 40)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('legacy full-scope devices gain schedule.manage on load; others stay as stored', async () => {
+  const dir = await makeTempDir()
+  const file = join(dir, 'devices-v2.json')
+  const legacy = ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register']
+  const row = (deviceId: string, scopes: unknown, extra: Record<string, unknown> = {}) => ({
+    deviceId, deviceName: deviceId, appVersion: '0.2.3', publicKey: 'pk', fingerprint: 'fp',
+    scopes, firstSeenTs: 1, lastSeenTs: 2, ...extra,
+  })
+  try {
+    await writeFile(file, JSON.stringify({ version: 2, devices: [
+      row('legacy', legacy),
+      row('narrow', ['sessions.read']),
+      row('full', [...legacy, 'schedule.manage']),
+      row('revoked', legacy, { revokedAt: 3 }),
+    ] }))
+    const store = await DeviceStore.load(file)
+    await store.drain()
+    const scopes = Object.fromEntries(store.list().map((r) => [r.deviceId, r.scopes]))
+    assert.deepEqual(scopes.legacy, [...legacy, 'schedule.manage'], 'legacy full set gets the later default')
+    assert.deepEqual(scopes.narrow, ['sessions.read'], 'a narrowed set is never widened')
+    assert.deepEqual(scopes.full, [...legacy, 'schedule.manage'])
+    assert.deepEqual(scopes.revoked, legacy, 'revoked rows are left alone')
+    const persisted = JSON.parse(await readFile(file, 'utf8')) as { devices: Array<{ deviceId: string; scopes: string[] }> }
+    assert.ok(persisted.devices.find((r) => r.deviceId === 'legacy')?.scopes.includes('schedule.manage'), 'upgrade is written back')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
