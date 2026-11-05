@@ -87,3 +87,29 @@ test('exposes and ships localized Plugin Manager metadata', async () => {
     'locale files declare identical meta keys',
   )
 })
+
+/**
+ * DSH 0.2.2 的插件详情页按语言链读取 `locale/<lang>.json` 的 `meta.detail`，
+ * 找不到才退回包根 README。中文宿主因此显示中文 README，而不是英文版。
+ * 宿主规则（`@deepseek-ai/dsh-plugin-detail` 的 `detailPath`）：以 `/` 分隔、
+ * 相对包根、以 `.md`/`.markdown` 结尾，无空段、`.`、`..`、反斜杠或 URL scheme；
+ * 写错或文件不存在时宿主报 `invalid`，且**不会**退回 README，所以这里严格对齐。
+ * 旧宿主不认识 `meta.detail`，只按字段名取 title/description，多出的键被忽略。
+ */
+test('locale meta.detail names a packaged Markdown document per language', async () => {
+  const expected: Record<string, string> = { en: 'README.md', zh: 'README.zh-CN.md' }
+  for (const [lang, doc] of Object.entries(expected)) {
+    const raw = await readFile(new URL(`../locale/${lang}.json`, import.meta.url), 'utf8')
+    const detail = (JSON.parse(raw) as { meta?: { detail?: unknown } }).meta?.detail
+    assert.equal(detail, doc, `${lang} meta.detail points at ${doc}`)
+    const path = detail as string
+    assert.ok(/\.(md|markdown)$/i.test(path), `${lang} detail is Markdown`)
+    assert.ok(!/^[a-z][a-z0-9+.-]*:/i.test(path) && !path.includes('\\'), `${lang} detail has no scheme or backslash`)
+    assert.ok(
+      path.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..'),
+      `${lang} detail stays inside the package root`,
+    )
+    assert.ok(packageJson.files?.includes(path) === true, `files lists ${path}`)
+    assert.ok((await stat(new URL(`../${path}`, import.meta.url))).isFile(), `${path} exists`)
+  }
+})

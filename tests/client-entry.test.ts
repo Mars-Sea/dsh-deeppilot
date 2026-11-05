@@ -58,10 +58,14 @@ function fakeConfigForm(value: Record<string, unknown>, accepted = true): { face
 function harness() {
   const root = new Context()
   const sections: Array<{ inject: () => HooksFace }> = []
+  // settings.section.icon 等其他插槽的登记，按插槽名分开收集。
+  const others: Array<{ entry: { name?: string; id?: string }; component: unknown }> = []
   root.provide('slots', {
     inject: (_name: string, callback: () => unknown) => { callback() },
-    register: (entry: unknown) => {
-      sections.push(entry as { inject: () => HooksFace })
+    register: (entry: unknown, component: unknown) => {
+      const named = entry as { name?: string; id?: string }
+      if (named.name === 'settings.section') sections.push(entry as { inject: () => HooksFace })
+      else others.push({ entry: named, component })
       return () => {}
     },
   })
@@ -72,7 +76,7 @@ function harness() {
   // The report remote is exercised by its own tests; here it only has to
   // resolve so the settings section registers.
   root.provide('remote', { $mount: async () => async () => {} })
-  return { root, sections }
+  return { root, sections, others }
 }
 
 function loadEntry(root: Context) {
@@ -101,6 +105,28 @@ function faceOf(sections: Array<{ inject: () => HooksFace }>): HooksFace {
 
 test('the client entry permits configForms to arrive after activation', () => {
   assert.deepEqual([...clientEntry.inject], ['slots', 'locale', 'remote'])
+})
+
+test('registers a monochrome line nav icon matched to the settings section id', async () => {
+  const { root, others } = harness()
+  await loadEntry(root)
+
+  const icons = others.filter((item) => item.entry.name === 'settings.section.icon')
+  assert.equal(icons.length, 1, 'exactly one settings.section.icon registration')
+  // 壳按 id 匹配 settings.section；id 不同则永远不渲染。
+  assert.equal(icons[0]!.entry.id, 'deeppilot')
+
+  const Icon = icons[0]!.component as (props: { size: number; active: boolean }) => {
+    props: Record<string, unknown> & { children?: unknown }
+  }
+  const svg = Icon({ size: 20, active: true })
+  assert.equal(svg.props.width, 20, 'icon follows the size the shell asks for')
+  assert.equal(svg.props.height, 20)
+  // 线性单色：无填充、描边跟随文字颜色，不带品牌渐变。
+  assert.equal(svg.props.fill, 'none')
+  assert.equal(svg.props.stroke, 'currentColor')
+  assert.equal(svg.props['aria-hidden'], true)
+  assert.equal(Icon({ size: 0, active: false }).props.width, 16, 'invalid size falls back to 16')
 })
 
 test('a 0.1.7 host activates the entry and binds a late configForms service', async () => {

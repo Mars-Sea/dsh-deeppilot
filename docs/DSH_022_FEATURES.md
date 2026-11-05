@@ -17,6 +17,8 @@
 | `pluginManager.listVersions` / `registries` | 公开版本目录及软件源配置 | 已读 | 显示候选版本，读取精确协议声明，确定实际候选源 |
 | `pluginManager.updateBundle` / `listBundles` | 精确版本更新、实际安装清单 | 已读 | 由宿主完成 HMR 替换和失败回滚，再核对安装与运行版本 |
 | `plugin-manager/registry.registryPlan` | 公开软件源选择规则 | 已读并建立对照测试 | 预检宿主可能回退到的全部来源，禁止不同协议或完整性摘要绕过闸门 |
+| `locale/<lang>.json` 的 `meta.detail` | 插件管理页按语言链读取详情文档，缺省退回包根 README | 已读 `dsh-plugin-detail` 选择规则 | 英文 `README.md`、中文 `README.zh-CN.md` |
+| `settings.section.icon` 插槽 | 设置壳按 `settings.section` 同 id 渲染，`{size, active}` | 已读壳渲染与插槽声明 | 导航行显示单色线性手机图标；旧宿主不声明该插槽，保留默认图标 |
 | npm 精确版本 manifest | GET `{registry}/dsh-deeppilot/{version}` | 已读并限制响应大小及超时 | 核对包名、精确版本、bundle、`deepPilot.protocolVersion` 与强 SRI |
 | 其他新模块 | 新增包及发布清单 | 仅盘点 | 未接入，不引入额外产品行为 |
 
@@ -24,8 +26,8 @@
 
 | 类别 | 本轮范围内的状态 |
 |---|---|
-| 双方都有 | ZIP/Markdown 导出、瞬时流生命周期与正式事件关联、明确确认的更新及状态查询、兼容性闸门、宿主 HMR/回滚、断线后日志对账 |
-| 上游有、我方未接 | 自动化任务批量清理、Web 引用交互、插件富文本详情及其他 Web 专属入口；本轮未扩展手机对应功能 |
+| 双方都有 | ZIP/Markdown 导出、瞬时流生命周期与正式事件关联、明确确认的更新及状态查询、兼容性闸门、宿主 HMR/回滚、断线后日志对账、插件详情页多语言文档、设置导航图标 |
+| 上游有、我方未接 | Web 引用交互及其他 Web 专属入口（自动化任务批量清理已由下文 `deleteEnded` 接入）；本轮未扩展手机对应功能 |
 | 我方有、上游没有 | 手机专用分块传输、独立瞬时 wire 帧、设备隔离的持久更新日志、App 协议版本闸门 |
 | 双方都没有 | 不支持的宿主上强制重启进程、手机静默安装、替用户发布 npm/GitHub 版本 |
 

@@ -24,6 +24,7 @@ import { registerLocale as registerDeepPilotLocale, t } from './i18n.ts'
 import type { PushTestResult, RelayTestResult } from '../report-wire.ts'
 import { injectCss } from './styles.ts'
 import { DeepPilotSettingsPage } from './settings-page.ts'
+import { DeepPilotNavIcon } from './nav-icon.ts'
 import { DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, normalizeFunnelConnectionLimit } from '../funnel-policy.ts'
 import { DEFAULT_LOCAL_PORT, normalizeLocalPort } from '../local-policy.ts'
 import {
@@ -513,5 +514,15 @@ export function apply(ctx: Context): void {
         t: (key: string, vars?: Readonly<Record<string, unknown>>) => t(ctx, key, vars),
       }),
     }, DeepPilotSettingsPage),
+  )
+  // 导航图标：DSH 0.2.2 起设置壳声明 `settings.section.icon`，按与上面
+  // `settings.section` 相同的 id 匹配。`inject` 跟随插槽声明的生命周期，
+  // 旧宿主的壳不声明这个插槽，回调不会触发，导航行保留默认图标。
+  // 壳不显示 `label`，图标自身也 aria-hidden，可读名称仍来自上面的 label。
+  anyCtx.slots?.inject('settings.section.icon', () =>
+    (anyCtx.slots as NonNullable<AnyCtx['slots']>).register({
+      name: 'settings.section.icon',
+      id: 'deeppilot',
+    }, DeepPilotNavIcon),
   )
 }

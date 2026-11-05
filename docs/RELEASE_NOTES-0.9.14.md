@@ -92,6 +92,15 @@
    writes the registry back; any other set is left as stored. No re-pairing
    needed.
 
+11. **Plugin page shows the localized README; settings nav gets its own icon.**
+   On DSH 0.2.2 hosts (`0.2.2-alpha.3`, `0.2.2-rc.1`), the Plugins page reads a
+   detail document per language: `locale/en.json` and `locale/zh.json` now
+   declare `meta.detail` (`README.md` / `README.zh-CN.md`), so a Chinese host
+   shows the Chinese README instead of the English one. The settings navigation
+   row for DeepPilot shows a monochrome line phone icon through the new
+   `settings.section.icon` slot instead of the default gear. Older hosts ignore
+   both and keep their current display.
+
 **Verification:** `npm test` 706 tests (704 pass, 1 environment-gated skip, 1
 intentional TODO, 0 fail); `typecheck`; `build` (regenerated `lib/`); the
 config-schema check against the `0.2.1-rc.5` CLI; `smoke:helper` on
@@ -162,6 +171,13 @@ real iPhone pairing, Funnel end-to-end, and model turns.
    重连也不会补新权限，所以自动化任务的请求一律回 `E_FORBIDDEN`（`scope schedule.manage
    required`）。插件载入设备注册表时，对权限恰好等于 0.8.3 之前五项默认的未撤销设备补上
    `schedule.manage` 并写回；其他组合原样保留。无需重新配对。
+
+11. **插件详情页显示对应语言的 README，设置导航有了自己的图标。** 在 DSH 0.2.2
+   宿主（`0.2.2-alpha.3`、`0.2.2-rc.1`）上，插件管理页按语言读取详情文档：
+   `locale/en.json` 与 `locale/zh.json` 新增 `meta.detail`（`README.md` /
+   `README.zh-CN.md`），中文宿主显示中文 README，不再是英文版。设置页左侧导航的
+   DeepPilot 一行通过新插槽 `settings.section.icon` 显示单色线性手机图标，取代默认
+   齿轮。旧宿主忽略这两项，显示保持不变。
 
 **验证：** `npm test` 706 项（704 通过、1 项环境门禁跳过、1 项有意 TODO、
 0 失败）；`typecheck`；`build`（重新生成 `lib/`）；config schema 检查（针对

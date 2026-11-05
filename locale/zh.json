@@ -1,6 +1,7 @@
 {
   "meta": {
     "title": "DeepPilot",
-    "description": "把 iPhone 与这台电脑上的 DeepSeek Harness（DSH）连接起来（协议 v2）。"
+    "description": "把 iPhone 与这台电脑上的 DeepSeek Harness（DSH）连接起来（协议 v2）。",
+    "detail": "README.zh-CN.md"
   }
 }
