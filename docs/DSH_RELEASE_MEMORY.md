@@ -5,6 +5,37 @@
 > move the lower bound, at each `0.x` minor boundary, or when a host inside the
 > range breaks at runtime.
 
+## Audit record — `dsh-v0.2.2-rc.1` (rebuild of alpha.3, no runtime change)
+
+- **Release (2026-11-04):** `dsh-v0.2.2-rc.1`, now npm `next`; `latest` stays
+  `0.2.1-rc.5`, `alpha` stays `0.2.2-alpha.3`. Inside the rolling range, so **no
+  declaration change**. The release notes summarize everything since
+  `0.2.1-rc.5`, so most listed items already shipped in `0.2.2-alpha.2/3`.
+- **Tree vs `0.2.2-alpha.3`:** 330 shared packages, zero manifest structural
+  changes after normalizing version strings, and only four non-manifest files
+  differ (`dsh-client-modules` build commit, three client bundles' version
+  strings). `cordis 4.0.6-alpha.2 → 4.1.0` and `schemastery 3.18.6-alpha.2 →
+  3.19.0` change only `package.json` (version and `cosmokit`/`cordis-plugin-*`
+  ranges); code is byte-identical. The evaluator `dsh-app-boot/lib/index.js` is
+  byte-identical (sha256 `346f8322…`), so every alpha.3 finding — including the
+  schedule host-adapter requirement — carries over unchanged.
+- **Gate (real rc.1 evaluator):** worktree `0.9.14` accepted on `0.2.2-rc.1`,
+  `0.2.2-alpha.3`, `0.2.1-rc.5`, `0.2.2`; refused on `0.3.0-rc.1`. Published
+  `0.9.13` (eight-release list) is refused on every one of them — `next`-channel
+  users need `0.9.14` published before the plugin activates.
+- **Boot:** isolated `DSH_HOME` with the rc.1 CLI: `--dump-config` exit 0, empty
+  stderr, 7 `deeppilot` hits; `/phone/health` 200 (`protocolVersion` 2,
+  `serverVersion` 0.9.14, `dataPlane` active); `deeppilot/host-id` and
+  `lan-tls/` created.
+- **Open item (install-time only):** peers `@deepseek-ai/cordis`
+  (`~4.0.4 || ~4.0.5-alpha.1 || ~4.0.6-alpha.1`) and `@deepseek-ai/schemastery`
+  (`~3.18.x`) do not admit the vendored `4.1.0` / `3.19.0`. Both are optional
+  peers and the evaluator ignores them (`engines.dsh` decides), so activation is
+  unaffected; appending `~4.1.0` / `~3.19.0` is a declaration change pending
+  decision.
+- **Not covered:** no real-device pairing, Funnel end-to-end, model turn, or
+  `npm install` from the registry via the host's plugin manager.
+
 ## Audit record — `dsh-v0.2.2-alpha.3` (runtime break inside the range)
 
 - **Release (2026-11-03):** `dsh-v0.2.2-alpha.3` on the npm `alpha` channel
