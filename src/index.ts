@@ -790,13 +790,20 @@ export function apply(ctx: Context, options: unknown): void {
       ;(apiCtx as unknown as { inject: (deps: string[], fn: (sub: unknown) => void) => void }).inject(
         ['tools', 'schedule'],
         (sub) => {
-          if (bridge.capabilities.schedulesHost !== true) return
+          if (bridge.capabilities.schedulesHost !== true) {
+            log('quiet completion tool not registered: host-level schedules unavailable')
+            return
+          }
           const tools = (sub as { tools?: ToolsServiceLike }).tools
-          if (typeof tools?.register !== 'function') return
+          if (typeof tools?.register !== 'function') {
+            log('quiet completion tool not registered: tools service unavailable', 'warn')
+            return
+          }
           ;(sub as SubContext).effect(
             () => registerQuietCompletionTool(tools, bridge.quietCompletion, (message) => log(message)),
             'deeppilot: quiet completion tool',
           )
+          log('quiet completion tool registered')
           void bridge.seedQuietCompletionSessions()
         },
       )

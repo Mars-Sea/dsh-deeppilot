@@ -1144,31 +1144,37 @@ interface QuietCompletionResult {
   suppressed: boolean;
   note?: string;
 }
+interface TurnVerdict {
+  /** 本轮最近一条驱动消息是计划任务投递（且其后没有用户消息）。 */
+  scheduled: boolean;
+  /** 本轮 `turn/start` 的轮次号；日志里读不到时为 undefined。 */
+  turn?: number;
+}
 declare class QuietCompletionTracker {
   /**
-   * 收到过计划任务投递的会话。粘性集合：加入后不再移除，工具不按轮出现或消失。
+   * 判定过计划任务轮次的会话。粘性集合：加入后不再移除，工具不按轮出现或消失。
    * 宿主每次工具列表变化都会往会话追加一条工具增减消息并让提示词缓存失效，
    * 按轮开关会让同一会话反复产生这类消息。
    */
   private readonly scheduleSessions;
-  private readonly turns;
+  private readonly quiet;
   /** 启动时用宿主任务列表里的投递目标会话预热，避免重启后工具先消失再出现。 */
   seed(sessionIds: Iterable<string>): void;
-  /** 工具 `when` 条件：只有计划任务会话能看到这个工具。 */
   isScheduleSession(sessionId: string): boolean;
-  /**
-   * 观察一条 user/message 的来源。`schedule` 标记本轮为计划任务轮次；`user`（或旧宿主
-   * 没有来源，按用户消息处理）表示用户插话，本轮回到普通轮次、撤销已请求的静默；
-   * 其他注入上下文（技能、运行时快照等）不影响判定。
-   */
-  noteUserMessage(sessionId: string, sourceKind: string | undefined): void;
+  /** 加入粘性集合；返回是否为新加入（调用方据此记一次日志）。 */
+  markScheduleSession(sessionId: string): boolean;
   /** 工具执行：只在计划任务轮次内生效。 */
-  requestQuiet(sessionId: string | undefined): QuietCompletionResult;
+  requestQuiet(sessionId: string | undefined, verdict: TurnVerdict, seq: number): QuietCompletionResult;
   /**
-   * turn.end 时调用并清空本轮状态。返回 true 表示本轮完成通知应被抑制：
-   * 只有成功结束、计划任务轮次、且 Agent 请求了静默三者同时成立。
+   * 桥接层观察到 user/message：用户在请求静默之后插话（日志位置更晚）就撤销静默，
+   * 本轮照常提醒。计划任务与注入上下文不影响。
    */
-  consumeTurnEnd(sessionId: string, ok: boolean): boolean;
+  noteUserMessage(sessionId: string, sourceKind: string | undefined, seq: number | undefined): void;
+  /**
+   * turn.end 时调用。返回 true 表示本轮完成通知应被抑制：成功结束、且本轮请求过静默。
+   * 轮次号能对上时按轮次号判定；迟到的上一轮 turn.end 保留本轮的请求。
+   */
+  consumeTurnEnd(sessionId: string, ok: boolean, turn: number | undefined, seq: number | undefined): boolean;
 }
 interface PromptDocument {
   name: string;

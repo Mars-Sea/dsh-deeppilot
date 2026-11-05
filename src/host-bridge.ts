@@ -565,7 +565,7 @@ export class HostBridge {
         }
         this.noteActivity(sessionId, event);
         if (event.type === 'user/message') {
-          this.quietCompletion.noteUserMessage(sessionId, userMessageSourceKind(event.data));
+          this.quietCompletion.noteUserMessage(sessionId, userMessageSourceKind(event.data), event.seq);
         }
         this.captureAssistantText(sessionId, event);
         const projection = projectEvent(sessionId, event);
@@ -577,7 +577,8 @@ export class HostBridge {
         if (projection?.kind === 'turn.end') {
           const ok = projection.data.ok === true;
           // 计划任务轮次中 Agent 请求了静默：turn.end 本身照常记录，只跳过完成通知。
-          if (this.quietCompletion.consumeTurnEnd(sessionId, ok)) {
+          const turn = (event.data as { turn?: unknown } | undefined)?.turn;
+          if (this.quietCompletion.consumeTurnEnd(sessionId, ok, typeof turn === 'number' ? turn : undefined, event.seq)) {
             this.log?.(`completion notice skipped by scheduled run session=${sessionId}`);
           } else {
             this.emitTurnCompletedNotify(sessionId, ok);
