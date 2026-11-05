@@ -1,7 +1,7 @@
 const CSS = String.raw`
 .pbb-section{--pbb-ink:var(--dsw-alias-label-primary,#0f1115);--pbb-secondary:var(--dsw-alias-label-secondary,#61666b);--pbb-line:var(--dsw-alias-settings-card-stroke,var(--dsw-alias-border-l3,#e4e5e7));--pbb-fill:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2,#fff));--pbb-soft:var(--dsw-alias-bg-module-platform,#f5f6f8);container:pbb/inline-size;max-width:760px;color:var(--pbb-ink);font-size:14px;line-height:20px;display:flex;flex-direction:column;gap:20px}
 .pbb-section *{box-sizing:border-box}
-.pbb-section button:not([role="switch"]),.pbb-section input{font-family:inherit}
+.pbb-section :is(.pbb-action,.pbb-refresh,.pbb-iconButton,.pbb-cardHead,.pbb-menuAction,.pbb-targetButton),.pbb-section input{font-family:inherit}
 .pbb-icon{display:block;flex:none;color:inherit}
 .pbb-pageHeader{display:flex;align-items:flex-start;gap:12px;min-height:56px}
 .pbb-pageHeader>div{min-width:0;flex:1;padding-top:2px}
@@ -33,7 +33,7 @@ const CSS = String.raw`
 .pbb-fold[hidden]{display:none}
 .pbb-action:disabled,.pbb-refresh:disabled,.pbb-menuAction:disabled,.pbb-targetButton:disabled{opacity:.5;cursor:default}
 .pbb-action{display:inline-flex;align-items:center;justify-content:center;gap:5px;flex:none;height:28px;max-width:100%;padding:0 9px;border:1px solid var(--pbb-line);border-radius:6px;background:transparent;color:var(--pbb-secondary);font:inherit;font-size:14px;line-height:20px;text-decoration:none;cursor:pointer;white-space:nowrap}
-.pbb-addButton{height:30px;margin-left:auto;padding:0 10px;border-radius:7px;color:var(--pbb-ink);font-weight:400;background:var(--pbb-fill)}
+.pbb-addAction{display:flex;margin-left:auto}
 .pbb-buttonPrimary{background:var(--dsw-alias-button-primary-fill,var(--pbb-ink));border-color:transparent;color:var(--dsw-alias-label-primary-foreground,#fff)}
 .pbb-actionDangerGhost{color:var(--dsw-alias-state-error-primary,#bc2222);border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary,#bc2222) 35%,transparent)}
 .pbb-iconButton{display:flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--pbb-secondary);cursor:pointer}
@@ -134,7 +134,7 @@ const CSS = String.raw`
 .pbb-disclosure>summary::-webkit-details-marker{display:none}
 .pbb-disclosureBody{padding:2px 16px 16px}
 .pbb-disclosureTitle{flex:1}
-.pbb-section :is(button:not([role="switch"]),input,summary,a):focus-visible{outline:2px solid var(--dsw-focus-ring-color,#5276b4);outline-offset:2px}
+.pbb-section :is(.pbb-action,.pbb-refresh,.pbb-iconButton,.pbb-cardHead,.pbb-menuAction,.pbb-targetButton,input,summary,a):focus-visible{outline:2px solid var(--dsw-focus-ring-color,#5276b4);outline-offset:2px}
 @media (hover:hover) and (pointer:fine){.pbb-refresh:hover:not(:disabled),.pbb-iconButton:hover,.pbb-action:hover:not(:disabled),.pbb-cardHead:hover,.pbb-menuAction:hover:not(:disabled){background:var(--pbb-soft)}.pbb-buttonPrimary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover,#30343b)}.pbb-action:active:not(:disabled),.pbb-refresh:active:not(:disabled),.pbb-iconButton:active{transform:scale(.97)}}
 @media (prefers-reduced-motion:reduce){.pbb-action,.pbb-refresh,.pbb-iconButton{transition:none;transform:none!important}.pbb-actionBusy::before{animation:none}}
 @container pbb (max-width:480px){.pbb-qrPanel{grid-template-columns:1fr}.pbb-limitRow{align-items:flex-start;flex-direction:column}.pbb-limitControl{align-self:flex-end}.pbb-deviceMeta{column-gap:4px}.pbb-toolMeta{max-width:42%}.pbb-channelRow{gap:8px}.pbb-testItem{flex-wrap:wrap}.pbb-testItem>.pbb-controlText{flex-basis:65%}}

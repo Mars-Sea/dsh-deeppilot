@@ -21,6 +21,13 @@ const hostSwitchStyle = (switchElement: Locator) => switchElement.evaluate((el) 
   }
 })
 
+const hostButtonStyle = (button: Locator) => button.evaluate((el) => {
+  const style = getComputedStyle(el)
+  return ['height', 'padding', 'border-radius', 'border-width', 'border-style', 'border-color',
+    'background-color', 'color', 'font-size', 'font-family', 'font-weight', 'line-height', 'gap', 'transform']
+    .map((property) => style.getPropertyValue(property))
+})
+
 for (const theme of ['light', 'dark']) {
   test(`${theme}：四个开关直接沿用宿主组件的轨道、滑块和焦点样式`, async ({ page }) => {
     await page.goto(`/?theme=${theme}`)
@@ -87,9 +94,12 @@ for (const theme of ['light', 'dark']) {
       await expect(page.getByLabel('局域网端口', { exact: true })).toBeHidden()
       await expect(page.getByRole('button', { name: '发送测试通知', exact: true })).toBeHidden()
       await expect(page.getByText('设备身份认证', { exact: true })).toBeHidden()
-      await expect(addPhone(page)).toHaveCSS('height', '30px')
-      await expect(addPhone(page)).toHaveCSS('font-size', '14px')
+      await expect(addPhone(page)).toHaveCSS('height', '28px')
+      await expect(addPhone(page)).toHaveCSS('font-size', '12px')
       await expect(addPhone(page)).toHaveCSS('border-style', 'solid')
+      const reference = page.getByTestId('host-button-reference').locator('button')
+      expect(await hostButtonStyle(addPhone(page))).toEqual(await hostButtonStyle(reference))
+      expect(await addPhone(page).getAttribute('class')).toBe(await reference.getAttribute('class'))
       await expect(page.locator('.pbb-refresh')).toHaveCSS('height', '28px')
       const metrics = await page.locator('.pbb-section').evaluate((root) => {
         const textElements = [...root.querySelectorAll('*')].filter((el) =>
@@ -230,6 +240,24 @@ test('配对按需生成，切换网络仍展开并使用新凭据，复制及�
   await expect(page.getByRole('img', { name: 'DeepPilot 配对二维码' })).toHaveCount(0)
 })
 
+test('添加手机使用宿主按钮，Enter 展开配对，空格收起且不重复签发', async ({ page }) => {
+  await page.goto('/')
+  await expect(addPhone(page)).toHaveAttribute('aria-expanded', 'false')
+  await addPhone(page).press('Enter')
+  const toggle = page.locator('.pbb-addAction button')
+  await expect(toggle).toHaveAccessibleName('收起')
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByRole('img', { name: 'DeepPilot 配对二维码' })).toBeVisible()
+  expect((await operations(page)).grants).toBe(1)
+  await toggle.press('Space')
+  await expect(addPhone(page)).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByRole('img', { name: 'DeepPilot 配对二维码' })).toHaveCount(0)
+  expect((await operations(page)).grants).toBe(1)
+  await page.goto('/?scenario=loading')
+  await expect(addPhone(page)).toBeDisabled()
+  await expect(addPhone(page)).toHaveCSS('opacity', '0.4')
+})
+
 test('配对失败可重试，过期后不能继续显示旧码', async ({ page }) => {
   await page.clock.install()
   await page.goto('/?scenario=pair-error')
@@ -295,11 +323,13 @@ test('重命名失败保留编辑内容，中文说明包含原始错误码', as
   expect((await operations(page)).renames).toBe(0)
 })
 
-test('自有操作触屏区域维持 44px，开关沿用宿主尺寸，减少动态效果时没有移动动画', async ({ browser }) => {
+test('自有操作触屏区域维持 44px，原生控件沿用宿主尺寸，减少动态效果时没有移动动画', async ({ browser }) => {
   const context = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' })
   const page = await context.newPage()
   await page.goto('http://127.0.0.1:4781/')
-  await expect(addPhone(page)).toHaveCSS('min-height', '44px')
+  await expect(page.locator('.pbb-refresh')).toHaveCSS('min-height', '44px')
+  const buttonReference = page.getByTestId('host-button-reference').locator('button')
+  expect(await hostButtonStyle(addPhone(page))).toEqual(await hostButtonStyle(buttonReference))
   await expect(page.locator('.pbb-section')).toHaveCSS('animation-name', 'none')
   const control = page.getByRole('switch', { name: '允许手机连接', exact: true })
   const reference = page.getByTestId('host-switch-reference').locator('[aria-checked="true"]')

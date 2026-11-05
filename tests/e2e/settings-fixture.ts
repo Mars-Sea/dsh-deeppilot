@@ -1,6 +1,7 @@
 import { createElement as h, useCallback, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { settingsIcon } from '../../src/client/settings-icons.ts'
 import { DeepPilotSettingsPage } from '../../src/client/settings-page.ts'
 import { injectCss } from '../../src/client/styles.ts'
 import { interpolate, translateOrThrow, type SupportedLocale } from '../../src/client/i18n.ts'
@@ -106,7 +107,9 @@ function Fixture(): any {
     // 保留渲染以读取滑块 transform；display:none 的后代没有可比较的变换矩阵。
     h('div', { 'aria-hidden': true, inert: true, style: { position: 'fixed', left: '-10000px', top: 0 }, 'data-testid': 'host-switch-reference' },
       h(Switch, { checked: true, label: '宿主参考开关：开启', onChange: () => {} }),
-      h(Switch, { checked: false, label: '宿主参考开关：关闭', onChange: () => {} })),
+      h(Switch, { checked: false, label: '宿主参考开关：关闭', onChange: () => {} }),
+      h('div', { 'data-testid': 'host-button-reference' },
+        h(Button, { variant: 'outline', size: 'sm', icon: settingsIcon('plus', 16) }, '添加手机'))),
     h('output', { hidden: true, 'data-testid': 'fixture-operations', 'data-revision': revision }, JSON.stringify(operations.current)))
 }
 

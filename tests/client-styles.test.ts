@@ -89,10 +89,10 @@ test('injectCss is inert without a document', () => {
   }
 })
 
-test('page stylesheet does not draw or resize host switches', () => {
+test('page stylesheet leaves host switches and the add button styling to DSH', () => {
   const tags = withFakeDocument((tags) => { injectCss(); return tags })
   assert.doesNotMatch(tags[0]!.textContent, /\.pbb-switch(?:On)?(?=[{:.,\s])/,
     'track, thumb, and on/off state belong to the host component')
-  assert.match(tags[0]!.textContent, /button:not\(\[role="switch"\]\)/,
-    'generic button focus and font rules must leave the host switch alone')
+  assert.doesNotMatch(tags[0]!.textContent, /\.pbb-addButton|\.pbb-section button/,
+    'only plugin-owned control classes may receive button focus and font rules')
 })

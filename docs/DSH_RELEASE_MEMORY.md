@@ -5,7 +5,7 @@
 > move the lower bound, at each `0.x` minor boundary, or when a host inside the
 > range breaks at runtime.
 
-## UI integration check — native settings switches (2026-11-05)
+## UI integration check — native settings controls (2026-11-05)
 
 - **Runtime surface:** `@deepseek-ai/dsh-client-ui-primitives` is an implicit
   browser baseline module. The installed frontend bundles for the supported
@@ -19,7 +19,7 @@
 - **Scope:** frontend-only. Host activation metadata, production dependencies,
   and the phone protocol are unchanged; this source/module-table check does
   not claim phone integration or a published release.
-- **Verification:** typecheck and build pass; the production bundle requires
+- **Switch migration verification:** typecheck and build pass; the production bundle requires
   the host primitives module. Unit tests: 721 pass, zero fail, one skip, one
   existing TODO (a first run hit an unrelated push-test temporary-directory
   cleanup race; the full rerun passed). Browser E2E: 21 pass, including official
@@ -28,6 +28,15 @@
   renders the same switch/thumb classes as general settings, with a 36×20px
   track and 16px thumb, and no custom pseudo-elements. Live network switches
   were inspected without changing their values.
+- **Add phone follow-up:** the same module supplies `Button` on both audited
+  frontend versions. The pairing toggle now uses `variant: 'outline'` and
+  `size: 'sm'` with a leading SVG icon; only its wrapper aligns it to the right.
+  Plugin button, font, focus, and touch-size overrides do not reach this native
+  control. Typecheck/build and unit tests pass (721 pass, zero fail, one skip,
+  one existing TODO); 22 browser E2E tests pass, including native button style
+  comparison and Enter/Space pairing toggles. The reloaded real rc.1 host
+  renders the official button/outline/sm classes at H28/R8 with 12px text.
+  No real pairing grant was issued during visual inspection.
 
 ## Audit record — `dsh-v0.2.2-rc.1` (rebuild of alpha.3, no runtime change)
 

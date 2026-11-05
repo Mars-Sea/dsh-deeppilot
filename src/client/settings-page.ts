@@ -1,5 +1,5 @@
 import { createElement as h, useEffect, useId, useReducer, useRef, useState } from 'react'
-import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import { DeviceActions } from './device-actions.ts'
 import { settingsIcon } from './settings-icons.ts'
 import * as QRCode from 'qrcode/lib/browser.js'
@@ -1079,8 +1079,8 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
       h('div', { className: 'pbb-devicesHeader' },
         h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'devices.title')),
         h('span', { className: 'pbb-deviceCount' }, t(props.t, 'devices.count', { count: visibleDevices.length })),
-        h('button', {
-          type: 'button', className: 'pbb-action pbb-addButton',
+        h('div', { className: 'pbb-addAction' }, h(Button, {
+          variant: 'outline', size: 'sm', icon: settingsIcon('plus', 16),
           disabled: panel.busy || report === null || !report.pairingReady || !can('beginPairing'),
           'aria-expanded': pairingOpen, 'aria-controls': pairingId,
           onClick: () => {
@@ -1088,7 +1088,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
             setPairingOpen(true)
             if (pairingTarget !== null && report?.pairingReady) showPairingQR(pairingTarget)
           },
-        }, settingsIcon('plus', 14), t(props.t, pairingOpen ? 'pair.close' : 'pair.add'))),
+        }, t(props.t, pairingOpen ? 'pair.close' : 'pair.add')))),
       pairingSection,
       h('div', { className: 'pbb-card pbb-devicesCard' },
         deviceMessage ? h('p', {
