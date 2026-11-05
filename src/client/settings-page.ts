@@ -1,4 +1,6 @@
-import { createElement as h, useEffect, useReducer, useRef, useState } from 'react'
+import { createElement as h, useEffect, useId, useReducer, useRef, useState } from 'react'
+import { DeviceActions } from './device-actions.ts'
+import { settingsIcon } from './settings-icons.ts'
 import * as QRCode from 'qrcode/lib/browser.js'
 import type { DeepPilotReport, PairingGrantSnapshot, PushTestResult, RelayTestResult, ReportDiagnosticFailure } from '../report-wire.ts'
 import { encodePairingLink, selectPairingTargets, type PairingTarget } from '../pairing-qr.ts'
@@ -31,24 +33,11 @@ import {
 
 type T = (key: string, vars?: Readonly<Record<string, unknown>>) => string
 
-/** phase 语义标签 → i18n key。措辞归页面，view model 只认语义。 */
-const REMOTE_LABEL_KEY: Record<RemotePhaseLabel, string> = {
-  disabled: 'phase.disabled',
-  starting: 'phase.starting',
-  login_required: 'phase.login_required',
-  online: 'phase.online',
-  error: 'phase.error',
-  unavailable: 'phase.unavailable',
-  stopped: 'phase.stopped',
-}
-const LOCAL_LABEL_KEY: Record<LocalPhaseLabel, string> = {
-  disabled: 'local.phaseDisabled',
-  starting: 'local.phaseStarting',
-  online: 'local.phaseOnline',
-  error: 'local.phaseError',
-  stopped: 'local.phaseStopped',
-}
-/** 状态条用的短状态：列标签已经写明是哪条通道，值只说状态，免得在窄格里被截断。 */
+/** 中文结论由调用处提供，原始上游信息统一放入括号，保留排查依据。 */
+const errorDetails = (error: unknown): string =>
+  '（' + (error instanceof Error ? error.message : String(error)) + '）'
+
+/** 通道标题旁的短状态；完整端点和参数放入对应的连接选项。 */
 const CHANNEL_STATE_KEY: Record<RemotePhaseLabel | LocalPhaseLabel, string> = {
   disabled: 'channel.state.disabled',
   starting: 'channel.state.starting',
@@ -65,29 +54,6 @@ const SERVICE_STATUS_KEY = {
   attention: 'status.attention',
   ready: 'status.ready',
 } as const
-
-/** Inline trash icon for the compact destructive row action. Kept as a tiny
- *  element (no icon dependency) so the client bundle stays dependency-free
- *  apart from React. */
-const TrashIcon = (): any =>
-  h('svg', {
-    className: 'pbb-actionIcon',
-    viewBox: '0 0 16 16',
-    width: 13,
-    height: 13,
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 1.5,
-    strokeLinecap: 'round',
-    strokeLinejoin: 'round',
-    'aria-hidden': true,
-  },
-    h('path', { d: 'M2.5 4.5h11' }),
-    h('path', { d: 'M6.5 2.5h3' }),
-    h('path', { d: 'M4 4.5l.6 8.2a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9l.6-8.2' }),
-    h('path', { d: 'M6.6 7v4.2' }),
-    h('path', { d: 'M9.4 7v4.2' }),
-  )
 
 /** Chevron icon (linear, currentColor). CSS rotates it 90° while its owner is
  *  expanded, so collapsed always means "points right, more content behind". */
@@ -107,8 +73,7 @@ const ChevronIcon = (): any =>
     h('path', { d: 'M6 3.5 10.5 8 6 12.5' }),
   )
 
-/** Check/cross marks for the relay and push result lines. They used to be the
- *  dingbats '✓'/'✗', which the repo's visual rules reject as character icons. */
+/** 诊断结果使用线性 SVG，与页面其余图标保持一致。 */
 const CheckIcon = (): any =>
   h('svg', {
     viewBox: '0 0 16 16', width: 12, height: 12, fill: 'none', stroke: 'currentColor',
@@ -176,6 +141,13 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     initialNumericDraft(LOCAL_PORT_RANGE),
   )
   const [selectedPairingHost, setSelectedPairingHost] = useState<string | null>(null)
+  const [pairingOpen, setPairingOpen] = useState(false)
+  const pageId = useId()
+  const localOptionsId = pageId + '-local'
+  const remoteOptionsId = pageId + '-remote'
+  const troubleshootingId = pageId + '-troubleshooting'
+  const systemId = pageId + '-system'
+  const pairingId = pageId + '-pairing'
   const [pairingPanel, dispatchPairingPanel] = useReducer(pairingPanelReduce, initialPairingPanelState)
   const qrRequestId = useRef(0)
   const [troubleshootingOpen, setTroubleshootingOpen] = useState(false)
@@ -186,7 +158,6 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
   const [pushTestResult, setPushTestResult] = useState<PushTestResult | null>(null)
   const [pushTestError, setPushTestError] = useState('')
   const [deviceBusy, setDeviceBusy] = useState<string | null>(null)
-  const [deviceBusyAction, setDeviceBusyAction] = useState<'rename' | 'revoke' | null>(null)
   const [deviceMessage, setDeviceMessage] = useState('')
   const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null)
   const [deviceNameDraft, setDeviceNameDraft] = useState('')
@@ -220,7 +191,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
       setPushTestResult(result)
       setPushTestBusy(false)
     }, (error: unknown) => {
-      setPushTestError(error instanceof Error ? error.message : String(error))
+      setPushTestError(t(props.t, 'push.pushFailed') + errorDetails(error))
       setPushTestBusy(false)
     })
   }
@@ -238,7 +209,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
       setRelayTestResult(result)
       setRelayTestBusy(false)
     }, (error: unknown) => {
-      setRelayTestError(error instanceof Error ? error.message : String(error))
+      setRelayTestError(t(props.t, 'push.relayBad') + errorDetails(error))
       setRelayTestBusy(false)
     })
   }
@@ -283,7 +254,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     const reportState = props.useDeepPilotReport((s: PageState) => s)
     hooks.report = reportState.report
     if (reportState.status === 'error' && reportState.message) {
-      diag.push(reportState.message)
+      diag.push(t(props.t, 'diag.reportFailed') + errorDetails(reportState.message))
       failed = true
     }
     const enabledState = props.useDeepPilotEnabled((s) => s)
@@ -331,7 +302,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
   try {
     readHooks()
   } catch (error) {
-    diag.push(t(props.t, 'diag.renderError') + (error instanceof Error ? error.message : String(error)))
+    diag.push(t(props.t, 'diag.renderError') + errorDetails(error))
     failed = true
   }
   const report = hooks.report
@@ -369,7 +340,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     }, (error: unknown) => {
       dispatchLocalPortDraft({
         type: 'failed',
-        message: t(props.t, 'local.portFailed') + (error instanceof Error ? error.message : String(error)),
+        message: t(props.t, 'local.portFailed') + errorDetails(error),
       })
     })
   }
@@ -385,7 +356,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     }, (error: unknown) => {
       dispatchRemoteLimitDraft({
         type: 'failed',
-        message: t(props.t, 'remote.limitFailed') + (error instanceof Error ? error.message : String(error)),
+        message: t(props.t, 'remote.limitFailed') + errorDetails(error),
       })
     })
   }
@@ -434,7 +405,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
         dispatchPairingPanel({
           type: 'failed',
           requestId,
-          message: t(props.t, 'pair.qrFailed') + (error instanceof Error ? error.message : String(error)),
+          message: t(props.t, 'pair.qrFailed') + errorDetails(error),
         })
       })
   }
@@ -454,13 +425,12 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     }, (error: unknown) => {
       dispatchPairingPanel({
         type: 'notice',
-        message: t(props.t, 'pair.infoCopyFailed') + (error instanceof Error ? error.message : String(error)),
+        message: t(props.t, 'pair.infoCopyFailed') + errorDetails(error),
       })
     })
   }
 
-  // System-info rows stay visible in the collapsed system card; the TLS
-  // fingerprint moved into the LAN channel's options area.
+  // 运行信息只在系统信息展开后显示；TLS 指纹属于局域网连接选项。
   const advancedRows: any[] = []
   if (report !== null) {
     advancedRows.push(
@@ -490,16 +460,14 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     void _name
     if (!can('revokeDevice')) return
     setDeviceBusy(deviceId)
-    setDeviceBusyAction('revoke')
     setDeviceMessage('')
     void props.revokeDevice!(deviceId).then(() => {
       setDeviceMessage(t(props.t, 'devices.revoked'))
     }, (error: unknown) => {
-      setDeviceMessage(t(props.t, 'devices.revokeFailed') + (error instanceof Error ? error.message : String(error)))
+      setDeviceMessage(t(props.t, 'devices.revokeFailed') + errorDetails(error))
     }).finally(() => {
       setDeviceBusy(null)
-      setDeviceBusyAction(null)
-    })
+      })
   }
 
   const deviceLabel = (device: { deviceName: string; customName?: string }): string =>
@@ -526,23 +494,21 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
       return
     }
     setDeviceBusy(deviceId)
-    setDeviceBusyAction('rename')
     setDeviceMessage('')
     void props.setDeviceName!(deviceId, normalized === '' ? null : normalized).then(() => {
       setDeviceMessage(normalized === '' ? t(props.t, 'devices.nameCleared') : t(props.t, 'devices.renamed'))
       setEditingDeviceId(null)
       setDeviceNameDraft('')
     }, (error: unknown) => {
-      setDeviceMessage(t(props.t, 'devices.renameFailed') + (error instanceof Error ? error.message : String(error)))
+      setDeviceMessage(t(props.t, 'devices.renameFailed') + errorDetails(error))
     }).finally(() => {
       setDeviceBusy(null)
-      setDeviceBusyAction(null)
-    })
+      })
   }
 
   const visibleDevices = visibleDevicesOf(report)
-  // 设备是卡片内的分隔线列表行（不再卡中套卡）：左侧名称与一行元信息，右侧操作；
-  // 重命名表单和删除确认在本行下方整行展开。
+  // 列表只保留名称、版本和最近在线；指纹与自定义标记移入更多操作。
+  // 重命名表单和删除确认仍在设备行内展开，沿用原有保存与撤销语义。
   const deviceRows = visibleDevices.length > 0
     ? h('div', { className: 'pbb-deviceList' }, visibleDevices.map((d) => {
         const editing = editingDeviceId === d.deviceId
@@ -558,14 +524,12 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
           'aria-label': t(props.t, 'devices.col.name') + ': ' + label,
         },
           h('div', { className: 'pbb-deviceMain' },
-            h('div', { className: 'pbb-deviceNameRow' },
+            settingsIcon('phone'),
+            h('div', { className: 'pbb-deviceText' },
               h('span', { className: 'pbb-deviceName', title: label }, label),
-              d.customName ? h('span', { className: 'pbb-badge' }, t(props.t, 'devices.customBadge')) : null),
-            // 版本 · 指纹 · 最近在线 合成一行；分隔点由 CSS（.pbb-deviceMeta>*+*::before）补。
-            h('div', { className: 'pbb-deviceMeta' },
-              h('span', null, d.appVersion),
-              h('code', { title: fingerprint }, fingerprint.slice(0, 12)),
-              h('span', null, t(props.t, 'devices.col.lastSeen') + ': ' + formatLastSeen(d.lastSeenTs)))),
+              h('div', { className: 'pbb-deviceMeta' },
+                h('span', null, d.appVersion),
+                h('span', null, t(props.t, 'devices.col.lastSeen') + ' ' + formatLastSeen(d.lastSeenTs))))),
           editing
             ? h('form', {
               className: 'pbb-deviceRenameForm',
@@ -614,32 +578,19 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
                 ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'devices.nameInvalid'))
                 : null)
             : null,
-          armed ? null : h('div', { className: 'pbb-deviceActions', 'aria-label': t(props.t, 'devices.col.actions') },
-            !editing
-              ? h('button', {
-                type: 'button',
-                className: 'pbb-action',
-                disabled: busy || editingDeviceId !== null || !can('setDeviceName'),
-                'aria-label': t(props.t, 'devices.renameAria', { name: label }),
-                onClick: () => beginDeviceRename(d),
-              }, t(props.t, 'devices.rename'))
-              : null,
-            h('button', {
-              type: 'button',
-              className: 'pbb-action pbb-actionDangerGhost',
-              disabled: busy,
-              'aria-label': busy && deviceBusyAction === 'revoke'
-                ? t(props.t, 'devices.deleting', { name: label })
-                : t(props.t, 'devices.revokeAria', { name: label }),
-              onClick: () => {
-                cancelDeviceRename()
-                setArmedRevokeDeviceId(d.deviceId)
-              },
-            },
-              busy && deviceBusyAction === 'revoke' ? null : TrashIcon(),
-              busy && deviceBusyAction === 'revoke'
-                ? h('span', { className: 'pbb-actionBusy' }, t(props.t, 'devices.deleting'))
-                : t(props.t, 'devices.revoke'))),
+          armed || editing ? null : h('div', { className: 'pbb-deviceActions' },
+            busy
+              ? h('span', { className: 'pbb-actionBusy', role: 'status' }, t(props.t, 'devices.deleting'))
+              : h(DeviceActions, {
+                  name: label, fingerprint, customName: d.customName,
+                  canRename: editingDeviceId === null && can('setDeviceName'),
+                  canRevoke: can('revokeDevice'), t: props.t,
+                  onRename: () => beginDeviceRename(d),
+                  onRevoke: () => {
+                    cancelDeviceRename()
+                    setArmedRevokeDeviceId(d.deviceId)
+                  },
+                })),
           armed && !busy
             ? h('div', { className: 'pbb-deviceConfirm' },
                 h('p', { className: 'pbb-diag pbb-diagBad', role: 'alert' }, t(props.t, 'devices.revokeConfirm', { name: label })),
@@ -663,24 +614,16 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     : h('p', { className: 'pbb-empty' }, t(props.t, 'devices.empty'))
 
   const switchTitle = t(props.t, 'master.title')
-  const switchDesc = switchReady
-    ? (enabled
-        ? t(props.t, 'master.on')
-        : t(props.t, 'master.off'))
-    : t(props.t, 'master.loading')
   const localMeta = report === null ? null : LOCAL_PHASE_META[report.local.phase]
   const remoteMeta = report === null ? null : REMOTE_PHASE_META[report.remote.phase]
   // 服务状态与点位由 view model 推导：不再用类名 includes 反推布尔。
   const service = serviceStatus({
     enabled,
-    switchReady,
+    switchReady: switchReady && report !== null,
     localDot: localMeta?.dot,
     remoteDot: remoteMeta?.dot,
   })
   const serviceStatusText = t(props.t, SERVICE_STATUS_KEY[service.kind])
-  const serviceDot = service.dot
-  const localPhaseText = localMeta === null ? t(props.t, 'phase.unknown') : t(props.t, LOCAL_LABEL_KEY[localMeta.label])
-  const remotePhaseText = remoteMeta === null ? t(props.t, 'phase.unknown') : t(props.t, REMOTE_LABEL_KEY[remoteMeta.label])
   const localStateText = localMeta === null ? t(props.t, 'phase.unknown') : t(props.t, CHANNEL_STATE_KEY[localMeta.label])
   const remoteStateText = remoteMeta === null ? t(props.t, 'phase.unknown') : t(props.t, CHANNEL_STATE_KEY[remoteMeta.label])
 
@@ -690,8 +633,13 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
   const diagnosticLine = (failure: ReportDiagnosticFailure): string => {
     const base = t(props.t, 'diagnostics.item', {
       time: new Date(failure.ts).toLocaleString(),
-      kind: failure.kind,
-      reason: failure.reason,
+      kind: t(props.t, ({
+        'upgrade-rejected': 'diagnostics.kind.upgrade', 'pair-rejected': 'diagnostics.kind.pair',
+        'auth-failed': 'diagnostics.kind.auth', 'connection-opened': 'diagnostics.kind.opened',
+        'connection-closed': 'diagnostics.kind.closed', 'connection-error': 'diagnostics.kind.error',
+        identity: 'diagnostics.kind.identity', storage: 'diagnostics.kind.storage',
+      } as Record<string, string>)[failure.kind] ?? 'diagnostics.kind.unknown'),
+      reason: '（' + failure.kind + ' / ' + failure.reason + '）',
     })
     const extras: string[] = []
     if (failure.attemptId !== undefined) extras.push(t(props.t, 'diagnostics.attempt', { id: failure.attemptId }))
@@ -735,7 +683,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
       setDiagnosticsCopy({ message: t(props.t, 'diagnostics.copied'), failed: false })
     }, (error: unknown) => {
       setDiagnosticsCopy({
-        message: t(props.t, 'diagnostics.copyFailed') + (error instanceof Error ? error.message : String(error)),
+        message: t(props.t, 'diagnostics.copyFailed') + errorDetails(error),
         failed: true,
       })
     })
@@ -769,20 +717,9 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
 
   // ---------- 新版布局的局部构造器（仅表现层） ----------
 
-  /** 状态总览的一格：标签 / 点位 + 值 / 次行；整格 title 兜住被裁掉的全文。
-   *  dot 为 null 表示这一格是计数而非状态，不画点位（灰点会被读成「未启用」）。 */
-  const statusCell = (label: string, dot: string | null, value: string, sub: string): any =>
-    h('div', { className: 'pbb-statusCell', title: label + ' · ' + value + (sub === '' ? '' : ' · ' + sub) },
-      h('div', { className: 'pbb-statusLabel' }, label),
-      h('div', { className: 'pbb-statusValue' },
-        dot === null ? null : h('span', { className: 'pbb-dot' + dot }),
-        value),
-      h('div', { className: 'pbb-statusSub' }, sub))
-
-  /** 折叠区：grid-rows 0fr→1fr 平滑开合（mockup 的做法），不用 <details> 的瞬时跳变。 */
+  // 原生 hidden 同时移出布局、焦点顺序和无障碍树；保留挂载以保留参数草稿。
   const fold = (open: boolean, body: any): any =>
-    h('div', { className: 'pbb-fold' + (open ? '' : ' pbb-foldClosed') },
-      h('div', null, body))
+    h('div', { className: 'pbb-fold', hidden: !open }, body)
 
   /** 配对倒计时：仅在 QR 面板打开且 grant 在场时每秒刷新一次。 */
   useEffect(() => {
@@ -799,52 +736,6 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     + String(Math.floor(grantRemainingMs / 1_000) % 60).padStart(2, '0')
   const grantRemainingPct = Math.min(100, (grantRemainingMs / 300_000) * 100)
 
-  const localDesc = localSwitchReady
-    ? (localEnabled ? t(props.t, 'local.on', { port: localPort }) : t(props.t, 'local.off'))
-    : t(props.t, 'master.loading')
-  const remoteDesc = remoteSwitchReady
-    ? (remoteEnabled ? t(props.t, 'remote.on') : t(props.t, 'remote.off'))
-    : t(props.t, 'master.loading')
-  /** 端点 → 状态条副行只暴露 host[:port]，去掉协议前缀让一行能放下。 */
-  const endpointHost = (value: string | undefined): string | undefined => {
-    if (value === undefined || value === '') return undefined
-    try {
-      return new URL(value).host
-    } catch {
-      return value
-    }
-  }
-  // 状态条的副行只回答「现在具体是什么」：在线给端点、出错给错误信息、
-  // 关闭给关闭原因。此前复用开关文案，会出现「局域网连接失败」旁边写着
-  // 「已开启：手机可通过独立端口…」这种自相矛盾的一格。
-  const localStatusSub = !localSwitchReady
-    ? t(props.t, 'master.loading')
-    : report !== null && report.local.phase === 'online'
-      ? (endpointHost(report.local.endpoints[0]) ?? localDesc)
-      : report !== null && report.local.phase === 'error'
-        ? (report.local.message !== undefined && report.local.message !== '' ? report.local.message : localDesc)
-        : report !== null && (report.local.phase === 'disabled' || report.local.phase === 'stopped')
-          ? t(props.t, 'local.off')
-          : localDesc
-  const remoteStatusSub = !remoteSwitchReady
-    ? t(props.t, 'master.loading')
-    : report !== null && report.remote.phase === 'online'
-      ? (endpointHost(report.remote.publicURL) ?? remoteDesc)
-      : report !== null && report.remote.phase === 'error'
-        ? (report.remote.message !== undefined && report.remote.message !== '' ? report.remote.message : remoteDesc)
-        : report !== null && report.remote.phase === 'disabled'
-          ? t(props.t, 'remote.off')
-          : remoteDesc
-  // 通道行描述：稳态（开关开且在线 / 开关关且已停用）只说开关含义，实时状态
-  // 状态条已经给了；启动中、失败、待授权或开关与相位对不上时才前置相位文字，
-  // 让需要处理的情况在这一行里显眼，而不是每一行都把同一件事说两遍。
-  const isOffPhase = (phase: string): boolean => phase === 'disabled' || phase === 'stopped'
-  const localSettled = report === null
-    || (localEnabled ? report.local.phase === 'online' : isOffPhase(report.local.phase))
-  const remoteSettled = report === null
-    || (remoteEnabled ? report.remote.phase === 'online' : isOffPhase(report.remote.phase))
-  const localChannelDesc = localSettled ? localDesc : localPhaseText + ' · ' + localDesc
-  const remoteChannelDesc = remoteSettled ? remoteDesc : remotePhaseText + ' · ' + remoteDesc
   const recentFailures = report?.diagnostics?.recentFailures ?? []
   const troubleGood = relayTestResult !== null
     ? relayTestResult.overall === 'ok'
@@ -861,51 +752,21 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     : pushTestResult !== null
       ? (pushTestResult.overall === 'sent' ? t(props.t, 'push.pushSent') : t(props.t, 'push.pushFailed'))
       : recentFailures.length > 0
-        ? t(props.t, 'diagnostics.recent') + ' ' + String(recentFailures.length)
-        : t(props.t, 'troubleshooting.title')
+        ? t(props.t, 'diagnostics.historyCount', { count: recentFailures.length })
+        : ''
 
-  return h('div', { className: 'pbb-section' },
-    h('header', { className: 'pbb-pageHeader' },
-      h('div', null,
-        h('h2', { className: 'pbb-title' }, 'DeepPilot'),
-        h('p', { className: 'pbb-intro' }, t(props.t, 'meta.intro'))),
-      h('button', {
-        type: 'button',
-        className: 'pbb-refresh',
-        onClick: () => { if (can('refresh')) props.refresh!() },
-      }, t(props.t, 'meta.refresh'))),
-    // 状态总览：原来散在卡片徽标、通道 tile、统计格里的状态收成一条。
-    h('section', { className: 'pbb-statusStrip' },
-      statusCell(t(props.t, 'master.title'), serviceDot, serviceStatusText, switchDesc),
-      statusCell(t(props.t, 'local.title'), localMeta?.dot ?? '', localStateText, localStatusSub),
-      statusCell(t(props.t, 'remote.title'), remoteMeta?.dot ?? '', remoteStateText, remoteStatusSub),
-      statusCell(
-        t(props.t, 'panel.activeConnections'),
-        null,
-        report === null ? t(props.t, 'status.loading') : String(report.activeConnections),
-        t(props.t, 'panel.identity') + ' · '
-          + (report !== null && report.pairingReady
-              ? t(props.t, 'panel.identityReady')
-              : t(props.t, 'panel.identityNotReady')))),
-    // 配对 hero：主任务提到第一位；目标切换、grant、过期、失败逻辑全部沿用旧实现。
-    report === null ? null : h('div', { className: 'pbb-card' },
-      h('div', { className: 'pbb-cardHeader' },
-        h('div', null,
-          h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'pair.qrPanelTitle')),
-          h('p', { className: 'pbb-cardDescription' }, t(props.t, 'pair.description'))),
-        pairingTarget === null
-          ? h('span', { className: 'pbb-statusBadge' + (enabled ? ' pbb-bad' : '') },
-              enabled ? t(props.t, 'pair.noAddress') : t(props.t, 'status.off'))
-          : h('button', {
-            type: 'button',
-            className: 'pbb-action pbb-buttonPrimary',
-            disabled: panel.busy || (report !== null && !report.pairingReady),
-            onClick: () => {
-              if (pairingTarget === null) return
-              if (panel.open) hidePairingQR()
-              else showPairingQR(pairingTarget)
-            },
-          }, t(props.t, panel.action))),
+  // 默认状态与已确认画布一致；配对面板只在用户点击添加后生成一次性凭据。
+  const pairingSection = h('div', { id: pairingId, hidden: !pairingOpen },
+    !pairingOpen || report === null ? null : h('div', { className: 'pbb-pairingPanel' },
+      h('div', { className: 'pbb-pairingHeader' },
+        h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'pair.qrPanelTitle')),
+        !panel.open && pairingTarget !== null
+          ? h('button', {
+              type: 'button', className: 'pbb-action',
+              disabled: panel.busy || !report.pairingReady,
+              onClick: () => showPairingQR(pairingTarget),
+            }, t(props.t, 'pair.qrShow'))
+          : null),
       h('div', { className: 'pbb-pairingBody' },
         pairingTarget === null
           ? h('p', { className: 'pbb-diag' }, enabled ? t(props.t, 'pair.noAddressHelp') : t(props.t, 'pair.disabledHelp'))
@@ -974,18 +835,29 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
           ),
         ) : null,
       ),
-    ),
-    // 连接：主开关 + 两条全宽通道行；端口/上限/帮助各归其通道的展开区。
-    h('div', { className: 'pbb-card' },
-      h('div', { className: 'pbb-cardHeader' },
-        h('div', null,
-          h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'connection.title')),
-          h('p', { className: 'pbb-cardDescription' }, t(props.t, 'connection.description')))),
+    ))
+
+  return h('div', { className: 'pbb-section' },
+    h('header', { className: 'pbb-pageHeader' },
+      h('div', null,
+        h('h2', { className: 'pbb-title' }, 'DeepPilot'),
+        h('p', { className: 'pbb-intro' }, t(props.t, 'meta.intro'))),
+      h('button', {
+        type: 'button', className: 'pbb-refresh', disabled: !can('refresh'),
+        onClick: () => props.refresh?.(),
+      }, settingsIcon('refresh', 14), t(props.t, 'meta.refresh'))),
+    h('section', { className: 'pbb-card pbb-connections', 'aria-label': t(props.t, 'connection.title') },
       h('div', { className: 'pbb-cardBody' },
         h('div', { className: 'pbb-masterRow' },
           h('div', { className: 'pbb-switchText' },
             h('span', { className: 'pbb-switchTitle' }, switchTitle),
-            h('span', { className: 'pbb-switchDesc' }, switchDesc)),
+            h('div', { className: 'pbb-serviceSummary' },
+              h('span', { className: 'pbb-serviceState' + (service.kind === 'ready' ? ' pbb-ok' : service.kind === 'attention' ? ' pbb-bad' : '') },
+                settingsIcon(service.kind === 'ready' ? 'ready' : service.kind === 'attention' ? 'attention' : 'info', 13)),
+              h('span', null, serviceStatusText),
+              h('span', { className: 'pbb-metaDivider', 'aria-hidden': true }),
+              h('span', null, t(props.t, 'panel.activeConnections') + ' '
+                + (report === null ? '—' : String(report.activeConnections))))),
           h('button', {
             type: 'button',
             role: 'switch',
@@ -999,13 +871,12 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
           }),
         ),
         h('div', { className: 'pbb-channel' },
-          h('div', { className: 'pbb-row' },
+          h('div', { className: 'pbb-row pbb-channelRow' },
+            settingsIcon('wifi'),
             h('div', { className: 'pbb-switchText' },
               h('span', { className: 'pbb-switchTitle' },
-                h('span', { className: 'pbb-dot' + (localMeta?.dot ?? '') }),
-                ' ',
                 t(props.t, 'local.title')),
-              h('span', { className: 'pbb-switchDesc' }, localChannelDesc)),
+              h('div', { className: 'pbb-channelState' }, h('span', { className: localMeta?.label === 'online' ? 'pbb-ok' : localMeta?.label === 'error' ? 'pbb-bad' : undefined }, localStateText))),
             h('button', {
               type: 'button',
               role: 'switch',
@@ -1017,20 +888,22 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
                 if (can('setLocalEnabled')) props.setDeepPilotLocalEnabled!(!localEnabled)
               },
             }),
+            h('button', {
+              type: 'button', className: 'pbb-iconButton pbb-expand',
+              'aria-label': t(props.t, 'local.options'),
+              'aria-expanded': localOptionsOpen, 'aria-controls': localOptionsId,
+              onClick: () => setLocalOptionsOpen(!localOptionsOpen),
+            }, h('span', { className: 'pbb-chev' }, ChevronIcon())),
           ),
           report !== null && report.local.message && report.local.phase === 'error'
-            ? h('p', { className: 'pbb-diag pbb-diagBad' }, report.local.message)
+            ? h('p', { className: 'pbb-diag pbb-diagBad', role: 'alert' }, t(props.t, 'local.errorDetails', { message: report.local.message }))
             : null,
           report !== null && report.local.tlsIdentityRegenerated === true
             ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'local.tlsRegenerated'))
             : null,
-          h('button', {
-            type: 'button',
-            className: 'pbb-expand',
-            'aria-expanded': localOptionsOpen,
-            onClick: () => setLocalOptionsOpen(!localOptionsOpen),
-          }, t(props.t, 'connection.optionsSummary'), ' ', h('span', { className: 'pbb-chev' }, ChevronIcon())),
-          fold(localOptionsOpen, h('div', { className: 'pbb-channelBody' },
+          fold(localOptionsOpen, h('div', { className: 'pbb-channelBody', id: localOptionsId },
+            report !== null && report.local.phase === 'online'
+              ? h('p', { className: 'pbb-diag pbb-endpoint' }, report.local.endpoints.join(' · ')) : null,
             h('div', { className: 'pbb-limitRow' },
               h('div', { className: 'pbb-switchText' },
                 h('label', { className: 'pbb-switchTitle', htmlFor: 'deeppilot-local-port' }, t(props.t, 'local.portTitle')),
@@ -1080,13 +953,12 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
           )),
         ),
         h('div', { className: 'pbb-channel' },
-          h('div', { className: 'pbb-row' },
+          h('div', { className: 'pbb-row pbb-channelRow' },
+            settingsIcon('globe'),
             h('div', { className: 'pbb-switchText' },
               h('span', { className: 'pbb-switchTitle' },
-                h('span', { className: 'pbb-dot' + (remoteMeta?.dot ?? '') }),
-                ' ',
                 t(props.t, 'remote.title')),
-              h('span', { className: 'pbb-switchDesc' }, remoteChannelDesc)),
+              h('div', { className: 'pbb-channelState' }, h('span', { className: remoteMeta?.label === 'online' ? 'pbb-ok' : (remoteMeta?.label === 'error' || remoteMeta?.label === 'unavailable') ? 'pbb-bad' : undefined }, remoteStateText), h('span', { className: 'pbb-metaDivider', 'aria-hidden': true }), h('span', null, 'Tailscale Funnel'))),
             h('button', {
               type: 'button',
               role: 'switch',
@@ -1098,6 +970,12 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
                 if (can('setRemoteEnabled')) props.setDeepPilotRemoteEnabled!(!remoteEnabled)
               },
             }),
+            h('button', {
+              type: 'button', className: 'pbb-iconButton pbb-expand',
+              'aria-label': t(props.t, 'remote.options'),
+              'aria-expanded': remoteOptionsOpen, 'aria-controls': remoteOptionsId,
+              onClick: () => setRemoteOptionsOpen(!remoteOptionsOpen),
+            }, h('span', { className: 'pbb-chev' }, ChevronIcon())),
           ),
           report !== null && report.remote.phase === 'login_required'
             && typeof report.remote.authURL === 'string' && report.remote.authURL.startsWith('https://')
@@ -1105,15 +983,11 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
                 h('a', { className: 'pbb-action pbb-buttonPrimary', href: report.remote.authURL, target: '_blank', rel: 'noreferrer' }, t(props.t, 'remote.openAuth')))
             : null,
           report !== null && report.remote.message && (report.remote.phase === 'error' || report.remote.phase === 'unavailable')
-            ? h('p', { className: 'pbb-diag pbb-diagBad' }, report.remote.message)
+            ? h('p', { className: 'pbb-diag pbb-diagBad', role: 'alert' }, t(props.t, 'remote.errorDetails', { message: report.remote.message }))
             : null,
-          h('button', {
-            type: 'button',
-            className: 'pbb-expand',
-            'aria-expanded': remoteOptionsOpen,
-            onClick: () => setRemoteOptionsOpen(!remoteOptionsOpen),
-          }, t(props.t, 'connection.optionsSummary'), ' ', h('span', { className: 'pbb-chev' }, ChevronIcon())),
-          fold(remoteOptionsOpen, h('div', { className: 'pbb-channelBody' },
+          fold(remoteOptionsOpen, h('div', { className: 'pbb-channelBody', id: remoteOptionsId },
+            report !== null && report.remote.phase === 'online'
+              ? h('p', { className: 'pbb-diag pbb-endpoint' }, report.remote.publicURL) : null,
             h('div', { className: 'pbb-limitRow' },
               h('div', { className: 'pbb-switchText' },
                 h('label', { className: 'pbb-switchTitle', htmlFor: 'deeppilot-funnel-source-limit' }, t(props.t, 'remote.limitTitle')),
@@ -1154,9 +1028,10 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
                 }, t(props.t, 'remote.limitApply')),
               ),
             ),
-            h('div', { className: 'pbb-helpBody' },
+            h('details', { className: 'pbb-helpDisclosure' },
+              h('summary', null, h('span', { className: 'pbb-chev' }, ChevronIcon()), t(props.t, 'help.remoteTitle')),
+              h('div', { className: 'pbb-helpBody' },
               h('div', { className: 'pbb-helpSection' },
-                h('div', { className: 'pbb-helpHeading' }, t(props.t, 'help.remoteTitle')),
                 h('div', { className: 'pbb-helpHeading' }, t(props.t, 'help.recommended')),
                 h('ol', { className: 'pbb-helpList' },
                   h('li', null, t(props.t, 'help.step1')),
@@ -1203,37 +1078,45 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
                   t(props.t, 'help.docsPrefix'),
                   h('a', { className: 'pbb-helpLink', href: 'https://tailscale.com/docs/features/tailscale-funnel', target: '_blank', rel: 'noreferrer' }, t(props.t, 'help.funnelDocs'))),
               ),
-            ),
+            )),
           )),
         ),
       ),
     ),
-    // 设备：分隔线列表行；重命名与删除的语义沿用旧实现，删除确认是页内二次确认。
-    h('div', { className: 'pbb-card' },
-      h('div', { className: 'pbb-cardHeader' },
-        h('div', null,
-          h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'devices.title')),
-          h('p', { className: 'pbb-cardDescription' }, t(props.t, 'devices.description'))),
-        h('span', { className: 'pbb-countBadge' }, String(visibleDevices.length))),
-      h('div', { className: 'pbb-cardBody' },
+    h('section', { className: 'pbb-devicesSection', 'aria-label': t(props.t, 'devices.title') },
+      h('div', { className: 'pbb-devicesHeader' },
+        h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'devices.title')),
+        h('span', { className: 'pbb-deviceCount' }, t(props.t, 'devices.count', { count: visibleDevices.length })),
+        h('button', {
+          type: 'button', className: 'pbb-action pbb-addButton',
+          disabled: panel.busy || report === null || !report.pairingReady || !can('beginPairing'),
+          'aria-expanded': pairingOpen, 'aria-controls': pairingId,
+          onClick: () => {
+            if (pairingOpen) { hidePairingQR(); setPairingOpen(false); return }
+            setPairingOpen(true)
+            if (pairingTarget !== null && report?.pairingReady) showPairingQR(pairingTarget)
+          },
+        }, settingsIcon('plus', 14), t(props.t, pairingOpen ? 'pair.close' : 'pair.add'))),
+      pairingSection,
+      h('div', { className: 'pbb-card pbb-devicesCard' },
         deviceMessage ? h('p', {
-          className: 'pbb-diag' + (deviceMessage.startsWith(t(props.t, 'devices.renameFailed')) || deviceMessage.startsWith(t(props.t, 'devices.revokeFailed')) ? ' pbb-diagBad' : ''),
+          className: 'pbb-diag pbb-deviceMessage' + (deviceMessage.startsWith(t(props.t, 'devices.renameFailed')) || deviceMessage.startsWith(t(props.t, 'devices.revokeFailed')) ? ' pbb-diagBad' : ''),
           role: 'status',
         }, deviceMessage) : null,
         deviceRows)),
-    // 测试与故障排查：默认折叠，标题栏徽标直接给结论（中继/推送结果，或最近失败条数）。
-    h('div', { className: 'pbb-card' },
+    h('section', { className: 'pbb-card pbb-tools', 'aria-label': t(props.t, 'tools.title') },
+      h('div', { className: 'pbb-toolSection' },
       h('button', {
         type: 'button',
         className: 'pbb-cardHead',
-        'aria-expanded': troubleshootingOpen,
+        'aria-expanded': troubleshootingOpen, 'aria-controls': troubleshootingId,
         onClick: () => setTroubleshootingOpen(!troubleshootingOpen),
       },
-        h('span', { className: 'pbb-chev' }, ChevronIcon()),
+        settingsIcon('activity', 17),
         h('span', { className: 'pbb-cardTitle' }, t(props.t, 'troubleshooting.summary')),
-        h('span', { className: 'pbb-cardSummary' }, t(props.t, 'troubleshooting.description')),
-        h('span', { className: 'pbb-badge' + (troubleGood ? ' pbb-badgeOk' : troubleBad ? ' pbb-badgeWarn' : '') }, troubleConclusion)),
-      fold(troubleshootingOpen, h('div', { className: 'pbb-cardBody' },
+        h('span', { className: 'pbb-toolMeta' + (troubleGood ? ' pbb-ok' : troubleBad && relayTestResult !== null ? ' pbb-bad' : '') }, troubleConclusion),
+        h('span', { className: 'pbb-chev' }, ChevronIcon())),
+      fold(troubleshootingOpen, h('div', { className: 'pbb-cardBody', id: troubleshootingId },
         h('div', { className: 'pbb-testGrid' },
           h('div', { className: 'pbb-testItem' },
             h('div', { className: 'pbb-switchText' },
@@ -1282,7 +1165,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
               relayTestResult.steps.map((step: any, index: number) =>
                 resultRow(step.ok, (step.id === 'health' ? t(props.t, 'push.relayStep.health') : t(props.t, 'push.relayStep.enroll'))
                   + (step.latencyMs !== undefined ? ` (${String(step.latencyMs)}ms)` : '')
-                  + ' — ' + step.message, String(index))),
+                  + '（' + step.message + '）', String(index))),
             ),
         pushTestError ? h('p', { className: 'pbb-diag pbb-diagBad', role: 'alert' }, pushTestError) : null,
         pushTestResult === null
@@ -1293,29 +1176,29 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
                   pushTestResult.overall === 'sent' ? t(props.t, 'push.pushSent')
                     : pushTestResult.overall === 'failed' ? t(props.t, 'push.pushFailed')
                       : pushTestResult.overall === 'no-targets' ? t(props.t, 'push.pushNoTargets') : t(props.t, 'push.pushNotEnabled'))),
-              pushTestResult.message ? h('p', { className: 'pbb-diag' }, pushTestResult.message) : null,
+              pushTestResult.message ? h('p', { className: 'pbb-diag' }, t(props.t, 'push.resultDetail', { message: pushTestResult.message })) : null,
               pushTestResult.results.map((r: any, index: number) =>
-                resultRow(r.outcome === 'sent', r.name + ' [' + r.environment + '] — '
-                  + r.outcome + (r.reason ? '（' + r.reason + '）' : '')
+                resultRow(r.outcome === 'sent', r.name + '（'
+                  + t(props.t, r.environment === 'production' ? 'push.environment.production' : r.environment === 'development' ? 'push.environment.development' : 'push.environment.other', { environment: r.environment }) + '） · '
+                  + t(props.t, r.outcome === 'sent' ? 'push.outcome.sent' : r.outcome === 'invalid-token' ? 'push.outcome.invalid' : r.outcome === 'failed' ? 'push.outcome.failed' : 'push.outcome.other', { outcome: r.outcome }) + (r.reason ? '（' + r.reason + '）' : '')
                   + (r.tokenFingerprint ? ' token:' + r.tokenFingerprint + '…' : ''), String(index))),
             ),
         diagnosticsSection,
       )),
     ),
-    // 系统信息：默认折叠，标题栏露出版本与有新版本徽标。
-    report === null ? null : h('div', { className: 'pbb-card' },
+      report === null ? null : h('div', { className: 'pbb-toolSection' },
       h('button', {
         type: 'button',
         className: 'pbb-cardHead',
-        'aria-expanded': systemOpen,
+        'aria-expanded': systemOpen, 'aria-controls': systemId,
         onClick: () => setSystemOpen(!systemOpen),
       },
-        h('span', { className: 'pbb-chev' }, ChevronIcon()),
+        settingsIcon('info', 17),
         h('span', { className: 'pbb-cardTitle' }, t(props.t, 'system.summary')),
-        h('span', { className: 'pbb-cardSummary' }, t(props.t, 'system.description')),
-        h('span', { className: 'pbb-badge' + (report.updateAvailable === true ? ' pbb-badgeOk' : '') },
-          'v' + report.pluginVersion + (report.updateAvailable === true ? ' · ' + t(props.t, 'update.badge') : ''))),
-      fold(systemOpen, h('div', { className: 'pbb-cardBody' },
+        h('span', { className: 'pbb-toolMeta' + (report.updateAvailable === true ? ' pbb-ok' : '') },
+          'v' + report.pluginVersion + (report.updateAvailable === true ? ' · ' + t(props.t, 'update.badge') : '')),
+        h('span', { className: 'pbb-chev' }, ChevronIcon())),
+      fold(systemOpen, h('div', { className: 'pbb-cardBody', id: systemId },
         h('div', { className: 'pbb-sectionIntro' },
           h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'system.title'))),
         h('div', { className: 'pbb-runtimeList' },
@@ -1328,6 +1211,9 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
             h('span', { className: 'pbb-label' }, t(props.t, 'advanced.tailscaleVersion')),
             h('span', { className: 'pbb-value' },
               report.remote.tailscaleVersion ?? t(props.t, 'advanced.tailscaleVersionUnknown'))),
+          h('div', { className: 'pbb-runtimeRow' },
+            h('span', { className: 'pbb-label' }, t(props.t, 'panel.identity')),
+            h('span', { className: 'pbb-value' }, t(props.t, report.pairingReady ? 'panel.identityReady' : 'panel.identityNotReady'))),
           advancedRows,
           report.updateAvailable === true
             ? h('a', {
@@ -1341,7 +1227,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
                 h('span', null, t(props.t, 'update.badge')),
                 h('span', { className: 'pbb-chev' }, ChevronIcon()))
             : null))),
-    ),
+    )),
     diag.length > 0 ? h('details', {
       className: 'pbb-card pbb-disclosure pbb-diagnostics',
       open: failed,

@@ -65,14 +65,45 @@ interface LocaleTables {
  */
 const TABLES: LocaleTables = {
   zh: {
+
+    // 紧凑设置页：默认仅展示连接、设备与两个工具折叠行。
+    'local.options': '局域网连接选项',
+    'remote.options': '远程连接选项',
+    'local.errorDetails': '局域网连接异常，请检查连接选项（{message}）。',
+    'remote.errorDetails': '远程连接异常，请检查授权与连接选项（{message}）。',
+    'pair.add': '添加手机',
+    'pair.close': '收起',
+    'devices.count': '{count} 台',
+    'devices.moreAria': '设备“{name}”的更多操作',
+    'tools.title': '工具与信息',
+    'diag.reportFailed': '读取连接状态失败',
+    'diagnostics.historyCount': '{count} 条历史失败记录',
+    'diagnostics.kind.upgrade': '连接请求被拒绝',
+    'diagnostics.kind.pair': '配对请求被拒绝',
+    'diagnostics.kind.auth': '设备认证失败',
+    'diagnostics.kind.opened': '连接已建立',
+    'diagnostics.kind.closed': '连接异常断开',
+    'diagnostics.kind.error': '连接发生错误',
+    'diagnostics.kind.identity': '设备身份异常',
+    'diagnostics.kind.storage': '设备信息保存失败',
+    'diagnostics.kind.unknown': '连接异常',
+    'push.outcome.sent': '已发送',
+    'push.outcome.failed': '发送失败',
+    'push.outcome.invalid': '设备推送凭据无效',
+    'push.environment.development': '开发环境',
+    'push.environment.production': '正式环境',
+    'push.environment.other': '其他环境（{environment}）',
+    'push.outcome.other': '推送状态（{outcome}）',
+    'push.resultDetail': '推送结果（{message}）',
+
     // ---- meta / nav ----
     'nav': 'DeepPilot',
     'meta.title': 'DeepPilot',
-    'meta.intro': '把 iPhone 与这台电脑上的 DeepSeek Harness（DSH）连接起来（协议 v2）。',
+    'meta.intro': '在手机上使用这台电脑的 DSH。',
     'meta.refresh': '刷新',
 
     // ---- master switch ----
-    'master.title': 'DeepPilot 连接',
+    'master.title': '允许手机连接',
     'master.loading': '正在读取配置…',
     'master.on': '已开启：接受手机连接。',
     'master.off': '已关闭：不接受手机连接。',
@@ -87,11 +118,11 @@ const TABLES: LocaleTables = {
     'connection.optionsSummary': '连接选项',
     'pair.description': '选择连接方式并生成一次性配对信息。',
     'devices.description': '管理已经配对的 iPhone。',
-    'troubleshooting.summary': '测试与故障排查',
+    'troubleshooting.summary': '诊断工具',
     'troubleshooting.title': '诊断工具',
     'troubleshooting.description': '仅在排查连接或推送问题时使用。',
     'troubleshooting.debugTitle': '调试日志',
-    'troubleshooting.debugDescription': '打开后在 DSH host 的终端输出里打印握手、推送等诊断信息；不会打印配对令牌、APNs token 或消息内容。改动立即生效，无需重启。',
+    'troubleshooting.debugDescription': '开启后，新的手机连接会在 DSH 终端输出诊断日志；已连接手机需重连后生效。日志不包含配对码、推送凭据或消息内容。',
     // ---- 连接诊断（P0：最近失败可观测） ----
     'diagnostics.title': '连接诊断',
     'diagnostics.description': '最近的连接失败事件；可一键复制后发给维护者排查。',
@@ -140,7 +171,7 @@ const TABLES: LocaleTables = {
     'local.portFailed': '局域网端口保存失败：',
 
     // ---- remote switch (Tailscale Funnel) ----
-    'remote.title': '远程连接（Tailscale Funnel）',
+    'remote.title': '远程连接',
     'remote.on': '已配置：内嵌 Funnel 会自动启动并同步状态。',
     'remote.off': '关闭：仅保留局域网连接。',
     'remote.openAuth': '打开授权页面',
@@ -162,7 +193,7 @@ const TABLES: LocaleTables = {
     'phase.stopped': '已停止',
     'phase.unknown': '状态未知',
 
-    // ---- status strip: short channel states (the column label names the channel) ----
+    // ---- short channel states shown beside each switch ----
     'channel.state.disabled': '未启用',
     'channel.state.starting': '正在启动',
     'channel.state.login_required': '待授权',
@@ -196,12 +227,12 @@ const TABLES: LocaleTables = {
     'panel.tokenRotateFailed': '更换失败：',
 
     // ---- pairing QR ----
-    'pair.qrPanelTitle': '扫码添加当前手机',
+    'pair.qrPanelTitle': '添加手机',
     'pair.kind.public': '公网',
     'pair.kind.lan': '内网',
     'pair.noAddress': '没有可用地址',
     'pair.noAddressHelp': '没有可用的局域网或远程入口。请确认局域网连接已启动，或启用远程连接。',
-    'pair.disabledHelp': 'DeepPilot 连接已关闭。先在上方开启连接，再添加手机。',
+    'pair.disabledHelp': '请先开启“允许手机连接”，再添加手机。',
     'pair.qrAlt': 'DeepPilot 配对二维码',
     'pair.qrShow': '显示二维码',
     'pair.qrHide': '隐藏二维码',
@@ -213,7 +244,7 @@ const TABLES: LocaleTables = {
     'pair.infoCopyDone': '配对信息已复制',
     'pair.infoCopyFailed': '配对信息复制失败：',
     // `{kind}`: public | lan
-    'pair.qrHint': '二维码与下面的「配对信息」内容相同：包含{kind}地址、一次性配对码、证书指纹（内网时）与主机标识。在局域网与公网之间切换会立即生成对应的新配对信息，配对码 5 分钟后失效。',
+    'pair.qrHint': '二维码与「配对信息」内容相同：包含{kind}地址、一次性配对码、证书指纹（内网时）与主机标识。在局域网与公网之间切换会立即生成对应的新配对信息，配对码 5 分钟后失效。',
 
     // ---- advanced info ----
     'advanced.summary': '高级信息',
@@ -244,11 +275,11 @@ const TABLES: LocaleTables = {
     'push.pushNotEnabled': '推送未启用',
     'push.relayStep.health': '服务可达',
     'push.relayStep.enroll': '自动注册',
-    'push.prefix.ok': '✓ ',
-    'push.prefix.fail': '✗ ',
+    'push.prefix.ok': '通过：',
+    'push.prefix.fail': '未通过：',
 
     // ---- devices table ----
-    'devices.title': '设备',
+    'devices.title': '已配对设备',
     'devices.col.name': '设备',
     'devices.col.appVersion': 'App 版本',
     'devices.col.push': '离线推送',
@@ -279,15 +310,15 @@ const TABLES: LocaleTables = {
     'devices.pushNotRegistered': '未注册',
     'devices.pushEnvProduction': '生产',
     'devices.pushEnvDevelopment': '开发',
-    'devices.empty': '还没有 v2 设备。请在 iPhone 上扫描一次性配对二维码。',
+    'devices.empty': '还没有配对设备。点击“添加手机”，然后在 DeepPilot 中扫码连接。',
 
     // ---- remote help ----
     'help.remoteTitle': '远程连接帮助',
     'help.recommended': '推荐设置流程',
-    'help.step1': '先打开"DeepPilot 连接"，再打开"远程连接（Tailscale Funnel）"。',
+    'help.step1': '先打开“允许手机连接”，再打开“远程连接”。',
     'help.step2': '状态变为"等待 Tailscale 授权"后，点击"打开授权页面"。',
     'help.step3': '使用有权管理此 Tailnet 的账号登录，并按授权页提示启用 Funnel。通常需要 Owner、Admin 或 Network admin 权限。',
-    'help.step4': '返回此页面并点击"刷新"。远程连接标题旁出现绿点后，即可扫描下方二维码添加手机。',
+    'help.step4': '返回此页面并点击“刷新”。远程连接显示“已就绪”后，点击“添加手机”并扫码。',
     'help.funnelHint': '插件已内嵌 Tailscale 网络组件，这台电脑和手机都不需要另外安装 Tailscale App；但首次启用仍需由 Tailnet 管理员授权。',
     'help.httpsTitle': '授权页未自动完成时：开启 HTTPS',
     'help.httpsStep1': '打开 Tailscale 管理后台的 Network → DNS。',
@@ -355,14 +386,45 @@ const TABLES: LocaleTables = {
   },
 
   en: {
+
+    // Compact settings surface.
+    'local.options': 'LAN connection options',
+    'remote.options': 'Remote connection options',
+    'local.errorDetails': 'LAN connection failed. Check the connection options ({message}).',
+    'remote.errorDetails': 'Remote connection failed. Check authorization and connection options ({message}).',
+    'pair.add': 'Add phone',
+    'pair.close': 'Collapse',
+    'devices.count': '{count} devices',
+    'devices.moreAria': 'More actions for “{name}”',
+    'tools.title': 'Tools and information',
+    'diag.reportFailed': 'Failed to read connection status',
+    'diagnostics.historyCount': '{count} past failures',
+    'diagnostics.kind.upgrade': 'Connection request rejected',
+    'diagnostics.kind.pair': 'Pairing request rejected',
+    'diagnostics.kind.auth': 'Device authentication failed',
+    'diagnostics.kind.opened': 'Connection opened',
+    'diagnostics.kind.closed': 'Connection closed unexpectedly',
+    'diagnostics.kind.error': 'Connection error',
+    'diagnostics.kind.identity': 'Device identity error',
+    'diagnostics.kind.storage': 'Saving device information failed',
+    'diagnostics.kind.unknown': 'Connection problem',
+    'push.outcome.sent': 'Sent',
+    'push.outcome.failed': 'Failed to send',
+    'push.outcome.invalid': 'Invalid push credentials',
+    'push.environment.development': 'Development',
+    'push.environment.production': 'Production',
+    'push.environment.other': 'Other environment ({environment})',
+    'push.outcome.other': 'Push status ({outcome})',
+    'push.resultDetail': 'Push result ({message})',
+
     // ---- meta / nav ----
     'nav': 'DeepPilot',
     'meta.title': 'DeepPilot',
-    'meta.intro': 'Connect your iPhone to DeepSeek Harness (DSH) on this computer (protocol v2).',
+    'meta.intro': 'Use this computer’s DSH from your phone.',
     'meta.refresh': 'Refresh',
 
     // ---- master switch ----
-    'master.title': 'DeepPilot connection',
+    'master.title': 'Allow phone connections',
     'master.loading': 'Loading settings…',
     'master.on': 'On: accepting phone connections.',
     'master.off': 'Off: not accepting phone connections.',
@@ -377,11 +439,11 @@ const TABLES: LocaleTables = {
     'connection.optionsSummary': 'Connection options',
     'pair.description': 'Choose a connection type and generate one-time pairing information.',
     'devices.description': 'Manage iPhones that are already paired.',
-    'troubleshooting.summary': 'Tests and troubleshooting',
+    'troubleshooting.summary': 'Diagnostic tools',
     'troubleshooting.title': 'Diagnostic tools',
     'troubleshooting.description': 'Use these only when diagnosing connection or push issues.',
     'troubleshooting.debugTitle': 'Debug logging',
-    'troubleshooting.debugDescription': 'When on, prints handshake and push diagnostics to the DSH host’s terminal output; never prints pairing tokens, APNs tokens, or message content. Takes effect immediately, no restart needed.',
+    'troubleshooting.debugDescription': 'New phone connections write diagnostic logs to the DSH terminal. Connected phones must reconnect to pick up the change. Logs exclude pairing codes, push credentials, and message content.',
     // ---- connection diagnostics (P0: observable failures) ----
     'diagnostics.title': 'Connection diagnostics',
     'diagnostics.description': 'Recent connection failures; copy them for troubleshooting.',
@@ -430,7 +492,7 @@ const TABLES: LocaleTables = {
     'local.portFailed': 'Failed to save LAN port: ',
 
     // ---- remote switch (Tailscale Funnel) ----
-    'remote.title': 'Remote connection (Tailscale Funnel)',
+    'remote.title': 'Remote connection',
     'remote.on': 'Configured: the embedded Funnel will start and sync state automatically.',
     'remote.off': 'Off: LAN connections only.',
     'remote.openAuth': 'Open authorization page',
@@ -452,7 +514,7 @@ const TABLES: LocaleTables = {
     'phase.stopped': 'Stopped',
     'phase.unknown': 'Status unknown',
 
-    // ---- status strip: short channel states (the column label names the channel) ----
+    // ---- short channel states shown beside each switch ----
     'channel.state.disabled': 'Off',
     'channel.state.starting': 'Starting',
     'channel.state.login_required': 'Needs sign-in',
@@ -486,12 +548,12 @@ const TABLES: LocaleTables = {
     'panel.tokenRotateFailed': 'Rotation failed: ',
 
     // ---- pairing QR ----
-    'pair.qrPanelTitle': 'Scan to pair this phone',
+    'pair.qrPanelTitle': 'Add phone',
     'pair.kind.public': 'Public',
     'pair.kind.lan': 'LAN',
     'pair.noAddress': 'No address available',
     'pair.noAddressHelp': 'No LAN or remote endpoint is available. Make sure LAN is running or enable remote access.',
-    'pair.disabledHelp': 'DeepPilot is turned off. Turn the connection on above before adding a phone.',
+    'pair.disabledHelp': 'Turn on “Allow phone connections” before adding a phone.',
     'pair.qrAlt': 'DeepPilot pairing QR code',
     'pair.qrShow': 'Show QR code',
     'pair.qrHide': 'Hide QR code',
@@ -502,7 +564,7 @@ const TABLES: LocaleTables = {
     'pair.infoLabel': 'Pairing info (copy once, paste it in the app)',
     'pair.infoCopyDone': 'Pairing info copied',
     'pair.infoCopyFailed': 'Failed to copy pairing info: ',
-    'pair.qrHint': 'The QR code and the pairing info below carry the same {kind} address, single-use code, certificate fingerprint (for LAN) and host identity. Switching between LAN and public issues a matching new string immediately; the code expires after 5 minutes.',
+    'pair.qrHint': 'The QR code and the pairing info carry the same {kind} address, single-use code, certificate fingerprint (for LAN) and host identity. Switching between LAN and public issues a matching new string immediately; the code expires after 5 minutes.',
 
     // ---- advanced info ----
     'advanced.summary': 'Advanced info',
@@ -532,11 +594,11 @@ const TABLES: LocaleTables = {
     'push.pushNotEnabled': 'Push not enabled',
     'push.relayStep.health': 'Service reachable',
     'push.relayStep.enroll': 'Auto enrollment',
-    'push.prefix.ok': '✓ ',
-    'push.prefix.fail': '✗ ',
+    'push.prefix.ok': 'Passed: ',
+    'push.prefix.fail': 'Failed: ',
 
     // ---- devices table ----
-    'devices.title': 'Devices',
+    'devices.title': 'Paired devices',
     'devices.col.name': 'Device',
     'devices.col.appVersion': 'App version',
     'devices.col.push': 'Push',
@@ -567,15 +629,15 @@ const TABLES: LocaleTables = {
     'devices.pushNotRegistered': 'Not registered',
     'devices.pushEnvProduction': 'Production',
     'devices.pushEnvDevelopment': 'Development',
-    'devices.empty': 'No v2 devices yet. Scan a single-use pairing QR code in DeepPilot on iPhone.',
+    'devices.empty': 'No paired devices yet. Click “Add phone”, then scan the QR code in DeepPilot.',
 
     // ---- remote help ----
     'help.remoteTitle': 'Remote connection help',
     'help.recommended': 'Recommended setup',
-    'help.step1': 'Turn on "DeepPilot connection" first, then "Remote connection (Tailscale Funnel)".',
+    'help.step1': 'Turn on “Allow phone connections”, then “Remote connection”.',
     'help.step2': 'When the status shows "Awaiting Tailscale authorization", click "Open authorization page".',
     'help.step3': 'Sign in with an account that can manage this Tailnet and follow the on-page prompts to enable Funnel. Owner / Admin / Network admin is usually required.',
-    'help.step4': 'Come back to this page and click "Refresh". When a green dot appears next to the remote title, scan the QR code below to add your phone.',
+    'help.step4': 'Return and click “Refresh”. Once the remote connection is ready, click “Add phone” and scan the QR code.',
     'help.funnelHint': 'The plugin bundles the Tailscale networking stack, so neither this computer nor the phone needs the Tailscale app — but a Tailnet administrator must approve first-time use.',
     'help.httpsTitle': 'If authorization does not complete: enable HTTPS',
     'help.httpsStep1': 'Open the Tailscale admin console → Network → DNS.',

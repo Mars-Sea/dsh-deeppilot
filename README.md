@@ -70,9 +70,8 @@ dsh plugin --profile web add dsh-deeppilot
 dsh web
 ```
 
-After DSH restarts, open **Settings → DeepPilot**, enable the connection, show
-the pairing QR code, and scan it in the DeepPilot app. Below the QR code the same
-panel shows one copyable piece of pairing info (address, single-use code and
+After DSH restarts, open **Settings → DeepPilot**, turn on **Allow phone connections**,
+and click **Add phone** beside **Paired devices**, then scan the QR code in the app. The same panel also shows one copyable piece of pairing info (address, single-use code and
 certificate fingerprint) that can be pasted into the app in one step — useful for
 Simulator or when the camera is unavailable. Switching between the LAN and
 public address issues a matching new QR code and string immediately, with the
@@ -140,7 +139,13 @@ stored in the host registry and survive iPhone reconnects or changes to the
 system-reported name; saving an empty value restores the iPhone-reported
 default.
 
-The settings page's **Testing & troubleshooting** group has a `debug` toggle.
+Each device's **More actions** control contains its fingerprint, rename action,
+and deletion action; deletion still requires confirmation. Connection options,
+connection help, diagnostic tools, and system information start collapsed.
+Desktop secondary buttons are 28px high and **Add phone** is 30px; touch targets
+remain at least 44px. See [settings UI and validation](docs/SETTINGS_UI.md).
+
+The settings page's **Diagnostic tools** group has a `debug` toggle.
 Turning it on prints per-frame and push diagnostics to the DSH host's terminal
 output (for example, the actual capability bits sent in `s2c.welcome`); it
 never prints pairing tokens, APNs tokens, or message content. The toggle is
