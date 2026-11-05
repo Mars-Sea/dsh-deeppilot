@@ -34,12 +34,10 @@
    npm 不在保存配置时验证绑定；首次发布成功才证明认证可用。
 4. 新绑定必须在 **2 天内完成首次成功发布**。因此准备好新版本后再绑定；若过期，
    删除过期绑定并重新创建。先验证可信发布成功，再按需调整原有令牌发布权限。
-5. **2026-10-29 实测：当前绑定只允许暂存发布。** `publish.yml` 里的 `npm publish`
-   不再直接公开版本，而是把它送进 staged 区（命令返回成功并提示“正在处理”，
-   但注册表的版本、tarball 与来源证明持续 404）。用户决定**保留暂存流程**：
-   每次发版由工作流暂存，维护者用 2FA 批准后才公开（步骤见第三节）。
-   若要恢复直接发布，需在包设置的 Trusted Publisher 中勾选 `Allow npm publish`
-   （账户强制 2FA 时可能不可用），并同步改本节、AGENTS.md 与第 4 步的核对逻辑。
+5. **当前绑定允许直接发布（2026-11-05 起）。** 2026-10-29 实测绑定只允许暂存发布：
+   `npm publish` 把版本送进 staged 区，需维护者 2FA 批准后才公开（见第四节第 11 条）。
+   2026-11-05 用户在 Trusted Publisher 中勾选 `Allow npm publish`，改为工作流直接公开，
+   不再需要批准；首次直接发布的结果在下一次发版时核实并记入第四节。
 
 ## 三、每次发布
 
@@ -69,13 +67,11 @@
    压缩包发布跳过生命周期脚本（`--ignore-scripts`）；测试、类型检查和构建已在前序
    步骤执行，打包仍执行 `prepack`（打包前构建）。发布后核对版本、分发标签、
    压缩包完整性和来源证明元数据。
-6. **批准暂存版本（暂存模式下必需）。** 工作流把版本送进 staged 区后，由维护者完成
-   2FA 批准：在 npmjs.com 的 **Staged Packages** 标签找到
-   `dsh-deeppilot@<版本>` → Approve；或本机 `npm login` 后
-   `npm stage list dsh-deeppilot` → `npm stage approve <id>`。
-   批准即公开该版本，并按发布命令写入分发标签（`latest` / `alpha`）。
-   工作流末尾「核对发布版本、包完整性与来源证明」在批准前必然 404 失败、整次运行标红；
-   这是暂存模式的预期结果，不代表上传失败，发布证据以批准后的手工核验为准。
+6. 发布步骤直接公开版本并写入分发标签（`latest` / `alpha`），末尾核对随即通过。
+   若核对持续 404、发布步骤提示进入 staged 区，说明绑定退回暂存模式：维护者在
+   npmjs.com 的 **Staged Packages** 标签用 2FA 批准 `dsh-deeppilot@<版本>`（或本机
+   `npm login` 后 `npm stage list dsh-deeppilot` → `npm stage approve <id>`），
+   同一版本不能重跑工作流（`E409 Cannot publish over previously staged version`）。
 7. 确认 npm 包可安装，在全新 DSH 配置中完成安装验证后，再公开 GitHub 发布草稿。
    工作流不自动公开发布草稿；npm 上传和发布后的核对分别记录在步骤中。
 
@@ -202,6 +198,18 @@
     `0.2.2-rc.1` 宿主启动：`--dump-config` 退出码 0、无跳过，插件自有端口
     `/phone/health` 返回 200，`serverVersion` 为 `0.9.14`、`protocolVersion` 2、
     `dataPlane: true`；GitHub Release 在这一步通过后才公开并标记 Latest。
+
+13. `0.9.15` 的实际发布结果（2026-11-05）：发布提交 `688dabc` 直接推到 `main`，
+    CI（运行号 `42036820848`）与 CodeQL（`42036820840`）均绿；附注标签 `v0.9.15` 指向
+    `688dabcc1b8c5f73664633750c47cb90fad1caac`。`publish.yml` 运行 `42037502337`
+    （`latest`）**整次为绿**：本次仍进入 staged 区，维护者在末尾核对的重试窗口内批准，
+    并同时勾选 `Allow npm publish`，下次发版起直接公开。注册表 `latest = 0.9.15`；
+    来源证明类型为 `https://slsa.dev/provenance/v1`、`gitCommit` 为该提交、工作流引用
+    `refs/tags/v0.9.15`、invocation 为 `42037502337`；69 个条目、解包 131,613,948 字节，
+    与本地 `npm pack --dry-run` 一致。随后在全新隔离 `DSH_HOME` 中从 npm 安装
+    `dsh-deeppilot@0.9.15`，用真实 `0.2.2-rc.1` 宿主启动：插件自有端口 `/phone/health`
+    返回 200，`serverVersion` 为 `0.9.15`、`protocolVersion` 2、`dataPlane: true`，
+    日志显示按需完成通知工具已注册；GitHub Release 在这一步通过后才公开并标记 Latest。
 
 ## 五、官方资料
 
