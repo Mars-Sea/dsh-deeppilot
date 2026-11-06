@@ -127,3 +127,25 @@ export function sanitizeImageName(value: string): string {
 export function sanitizeDocumentField(value: string, maxChars: number): string {
   return value.replace(/[\u0000-\u001F\u007F]/g, ' ').trim().slice(0, maxChars)
 }
+
+/** 关注集合上限：当前打开的会话 + 预取的会话，见 PROTOCOL.md c2s.session.watch。 */
+export const MAX_WATCH_SESSIONS = 16
+export const MAX_WATCH_SESSION_ID_CHARS = 256
+
+/**
+ * 解析关注集合：字符串数组、去重、去空、超长 ID 丢弃，最多取前 16 个。
+ * 不合法时返回 undefined。auth.prove 上宁可退回全量广播也不因优化字段拒绝认证；
+ * c2s.session.watch 由行校验先拒绝非法载荷。
+ */
+export function parseWatchSessions(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const ids = new Set<string>()
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const id = item.trim()
+    if (id.length === 0 || id.length > MAX_WATCH_SESSION_ID_CHARS) continue
+    ids.add(id)
+    if (ids.size >= MAX_WATCH_SESSIONS) break
+  }
+  return [...ids]
+}

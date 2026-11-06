@@ -24,7 +24,7 @@ export function registerTestIdentity(store: DeviceStore, identity: TestIdentity)
 export function authenticateTestSocket(
   ws: { sent: any[]; receive(payload: unknown): void },
   identity: TestIdentity,
-  overrides: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string; clientRole?: 'widget' } = {},
+  overrides: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string; clientRole?: 'widget'; watchSessions?: unknown } = {},
 ): void {
   const challenge = ws.sent.find((frame) => frame.type === 's2c.auth.challenge')?.payload
   if (!challenge) throw new Error('server auth challenge missing')
@@ -43,6 +43,12 @@ export function authenticateTestSocket(
     v: 2,
     type: 'c2s.auth.prove',
     id: 'auth-1',
-    payload: { ...fields, signature, ...(overrides.clientRole ? { clientRole: overrides.clientRole } : {}) },
+    payload: {
+      ...fields,
+      signature,
+      ...(overrides.clientRole ? { clientRole: overrides.clientRole } : {}),
+      // 不进签名原文：关注集合只收窄下行，不扩大权限。
+      ...(overrides.watchSessions !== undefined ? { watchSessions: overrides.watchSessions } : {}),
+    },
   })
 }

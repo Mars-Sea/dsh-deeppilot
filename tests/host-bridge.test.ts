@@ -1295,6 +1295,51 @@ test('resumeFrom filters replayed frames by the S→C permission policy per sink
   bridge.dispose()
 })
 
+test('resumeFrom skips frames the sink does not accept (interest set)', () => {
+  const { proxy } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  ;(bridge as any).record('s2c.session.event', { sessionId: 'keep', kind: 'message.final', seq: 1, data: {} })
+  ;(bridge as any).record('s2c.session.event', { sessionId: 'drop', kind: 'message.final', seq: 2, data: {} })
+  ;(bridge as any).record('s2c.sessions.delta', { upserted: [], removedIds: [] })
+  const sink = {
+    ...makeRecordingSink(),
+    accepts: (type: string, payload: any) => type !== 's2c.session.event' || payload.sessionId === 'keep',
+  }
+  bridge.resumeFrom(0, sink as any)
+  assert.deepEqual(sink.frames.map((f) => f.type), ['s2c.session.event', 's2c.sessions.delta'])
+  assert.equal(sink.doneCount(), 1)
+  bridge.dispose()
+})
+
+test('resumeFrom sends resync instead of a replay window over REPLAY_RESYNC_BYTES', () => {
+  const { proxy } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  const big = 'x'.repeat(200 * 1024)
+  for (let i = 0; i < 3; i += 1) {
+    ;(bridge as any).record('s2c.session.event', { sessionId: 's', kind: 'message.final', seq: i, data: { text: big } })
+  }
+  let resyncs = 0
+  const sink = { ...makeRecordingSink(), resync: () => { resyncs += 1 } }
+  assert.equal(bridge.resumeFrom(0, sink as any), true, 'cursor is still inside the ring')
+  assert.equal(resyncs, 1)
+  assert.deepEqual(sink.frames, [], 'no partial replay before the resync')
+  assert.equal(sink.doneCount(), 0, 'resync replaces resume.done')
+
+  // 只计算这个 sink 真正会收到的帧：过滤掉大帧后照常补发。
+  let narrowResyncs = 0
+  const narrow = {
+    ...makeRecordingSink(),
+    resync: () => { narrowResyncs += 1 },
+    accepts: (type: string) => type !== 's2c.session.event',
+  }
+  bridge.resumeFrom(0, narrow as any)
+  assert.equal(narrowResyncs, 0)
+  assert.equal(narrow.doneCount(), 1)
+  bridge.dispose()
+})
+
 test('canResumeFrom detects unrecoverable gaps against the oldest buffered seq', () => {
   const { proxy } = makeFakeProxy()
   const bridge = new HostBridge(proxy, 3) // tiny ring

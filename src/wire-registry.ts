@@ -95,6 +95,7 @@ export type C2SType =
   | 'c2s.directory.pick'
   | 'c2s.session.open'
   | 'c2s.session.close'
+  | 'c2s.session.watch'
   | 'c2s.session.create'
   | 'c2s.session.fork'
   | 'c2s.session.rename'
@@ -198,6 +199,8 @@ export interface FrameContext extends BridgeSink {
   /** 打开成功：认领缓冲并按其到达顺序补发；被并发操作取代时返回 false。 */
   flushOpenBuffer(sessionId: string, buffer: OpenEventBuffer): boolean
   closeOpenSession(sessionId: string): void
+  /** c2s.session.watch：整体替换本连接的关注集合（能力 `sessionInterest`）。 */
+  setWatchedSessions(sessionIds: readonly string[]): void
   /** 抬升 Live Activity 注册代次并返回新值；在途注册用旧值比对即知自己已被取代。 */
   nextLiveActivityGeneration(): number
   /** 当前代次：await 之后重新比对用。 */

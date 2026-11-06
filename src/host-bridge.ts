@@ -108,6 +108,8 @@ export type HostScheduleEditValue =
   | { deleted: true; id: string }
 
 const MAX_RING_DEFAULT = 2000;
+/** 补发量超过它就改发 s2c.resync（经 Funnel 实测吞吐 40～80 KB/s，约 6～12 秒）。 */
+export const REPLAY_RESYNC_BYTES = 512 * 1024;
 
 /**
  * Process-wide bridge state: session mirror, pending approvals/questions,
@@ -372,20 +374,35 @@ export class HostBridge {
    * reader without interactions.respond never gets the missed approval
    * frames back (R1/P2).
    */
+  /**
+   * 按序补发游标之后的帧。先按权限与关注集合筛出该 sink 真正会收到的帧，
+   * 估算字节数超过 REPLAY_RESYNC_BYTES 时改发 `s2c.resync`：补发是同步一次性
+   * 写出的，经 Funnel 时插件这侧看不到积压，大补发会把之后所有请求响应堵在
+   * 链路上（实测 450 帧堵 37 秒）。重新同步让客户端只拉列表和正在看的会话。
+   */
   resumeFrom(cursor: number, target?: BridgeSink): boolean {
     const oldest = this.ring.length > 0 ? this.ring[0]!.seq : this.cursor + 1;
     if (cursor + 1 < oldest) return false;
     const receivers = target !== undefined ? [target] : [...this.sinks];
-    for (const entry of this.ring) {
-      if (entry.seq > cursor) {
-        for (const sink of receivers) {
-          const need = pushScopeFor(entry.type, entry.payload)
-          if (need === undefined || !sink.canReceive(need)) continue
-          sink.replay([entry]);
-        }
+    for (const sink of receivers) {
+      const window: Array<{ seq: number; type: string; payload: unknown }> = []
+      let bytes = 0
+      for (const entry of this.ring) {
+        if (entry.seq <= cursor) continue
+        const need = pushScopeFor(entry.type, entry.payload)
+        if (need === undefined || !sink.canReceive(need)) continue
+        if (sink.accepts && !sink.accepts(entry.type, entry.payload)) continue
+        window.push(entry)
+        bytes += Buffer.byteLength(JSON.stringify(entry.payload) ?? '')
       }
+      if (bytes > REPLAY_RESYNC_BYTES) {
+        this.log?.(`resume window ${bytes}B over ${REPLAY_RESYNC_BYTES}B; sending resync`)
+        sink.resync()
+        continue
+      }
+      for (const entry of window) sink.replay([entry]);
+      sink.replayDone();
     }
-    for (const sink of receivers) sink.replayDone();
     return true;
   }
 

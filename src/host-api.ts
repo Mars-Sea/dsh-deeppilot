@@ -417,6 +417,14 @@ export interface BridgeSink {
    * every push/replay delivery; unknown broadcast types are denied.
    */
   canReceive(scope: DeviceScope): boolean
+  /**
+   * Interest filter (capability `sessionInterest`): whether this sink wants a
+   * frame it is already permitted to receive. Connections that declared an
+   * interest set drop other sessions' events here. Absent ⇒ wants everything.
+   * The bridge consults it when sizing a replay window; sinks apply it again
+   * on every push.
+   */
+  accepts?(type: string, payload: unknown): boolean
 }
 
 /**

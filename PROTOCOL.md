@@ -165,6 +165,7 @@ LAN Host 回显自己的证书指纹，App 若持有二维码指纹则必须比�
   "deviceName": "iPhone 15 Pro",
   "appVersion": "0.1.0",
   "resumeCursor": 1042,
+  "watchSessions": ["session-…"],
   "clientRole": "widget",
   "signature": "<ASN.1 DER ECDSA P-256/SHA-256 signature, base64url>"
 } }
@@ -177,6 +178,11 @@ LAN Host 回显自己的证书指纹，App 若持有二维码指纹则必须比�
   广播 sink、不参与 seq 重放（`resumeCursor` 被忽略）、不更新设备
   lastSeen，也**不**抑制离线 APNs 告警推送（小组件连接不算"设备在线"）。
   签名输入不含 `clientRole`，v2 签名规范不变。
+- `watchSessions` 可选（能力 `sessionInterest`）：客户端本机有缓存、需要保持最新的
+  会话 ID，最多 16 个。带上这个字段（空数组也算）后，该连接只收到已打开或在这个集合里的
+  会话的 `s2c.session.event` 与 `s2c.session.queue`，实时推送和断线补发都按这个范围；
+  不带则照旧收全部会话事件。服务端在补发之前就应用这个集合。字段不合法时按"未声明"
+  处理，不拒绝认证。它只收窄本设备已有权限的下行内容，所以不进签名输入。
 
 签名输入必须是下列 UTF-8 字节。文本字段先做无 padding 的 base64url；时间戳和游标
 必须是十进制有限整数，缺失游标写 `-`：
@@ -318,12 +324,24 @@ cacheWriteTokens)`；输入总量 = `inputTokens + cacheReadTokens + cacheWriteT
 
 ### c2s.session.open（payload: sessionId, tailCount? 默认 100）
 
-服务端先回一次性 `s2c.session.tail`，随后该会话实时事件以 `s2c.session.event` 推送。历史快照请求尚未完成时产生的实时事件必须暂存，并在 tail 之后按原顺序发送，客户端不得先看到 event 再被较旧的 tail 回滚。多设备各自 open 各自收，互不影响。
+服务端先回一次性 `s2c.session.tail`，随后该会话实时事件以 `s2c.session.event` 推送。没有声明关注集合的连接（见 `c2s.auth.prove` 的 `watchSessions`）还会收到所有其他会话的事件，这是旧行为，客户端必须容忍并忽略自己不需要的事件。历史快照请求尚未完成时产生的实时事件必须暂存，并在 tail 之后按原顺序发送，客户端不得先看到 event 再被较旧的 tail 回滚。多设备各自 open 各自收，互不影响。
 
 ### c2s.session.close（payload: sessionId）
 
 客户端离开会话详情时发送；服务端取消该连接对该会话的实时订阅与“正在查看”标记，
-不关闭 WebSocket，也不终止会话 turn。该帧为幂等通知，不产生响应。
+不关闭 WebSocket，也不终止会话 turn。该帧为幂等通知，服务端回 `s2c.ack`，客户端可以忽略。
+
+### c2s.session.watch（payload: sessionIds）
+
+可选 v2 扩展，需要 `welcome.capabilities.sessionInterest=true`。用新列表整体替换本连接的关注集合，
+最多 16 个会话 ID，服务端回 `s2c.ack`。超过上限或载荷不合法时回 `E_PROTOCOL`，集合保持不变。
+
+- 关注只决定这个会话的 `s2c.session.event` / `s2c.session.queue` 是否下发：不回 tail，不打"正在查看"
+  标记，因此不影响通知过滤与 APNs 抑制。
+- 已打开（含正在打开、tail 还没回）的会话不论是否在集合里都会收到事件；关闭后若不在集合里即停止。
+- 未在 `auth.prove` 声明过关注集合的连接发送此帧后，同样切换为按关注投递。
+- 客户端维护建议：集合 = 当前打开的会话 + 本机有缓存且需要保持最新的会话（如预取的会话）。
+  移出集合的会话本机缓存视为过期，再次进入时重新拉取。
 
 ### s2c.session.tail 与 c2s.session.history
 
@@ -853,6 +871,10 @@ deeppilot/setDeviceName(deviceId, customName) -> customName | null
 
 - 每个 s2c 推送帧信封额外携带数值字段 seq（服务端本次启动以来单调递增），覆盖 sessions.delta / session.event / notify / pending.* 。请求响应帧不占 seq。
 - 重连时 `c2s.auth.prove` 带 `resumeCursor`：命中缓冲则按序补发原帧，补发完追加一帧 `s2c.resume.done`。
+- 补发只包含这台设备有权限、并且在其关注范围内的帧（见 `watchSessions`）。这些帧的载荷合计超过
+  512 KB 时，服务端不逐条补发，改发 `s2c.resync`；此时 welcome 的 `resumed` 已经是 true，客户端
+  以 resync 为准、不再等待 `s2c.resume.done`。原因：补发是一次性写出的，过大的补发会把之后的
+  请求响应全部堵在链路后面。
 - 游标过旧（超出环形缓冲）则发 `s2c.resync`（payload.reason 为 gap），客户端应重新拉 sessions.list 并重开关注的会话。
 
 ## 8. 心跳与生命周期
@@ -932,6 +954,8 @@ Bridge 侧 Host code 到 wire 码的映射是 `src/wire-errors.ts` 的单一属�
   schedule 帧。旧帧在宿主级模型上仍由 Bridge 映射，旧客户端无需升级。
 - `binaryFrames` 是插件自身能力，不依赖 Host：true 表示导出与附件请求可以带 `binary: true`
   改用二进制帧（见 §1.1）。缺失/false 时客户端照旧请求 base64 文本帧。
+- `sessionInterest` 是插件自身能力：true 表示接受 `c2s.auth.prove` 的 `watchSessions` 与
+  `c2s.session.watch`。缺失/false 时客户端不得发送 `c2s.session.watch`，并且要容忍收到全部会话事件。
 - v2 同版本新增可选字段时双方必须忽略未知字段。
 - 旧 Host 不认识 `deeppilot/setDeviceName` 时，设置页应显示“不支持设备重命名”的降级提示，
   不得把失败伪装成保存成功；新客户端仍须正常显示和删除设备。

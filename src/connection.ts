@@ -84,6 +84,12 @@ export class BridgeConnection implements BridgeSink {
     seq?: number
   }>>()
   private readonly openSessions = new Set<string>()
+  /**
+   * 关注集合（能力 `sessionInterest`）：客户端本机有缓存、需要保持最新的会话。
+   * undefined = 旧客户端从未声明，照旧收全部会话事件。来源：auth.prove 的
+   * `watchSessions`（须在重放前生效）与之后的 c2s.session.watch（整体替换）。
+   */
+  private watchedSessions: Set<string> | undefined
   private liveActivityRegistrationGeneration = 0
   private pendingLiveActivityId?: string
   private lastActivity = Date.now()
@@ -140,6 +146,8 @@ export class BridgeConnection implements BridgeSink {
       fail: (id, code, message) => connection.fail(id, code, message),
       close: (code, reason) => connection.close(code, reason),
       canReceive: (scope) => connection.canReceive(scope),
+      accepts: (type, payload) => connection.accepts(type, payload),
+      setWatchedSessions: (sessionIds) => connection.setWatchedSessions(sessionIds),
       push: (type, payload, seq) => connection.push(type, payload, seq),
       lastCursor: () => connection.lastCursor(),
       replay: (entries) => connection.replay(entries),
@@ -241,7 +249,27 @@ export class BridgeConnection implements BridgeSink {
     return this.identity?.scopes.has(scope) ?? false
   }
 
+  /**
+   * 关注过滤：只管按会话投递的两类帧。正在打开（tail 未发出、事件进缓冲）、
+   * 已打开或在关注集合里的会话放行；未声明关注集合的连接全部放行。
+   */
+  accepts(type: string, payload: unknown): boolean {
+    if (this.watchedSessions === undefined) return true
+    if (type !== 's2c.session.event' && type !== 's2c.session.queue') return true
+    const sessionId = (payload as { sessionId?: unknown } | undefined)?.sessionId
+    if (typeof sessionId !== 'string') return true
+    return this.openSessions.has(sessionId) ||
+      this.openingSessionEvents.has(sessionId) ||
+      this.watchedSessions.has(sessionId)
+  }
+
+  /** c2s.session.watch：整体替换关注集合；也让从未声明的连接切到按关注投递。 */
+  setWatchedSessions(sessionIds: readonly string[]): void {
+    this.watchedSessions = new Set(sessionIds)
+  }
+
   push(type: string, payload: unknown, seq?: number): void {
+    if (!this.accepts(type, payload)) return
     if (type === 's2c.notify') payload = { ...(payload as object), hostAudience: this.deps.audience }
     // 队列快照与会话事件一样要排在 tail 之后：打开期间到达的先进缓冲。
     if (type === 's2c.session.event' || type === 's2c.session.queue') {
@@ -279,6 +307,8 @@ export class BridgeConnection implements BridgeSink {
   /** 认证成功：门只做安全判定，欢迎与重放归连接（数据面）。 */
   private onAuthenticated(identity: AuthenticatedIdentity): void {
     this.identity = identity
+    // 必须先于重放生效：resumeFrom 同步补发，补发范围按关注集合筛选。
+    if (identity.watchSessions !== undefined) this.watchedSessions = new Set(identity.watchSessions)
     const cursor = identity.resumeCursor
     // Each replayed business frame is authorized separately by HostBridge.
     const canResume = cursor !== undefined && this.deps.bridge.canResumeFrom(cursor)

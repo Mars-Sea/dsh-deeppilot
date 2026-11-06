@@ -107,6 +107,7 @@ export const BRIDGE_INVARIANT_CAPABILITIES = [
   'widgetPush',
   'liveActivityPush',
   'deviceRevoke',
+  'sessionInterest',
 ] as const satisfies ReadonlyArray<keyof WelcomeCapabilities>
 
 /**
@@ -122,6 +123,8 @@ export function capabilityBits(
     replay: true,
     // 插件自身能力，不依赖宿主：导出块与附件可按请求改用二进制帧。
     binaryFrames: true,
+    // 插件自身能力：连接声明关注集合后，会话事件只发给打开或关注的会话。
+    sessionInterest: true,
     approvals: true,
     questions: true,
     pendingSnapshot: true,

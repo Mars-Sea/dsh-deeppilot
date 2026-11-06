@@ -9,7 +9,7 @@
  * tests/wire-rows.test.ts 固定为显式期望）。
  */
 
-import { validSendId } from './connection-policy.ts'
+import { MAX_WATCH_SESSION_ID_CHARS, MAX_WATCH_SESSIONS, parseWatchSessions, validSendId } from './connection-policy.ts'
 import { normalizePageLimit } from './host-event-projection.ts'
 import { BINARY_CHUNK_BYTES, MAX_BINARY_ATTACHMENT_BYTES } from './binary-frame.ts'
 import type { SessionAttachmentBinaryAck } from './protocol.ts'
@@ -213,6 +213,27 @@ export const sessionRows: readonly WireFrameRow[] = [
     },
     handle: (ctx, payload) => {
       ctx.closeOpenSession(payload.sessionId as string)
+      ctx.send('s2c.ack', {})
+    },
+  },
+  {
+    // 关注集合整体替换：不回 tail、不打"正在查看"标记，所以不影响通知过滤。
+    type: 'c2s.session.watch',
+    stage: 'authenticated',
+    scopes: READ,
+    capability: 'sessionInterest',
+    doc: 'PROTOCOL.md c2s.session.watch',
+    validate: (payload) => {
+      const checked = payloadObject(payload)
+      if (!checked.ok) return checked
+      const ids = checked.value.sessionIds
+      if (!Array.isArray(ids) || ids.length > MAX_WATCH_SESSIONS || !ids.every((id) => isText(id, MAX_WATCH_SESSION_ID_CHARS))) {
+        return reject('E_PROTOCOL', `sessionIds must be an array of at most ${MAX_WATCH_SESSIONS} session ids`)
+      }
+      return checked
+    },
+    handle: (ctx, payload) => {
+      ctx.setWatchedSessions(parseWatchSessions(payload.sessionIds) ?? [])
       ctx.send('s2c.ack', {})
     },
   },

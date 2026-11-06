@@ -93,7 +93,7 @@ interface Harness {
   logs: string[]
   closed: Promise<void>
   identity: TestIdentity
-  authenticate: (overrides?: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string; clientRole?: 'widget' }) => void
+  authenticate: (overrides?: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string; clientRole?: 'widget'; watchSessions?: unknown }) => void
 }
 
 async function makeConnection(opts: {
@@ -921,6 +921,103 @@ test('session.open sends tail before realtime events produced during history loo
     ['s2c.session.tail', 's2c.session.event'],
   )
   assert.equal(ws.sent[1].payload.data.text, 'new token')
+})
+
+// ---------- 关注集合（能力 sessionInterest） ----------
+
+function emitAssistantMessage(bridge: HostBridge, sessionId: string, seq: number, text = 'body'): void {
+  ;(bridge as any).onMuxFrame({
+    type: 'session/event', rpcId: 'rpc-' + sessionId + '-' + seq, sessionId,
+    event: { type: 'assistant/message', seq, data: { text } },
+  })
+}
+
+const sessionEventIds = (ws: FakeWebSocket) =>
+  ws.sent.filter((f) => f.type === 's2c.session.event').map((f) => f.payload.sessionId as string)
+
+test('welcome advertises sessionInterest', async () => {
+  const { ws, authenticate } = await makeConnection()
+  authenticate()
+  const welcome = ws.sent.find((f) => f.type === 's2c.welcome')!
+  assert.equal(welcome.payload.capabilities.sessionInterest, true)
+})
+
+test('a client that never declares an interest set keeps receiving every session event', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate()
+  emitAssistantMessage(bridge, 's-a', 1)
+  emitAssistantMessage(bridge, 's-b', 2)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-a', 's-b'])
+})
+
+test('watchSessions limits live session events to watched sessions; list deltas still flow', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate({ watchSessions: ['s-watched'] })
+  emitAssistantMessage(bridge, 's-watched', 1)
+  emitAssistantMessage(bridge, 's-other', 2)
+  ;(bridge as any).record('s2c.sessions.delta', { upserted: [{ id: 's-other' }], removedIds: [] })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-watched'], 'unwatched, unopened session events are not sent')
+  assert.ok(ws.sent.some((f) => f.type === 's2c.sessions.delta'), 'session list changes are not filtered')
+})
+
+test('watchSessions narrows the resume replay before it is written', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  emitAssistantMessage(bridge, 's-watched', 1)
+  emitAssistantMessage(bridge, 's-other', 2)
+  await new Promise((r) => setTimeout(r, 10))
+  authenticate({ resumeCursor: 0, watchSessions: ['s-watched'] })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(ws.sent.find((f) => f.type === 's2c.welcome')!.payload.resumed, true)
+  assert.deepEqual(sessionEventIds(ws), ['s-watched'])
+  assert.ok(ws.sent.some((f) => f.type === 's2c.resume.done'))
+})
+
+test('an opened session receives its events even when it is not in the watch set', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate({ watchSessions: [] })
+  ws.receive({ v: 2, type: 'c2s.session.open', id: 'o1', payload: { sessionId: 's-open' } })
+  await new Promise((r) => setTimeout(r, 10))
+  emitAssistantMessage(bridge, 's-open', 3)
+  emitAssistantMessage(bridge, 's-other', 4)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-open'])
+
+  // 关闭后不再在关注集合里，事件随之停止。
+  ws.receive({ v: 2, type: 'c2s.session.close', id: 'c1', payload: { sessionId: 's-open' } })
+  await new Promise((r) => setTimeout(r, 10))
+  emitAssistantMessage(bridge, 's-open', 5)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-open'])
+})
+
+test('c2s.session.watch replaces the interest set and switches a legacy connection over', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate()
+  ws.receive({ v: 2, type: 'c2s.session.watch', id: 'w1', payload: { sessionIds: ['s-b'] } })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(lastFrame(ws).type, 's2c.ack')
+  emitAssistantMessage(bridge, 's-a', 1)
+  emitAssistantMessage(bridge, 's-b', 2)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-b'])
+
+  ws.receive({ v: 2, type: 'c2s.session.watch', id: 'w2', payload: { sessionIds: ['s-a'] } })
+  await new Promise((r) => setTimeout(r, 10))
+  emitAssistantMessage(bridge, 's-a', 3)
+  emitAssistantMessage(bridge, 's-b', 4)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-b', 's-a'])
+})
+
+test('malformed watchSessions on auth.prove falls back to the full broadcast instead of failing auth', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate({ watchSessions: 'not-an-array' })
+  assert.ok(ws.sent.some((f) => f.type === 's2c.welcome'), 'authentication still succeeds')
+  emitAssistantMessage(bridge, 's-a', 1)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-a'])
 })
 
 test('session.history correlates the page with the request id', async () => {

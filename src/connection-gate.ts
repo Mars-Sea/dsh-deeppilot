@@ -39,6 +39,7 @@ import {
   PRE_AUTH_FRAME_BYTES,
   sanitizeDeviceField,
   isEnvelope,
+  parseWatchSessions,
 } from './connection-policy.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import {
@@ -103,9 +104,12 @@ export interface AuthenticatedIdentity {
   scopes: ReadonlySet<DeviceScope>
   widgetClient: boolean
   resumeCursor: number | undefined
+  /** `watchSessions`（能力 `sessionInterest`）：缺省 = 旧客户端，收全部会话事件。 */
+  watchSessions: string[] | undefined
   deviceName: string
   appVersion: string
 }
+
 
 /**
  * 门看到的宿主，由连接实现：传输、sink 转发、连接自有缓冲，以及认证成功与
@@ -125,6 +129,8 @@ export interface GateHost {
   close(code: number, reason: string): void
   // ---------- BridgeSink 转发（openSession 等行需要把上下文当作 sink） ----------
   canReceive(scope: DeviceScope): boolean
+  /** 关注过滤（能力 `sessionInterest`），见 BridgeSink.accepts。 */
+  accepts(type: string, payload: unknown): boolean
   push(type: string, payload: unknown, seq?: number): void
   lastCursor(): number
   replay(entries: Array<{ seq: number; type: string; payload: unknown }>): void
@@ -135,6 +141,7 @@ export interface GateHost {
   discardOpenBuffer(sessionId: string, buffer: OpenEventBuffer): void
   flushOpenBuffer(sessionId: string, buffer: OpenEventBuffer): boolean
   closeOpenSession(sessionId: string): void
+  setWatchedSessions(sessionIds: readonly string[]): void
   nextLiveActivityGeneration(): number
   readonly liveActivityGeneration: number
   readonly pendingLiveActivityId: string | undefined
@@ -411,6 +418,8 @@ export class ConnectionGate {
       scopes: this.scopes,
       widgetClient: this.widgetClient,
       resumeCursor: this.widgetClient ? undefined : resumeCursor,
+      // 不在签名原文里：它只会收窄本设备已有权限的下行内容，不扩大任何权限。
+      watchSessions: this.widgetClient ? undefined : parseWatchSessions(p.watchSessions),
       deviceName,
       appVersion,
     })
@@ -470,6 +479,7 @@ export class ConnectionGate {
       fail: (code, message) => host.fail(env.id, code, message),
       close: (code, reason) => host.close(code, reason),
       canReceive: (scope) => host.canReceive(scope),
+      accepts: (type, payload) => host.accepts(type, payload),
       push: (type, payload, seq) => host.push(type, payload, seq),
       lastCursor: () => host.lastCursor(),
       replay: (entries) => host.replay(entries),
@@ -479,6 +489,7 @@ export class ConnectionGate {
       discardOpenBuffer: (sessionId, buffer) => host.discardOpenBuffer(sessionId, buffer),
       flushOpenBuffer: (sessionId, buffer) => host.flushOpenBuffer(sessionId, buffer),
       closeOpenSession: (sessionId) => host.closeOpenSession(sessionId),
+      setWatchedSessions: (sessionIds) => host.setWatchedSessions(sessionIds),
       nextLiveActivityGeneration: () => host.nextLiveActivityGeneration(),
       get liveActivityGeneration() {
         return host.liveActivityGeneration

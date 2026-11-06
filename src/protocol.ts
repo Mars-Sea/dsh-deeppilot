@@ -38,6 +38,8 @@ export interface AuthProofPayload extends AuthChallengePayload {
   appVersion: string
   signature: string
   resumeCursor?: number
+  /** 能力 `sessionInterest`：本机缓存、需保持最新的会话（最多 16 个）。不进签名原文。 */
+  watchSessions?: string[]
 }
 
 /** Content-free WidgetKit invalidation; never a user-visible alert. */
@@ -444,6 +446,12 @@ export interface WelcomeCapabilities {
    * see binary-frame.ts). Plugin-level, independent of the host. Absent ⇒ the
    * client must keep requesting base64 text frames. */
   binaryFrames?: boolean
+  /** Bridge honours `watchSessions` on c2s.auth.prove and c2s.session.watch:
+   * a connection that declared an interest set only receives
+   * s2c.session.event / s2c.session.queue (live and replayed) for sessions it
+   * opened or watches. Plugin-level. Absent ⇒ the client gets every
+   * session's events, as before. */
+  sessionInterest?: boolean
 }
 
 export interface WelcomePayload {
