@@ -335,6 +335,8 @@ cacheWriteTokens)`；输入总量 = `inputTokens + cacheReadTokens + cacheWriteT
 { "type": "s2c.sessions.delta", "payload": { "upserted": [SessionSummary], "removedIds": [] } }
 ```
 
+推送节流：同一会话内容完全相同的摘要不重复推送；只有 `stats` 变化的推送，同一会话 5 秒内最多一次（窗口结束时推出最新值），状态、标题、任务清单、待处理标记、`activity` 的变化立即推送并带上当时最新的 `stats`。客户端不应依赖 `stats` 逐步实时到达。
+
 会话与项目均按 `lastActivityTs` 从新到旧展示；项目使用项目内最新会话时间排序。归档后 Bridge 必须把该会话放入 `removedIds`，不得继续出现在普通列表。
 
 ## 4. 会话明细

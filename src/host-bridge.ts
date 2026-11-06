@@ -110,6 +110,8 @@ export type HostScheduleEditValue =
 const MAX_RING_DEFAULT = 2000;
 /** 补发量超过它就改发 s2c.resync（经 Funnel 实测吞吐 40～80 KB/s，约 6～12 秒）。 */
 export const REPLAY_RESYNC_BYTES = 512 * 1024;
+/** 只改了用量统计的列表推送，同一会话这段时间内最多推一次（第二批 P5）。 */
+export const SUMMARY_STATS_THROTTLE_MS = 5000;
 
 /**
  * Process-wide bridge state: session mirror, pending approvals/questions,
@@ -121,6 +123,13 @@ let BRIDGE_SEQ = 0;
 export class HostBridge {
   readonly id = ++BRIDGE_SEQ;
   private summaries = new Map<string, SessionSummary>()
+  /**
+   * 列表推送节流（连接传输第二批 P5）。每个会话最近一次推出去的摘要指纹，
+   * 用来丢掉内容完全相同的重复推送；只改了 `stats` 的变化按 SUMMARY_STATS_THROTTLE_MS
+   * 合并，状态、标题、任务清单、待处理标记、活动描述的变化照旧立即推。
+   */
+  private readonly summaryPushed = new Map<string, { full: string; withoutStats: string; at: number }>()
+  private readonly summaryStatsTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private activeTools = new Map<string, Map<string, string>>()
   private approvals = new Map<string, PendingApproval>()
   private questions = new Map<string, PendingQuestion>()
@@ -481,6 +490,8 @@ export class HostBridge {
     if (this.disposed) return
     this.disposed = true
     this.abort.abort();
+    for (const timer of this.summaryStatsTimers.values()) clearTimeout(timer)
+    this.summaryStatsTimers.clear()
     this.assistantStream.dispose();
     this.sinks.clear();
     this.sinkSessions.clear();
@@ -755,6 +766,9 @@ export class HostBridge {
       for (const id of this.lastAssistantText.keys()) {
         if (!next.has(id)) this.lastAssistantText.delete(id)
       }
+      // 全量列表推送同样记账，之后的单行推送才能按它去重、节流。
+      for (const id of removedIds) this.forgetSummaryPush(id)
+      for (const row of next.values()) this.noteSummaryPushed(row)
       this.record('s2c.sessions.delta', { upserted: [...next.values()], removedIds });
     } catch {
       // apiProxy absent or transient failure; keep last mirror
@@ -892,7 +906,53 @@ export class HostBridge {
   }
 
   private pushSummary(row: SessionSummary): void {
+    const full = JSON.stringify(row)
+    const previous = this.summaryPushed.get(row.id)
+    // 内容与上次推出的完全相同：多个来源（状态、投影、活动）同一时刻各推一次时常见。
+    if (previous?.full === full) return
+    const withoutStats = JSON.stringify({ ...row, stats: undefined })
+    const now = Date.now()
+    const statsOnly = previous !== undefined && previous.withoutStats === withoutStats
+    if (statsOnly && now - previous.at < SUMMARY_STATS_THROTTLE_MS) {
+      // 只改了用量统计：窗口内合并成一次，到点推送届时的最新值。
+      if (!this.summaryStatsTimers.has(row.id)) {
+        const timer = setTimeout(() => {
+          this.summaryStatsTimers.delete(row.id)
+          const latest = this.summaries.get(row.id)
+          if (latest && !this.disposed) this.pushSummary(latest)
+        }, SUMMARY_STATS_THROTTLE_MS - (now - previous.at))
+        timer.unref?.()
+        this.summaryStatsTimers.set(row.id, timer)
+      }
+      return
+    }
+    const pending = this.summaryStatsTimers.get(row.id)
+    if (pending !== undefined) {
+      clearTimeout(pending)
+      this.summaryStatsTimers.delete(row.id)
+    }
+    this.summaryPushed.set(row.id, { full, withoutStats, at: now })
     this.record('s2c.sessions.delta', { upserted: [row], removedIds: [] });
+  }
+
+  private noteSummaryPushed(row: SessionSummary): void {
+    const pending = this.summaryStatsTimers.get(row.id)
+    if (pending !== undefined) {
+      clearTimeout(pending)
+      this.summaryStatsTimers.delete(row.id)
+    }
+    this.summaryPushed.set(row.id, {
+      full: JSON.stringify(row),
+      withoutStats: JSON.stringify({ ...row, stats: undefined }),
+      at: Date.now(),
+    })
+  }
+
+  private forgetSummaryPush(sessionId: string): void {
+    const pending = this.summaryStatsTimers.get(sessionId)
+    if (pending !== undefined) clearTimeout(pending)
+    this.summaryStatsTimers.delete(sessionId)
+    this.summaryPushed.delete(sessionId)
   }
 
   listSessions(): SessionSummary[] {
@@ -1213,6 +1273,7 @@ export class HostBridge {
       )
       this.summaries.delete(sessionId)
       this.lastAssistantText.delete(sessionId)
+      this.forgetSummaryPush(sessionId)
       this.record('s2c.sessions.delta', { upserted: [], removedIds: [sessionId] })
       return { ok: true, value: true }
     } catch (error) {

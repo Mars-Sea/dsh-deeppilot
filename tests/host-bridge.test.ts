@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert'
 import {
   HostBridge,
+  SUMMARY_STATS_THROTTLE_MS,
   MAX_MESSAGE_PROJECTION_BYTES,
   MAX_SESSION_PAGE_MESSAGES_BYTES,
   limitMessageProjection,
@@ -1337,6 +1338,52 @@ test('resumeFrom sends resync instead of a replay window over REPLAY_RESYNC_BYTE
   bridge.resumeFrom(0, narrow as any)
   assert.equal(narrowResyncs, 0)
   assert.equal(narrow.doneCount(), 1)
+  bridge.dispose()
+})
+
+// ---------- 列表推送节流（第二批 P5） ----------
+
+function summaryHarness() {
+  const { proxy } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  const deltas: any[] = []
+  bridge.addSink({ ...makeRecordingSink(), push: (type: string, payload: any) => { if (type === 's2c.sessions.delta') deltas.push(JSON.parse(JSON.stringify(payload))) } } as any)
+  const row: any = { id: 's1', title: 't', status: 'running', lastActivityTs: 1, todos: null, todoItems: null,
+    pendingApproval: false, pendingQuestion: false, stats: { turns: 1 } }
+  ;(bridge as any).summaries.set('s1', row)
+  const push = () => (bridge as any).pushSummary(row)
+  return { bridge, deltas, row, push }
+}
+
+test('identical summary pushes are sent once', () => {
+  const { bridge, deltas, push } = summaryHarness()
+  push(); push(); push()
+  assert.equal(deltas.length, 1)
+  bridge.dispose()
+})
+
+test('stats-only changes are coalesced to one push per window; other changes go out at once', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const { bridge, deltas, row, push } = summaryHarness()
+  push()
+  row.stats = { turns: 2 }; push()
+  row.stats = { turns: 3 }; push()
+  assert.equal(deltas.length, 1, 'stats-only changes inside the window wait')
+
+  row.status = 'idle'; push()
+  assert.equal(deltas.length, 2, 'a status change is sent immediately, carrying the latest stats')
+  assert.equal(deltas[1].upserted[0].stats.turns, 3)
+
+  row.stats = { turns: 4 }; push()
+  row.stats = { turns: 5 }; push()
+  assert.equal(deltas.length, 2)
+  t.mock.timers.tick(SUMMARY_STATS_THROTTLE_MS)
+  assert.equal(deltas.length, 3, 'the window closes with one push of the newest stats')
+  assert.equal(deltas[2].upserted[0].stats.turns, 5)
+
+  t.mock.timers.tick(SUMMARY_STATS_THROTTLE_MS)
+  row.stats = { turns: 6 }; push()
+  assert.equal(deltas.length, 4, 'outside the window a stats change goes out at once')
   bridge.dispose()
 })
 

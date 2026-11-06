@@ -1242,6 +1242,13 @@ export declare class HostBridge {
   private readonly log?;
   readonly id: number;
   private summaries;
+  /**
+   * 列表推送节流（连接传输第二批 P5）。每个会话最近一次推出去的摘要指纹，
+   * 用来丢掉内容完全相同的重复推送；只改了 `stats` 的变化按 SUMMARY_STATS_THROTTLE_MS
+   * 合并，状态、标题、任务清单、待处理标记、活动描述的变化照旧立即推。
+   */
+  private readonly summaryPushed;
+  private readonly summaryStatsTimers;
   private activeTools;
   private approvals;
   private questions;
@@ -1374,6 +1381,8 @@ export declare class HostBridge {
   private applyProjection;
   private bumpPendingFlags;
   private pushSummary;
+  private noteSummaryPushed;
+  private forgetSummaryPush;
   listSessions(): SessionSummary[];
   /**
    * Archived rows from the last sessions.list, newest first. Served only on
