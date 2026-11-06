@@ -5,6 +5,29 @@
 > move the lower bound, at each `0.x` minor boundary, or when a host inside the
 > range breaks at runtime.
 
+## Runtime break — image read-back since `dsh-v0.2.2-alpha.2` (2026-11-06)
+
+- **Symptom (issue #42):** every conversation image (tool results and the
+  user's own uploads) spins forever on the phone on `0.2.2-alpha.2` through
+  `0.2.2-rc.1`; `0.2.1-rc.5` is unaffected.
+- **Cause:** `SessionController.attachment` changed its request from
+  `{ sessionId, attachmentId }` to `{ sessionId, attachment: ImageAttachmentRef }`.
+  The host now verifies the ref's `mediaType`/`bytes`/`width`/`height` against
+  the stored file and no longer checks that the session references the image
+  (`sessionId` is a gateway scope only). The bridge still sent the old shape, so
+  `readImage(undefined)` failed and the phone got `E_NOT_FOUND`; the iOS
+  thumbnail had no failure state. Earlier audits compared method names only, so
+  this signature change was missed — audit request shapes, not just presence.
+- **Fix (plugin, no protocol change):** `src/image-ref-index.ts` remembers the
+  full host ref for every image the bridge projects (live events, tail, history
+  pages) and, on a miss, pages back through session history (at most 20 pages of
+  500 messages). `HostBridge.attachmentData` sends `attachmentId` and
+  `attachment` together — the controller is injected directly, without schema
+  validation, so each generation reads its own field. A ref is only supplied when
+  that session projected the image, which restores the session-membership check
+  the new host dropped. `tests/dsh-api-proxy.test.ts` runs both host contracts.
+- **Declaration:** unchanged; both generations are served.
+
 ## UI integration check — native settings controls (2026-11-05)
 
 - **Runtime surface:** `@deepseek-ai/dsh-client-ui-primitives` is an implicit

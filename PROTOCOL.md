@@ -644,7 +644,7 @@ Host 不具备该能力时 `welcome.capabilities.sessionRestore=false`，请求�
 
 ### c2s.session.attachment（payload: sessionId, attachmentId, maxFrameBytes?, binary?）
 
-按 id 读回一张会话引用过的持久化图片（宿主校验该会话日志确实包含此 id 后才返回）。
+按 id 读回一张会话引用过的持久化图片：只有该会话的 user 行或成功的工具结果行投影过的 attachmentId 才能读回（DSH 0.2.2 起宿主不再核对会话，由 Bridge 校验）。
 RPC 响应 result 为 `{ "mediaType": "image/jpeg", "data": "<base64>" }`；宿主不可用或 id 无效回 `E_NOT_FOUND`。
 客户端应做磁盘缓存，避免重复拉取。
 

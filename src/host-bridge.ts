@@ -60,6 +60,7 @@ import { projectQueue, promptRequestId } from './prompt-queue.ts'
 import { hostFailureOf, wireCodeFor, wireErrorOf, type WireErrorCode } from './wire-errors.ts'
 import { formatLogLine } from './diagnostics.ts'
 import { AssistantStream, type AssistantStreamDelta } from './assistant-stream.ts'
+import { ImageRefIndex } from './image-ref-index.ts'
 
 export {
   MAX_MESSAGE_PROJECTION_BYTES,
@@ -156,6 +157,8 @@ export class HostBridge {
   private abort = new AbortController();
   private started = false
   private disposed = false
+  /** attachmentId → 宿主完整图片引用，供 attachmentData 补全 DSH 0.2.2+ 的读图参数。 */
+  private readonly imageRefs = new ImageRefIndex()
 
   readonly promptDeliveries: DispatchJournal<{ sessionId: string; content: unknown }, DeliveryReceipt>
   readonly scheduleMutations: DispatchJournal<unknown, MutationDispatchResult<unknown>>
@@ -596,6 +599,7 @@ export class HostBridge {
           this.quietCompletion.noteUserMessage(sessionId, userMessageSourceKind(event.data), event.seq);
         }
         this.captureAssistantText(sessionId, event);
+        this.imageRefs.remember(sessionId, [event]);
         const projection = projectEvent(sessionId, event);
         this.captureActivity(sessionId, event, projection?.data.tool as { name?: string; summary?: string } | undefined);
         if (projection) {
@@ -1031,6 +1035,7 @@ export class HostBridge {
       if (!response.result || !response.result.ok) return false;
       const result = response.result.value;
       const events = result.events ?? [];
+      this.imageRefs.remember(sessionId, events.map(row => row.event));
       const touched = new Map<number, number>();
       const projected = projectHistory(events, touched);
       const page = limitSessionPageMessages(projected);
@@ -1100,6 +1105,7 @@ export class HostBridge {
       });
       if (!response.result || !response.result.ok) return null;
       const result = response.result.value;
+      this.imageRefs.remember(sessionId, (result.events ?? []).map(row => row.event));
       // Some host versions include the boundary event even though beforeSeq
       // is exclusive. Enforce the phone protocol here so a client can never
       // request and append the same page indefinitely.
@@ -1118,7 +1124,16 @@ export class HostBridge {
     }
   }
 
-  /** Result of one attachment read-back for the phone. */
+  /**
+   * Result of one attachment read-back for the phone.
+   *
+   * 宿主读图参数有两代：DSH ≤ 0.2.1 收 `{sessionId, attachmentId}` 并自己在会话日志里
+   * 找引用；DSH 0.2.2 起改收 `{sessionId, attachment: 完整引用}`，且不再核对会话。
+   * 控制器是直接注入的实例、不经参数 schema 校验，所以两代字段一起传：旧宿主读前者，
+   * 新宿主读后者。完整引用来自 imageRefs（本会话投影过的图片）；找不到时不带
+   * `attachment`，旧宿主照常自查，新宿主读不到即回 null（E_NOT_FOUND）——手机因此
+   * 读不到不属于该会话的图片。
+   */
   async attachmentData(
     sessionId: string,
     attachmentId: string,
@@ -1126,9 +1141,10 @@ export class HostBridge {
     const read = this.apiProxy.sessions.attachment
     if (typeof read !== 'function') return null;
     try {
+      const ref = await this.imageRefs.resolve(sessionId, attachmentId, (id, beforeSeq) => this.readHistoryEvents(id, beforeSeq));
       const response = await read.call(this.apiProxy.sessions, {
         rpcId: randomUUID(),
-        payload: { sessionId, attachmentId },
+        payload: { sessionId, attachmentId, ...(ref ? { attachment: ref } : {}) },
       });
       if (!response.result || !response.result.ok) return null;
       const data = response.result.value.data;
@@ -1139,6 +1155,24 @@ export class HostBridge {
           : {}),
         data,
       };
+    } catch {
+      return null;
+    }
+  }
+
+  /** 图片引用回查用的原始历史页：只取事件，不投影、不推给手机。 */
+  private async readHistoryEvents(
+    sessionId: string,
+    beforeSeq: number | undefined,
+  ): Promise<{ events: SessionEventLike[]; hasMore: boolean } | null> {
+    try {
+      const response = await this.apiProxy.sessions.history({
+        rpcId: randomUUID(),
+        payload: { sessionId, ...(beforeSeq === undefined ? {} : { beforeSeq }), maxMessages: MAX_HISTORY_PAGE_MESSAGES },
+      });
+      if (!response.result || !response.result.ok) return null;
+      const result = response.result.value;
+      return { events: (result.events ?? []).map(row => row.event), hasMore: Boolean(result.hasMore) };
     } catch {
       return null;
     }

@@ -80,7 +80,12 @@ interface SessionControllerLike {
   selectModel(request: Record<string, unknown>): Promise<{ selected: { provider: string; model: string; reasoningEffort?: string } }>
   rename(request: { sessionId: string; title: string }): Promise<{ title: string; seq: number }>
   prompt(request: Record<string, unknown>, signal: AbortSignal): Promise<{ accepted: true }>
-  attachment(request: { sessionId: string; attachmentId: string }): Promise<{ attachment: { mediaType?: string }; data: string }>
+  /**
+   * 两代参数：DSH ≤ 0.2.1 读 `attachmentId` 并自查会话日志；DSH 0.2.2 起只读
+   * `attachment`（完整 ImageAttachmentRef）且不查会话。适配层原样透传，
+   * 由 HostBridge 负责同时带上两者。
+   */
+  attachment(request: { sessionId: string; attachmentId: string; attachment?: Readonly<Record<string, unknown>> }): Promise<{ attachment: { mediaType?: string }; data: string }>
   cancel(request: { sessionId: string }): { accepted: true }
   /** Absent on hosts that predate DSH's pending-queue RPC. */
   updateQueue?(request: { sessionId: string; itemId: string; action: { kind: string } }): Promise<{ accepted: true }>

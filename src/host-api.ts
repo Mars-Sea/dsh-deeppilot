@@ -48,8 +48,13 @@ interface SessionsApiLike {
     Promise<RpcResponseLike<{ title: string; seq: number }>>
   cancel?(req: RpcRequestLike<{ sessionId: string }>):
     Promise<RpcResponseLike<Record<string, unknown> | undefined>>
-  /** Reads one durable image back after the host verifies the session log references its id. */
-  attachment?(req: RpcRequestLike<{ sessionId: string; attachmentId: string }>):
+  /**
+   * Reads one durable image back. DSH ≤ 0.2.1 reads `attachmentId` and checks the
+   * session log itself; DSH 0.2.2+ reads the full `attachment` reference and no
+   * longer checks the session, so HostBridge sends both and only supplies a
+   * reference it saw projected in that session.
+   */
+  attachment?(req: RpcRequestLike<{ sessionId: string; attachmentId: string; attachment?: import('./host-event-projection.ts').HostImageRef }>):
     Promise<RpcResponseLike<{ attachment: { mediaType?: string }; data: string }>>
   /** Remove or steer one pending inbox item. Absent on hosts without the
    * DSH session.updateQueue RPC; the promptQueue capability bit probes it. */

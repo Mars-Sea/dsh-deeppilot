@@ -326,6 +326,48 @@ function attachmentProjection(data: unknown): { attachments?: ReturnType<typeof 
   return attachments.length > 0 ? { attachments } : {};
 }
 
+/**
+ * 宿主持久化图片引用（ImageAttachmentRef）的原样对象。
+ *
+ * 只要求 `attachmentId`；其余字段（mediaType/bytes/width/height/name/
+ * originalDimensions…）由宿主生成、由宿主读取时自行核对，这里原样保留、不做
+ * 字段裁剪，免得宿主以后新增必填字段时被插件悄悄丢掉。
+ */
+export type HostImageRef = Readonly<Record<string, unknown> & { attachmentId: string }>
+
+/**
+ * 取出一条事件里手机能看到的图片引用，供附件读回补全参数。
+ *
+ * 范围与投影保持一致：只看 user/message 与成功的 tool/result——手机只会拿到这两
+ * 类行上的 attachmentId，不在投影里的图片也不该被读回。
+ * 职责：DSH 0.2.2 起宿主读图接口要完整引用，且不再核对会话是否引用过这张图；
+ * Bridge 用这里收集的引用同时完成「补全参数」和「会话归属校验」。
+ */
+export function eventImageRefs(event: SessionEventLike): HostImageRef[] {
+  let message: unknown
+  if (event.type === 'user/message') message = event.data
+  else if (event.type === 'tool/result') {
+    const data = event.data as { error?: unknown; message?: unknown } | undefined
+    if (data?.error !== undefined) return []
+    message = data?.message
+  } else return []
+  if (!message || typeof message !== 'object') return []
+  // user/message 外层是 {turn, step, message}，tool/result 已经是 message 本身。
+  const inner = (message as { message?: unknown }).message
+  const content = (inner && typeof inner === 'object' ? inner as { content?: unknown } : message as { content?: unknown }).content
+  if (!Array.isArray(content)) return []
+  const refs: HostImageRef[] = []
+  for (const part of content) {
+    const block = part as { type?: unknown; attachment?: unknown } | null
+    if (!block || block.type !== 'image') continue
+    const ref = block.attachment as { attachmentId?: unknown } | undefined
+    if (!ref || typeof ref !== 'object') continue
+    if (typeof ref.attachmentId !== 'string' || ref.attachmentId.length === 0) continue
+    refs.push({ ...(ref as Record<string, unknown>), attachmentId: ref.attachmentId })
+  }
+  return refs
+}
+
 /** Extract reasoning ("thinking") text from assistant message payloads. */
 function messageThinking(data: unknown): string {
   if (!data || typeof data !== 'object') return '';

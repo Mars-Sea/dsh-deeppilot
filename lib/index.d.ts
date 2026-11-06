@@ -608,6 +608,16 @@ interface PendingSnapshotPayload {
   approvals: PendingApprovalPayload[];
   questions: PendingQuestionPayload[];
 }
+/**
+ * 宿主持久化图片引用（ImageAttachmentRef）的原样对象。
+ *
+ * 只要求 `attachmentId`；其余字段（mediaType/bytes/width/height/name/
+ * originalDimensions…）由宿主生成、由宿主读取时自行核对，这里原样保留、不做
+ * 字段裁剪，免得宿主以后新增必填字段时被插件悄悄丢掉。
+ */
+type HostImageRef = Readonly<Record<string, unknown> & {
+  attachmentId: string;
+}>;
 interface CommandsApiLike {
   list(req: RpcRequestLike<{
     sessionId: string;
@@ -705,10 +715,16 @@ interface SessionsApiLike {
   cancel?(req: RpcRequestLike<{
     sessionId: string;
   }>): Promise<RpcResponseLike<Record<string, unknown> | undefined>>;
-  /** Reads one durable image back after the host verifies the session log references its id. */
+  /**
+   * Reads one durable image back. DSH ≤ 0.2.1 reads `attachmentId` and checks the
+   * session log itself; DSH 0.2.2+ reads the full `attachment` reference and no
+   * longer checks the session, so HostBridge sends both and only supplies a
+   * reference it saw projected in that session.
+   */
   attachment?(req: RpcRequestLike<{
     sessionId: string;
     attachmentId: string;
+    attachment?: HostImageRef;
   }>): Promise<RpcResponseLike<{
     attachment: {
       mediaType?: string;
@@ -1277,6 +1293,8 @@ export declare class HostBridge {
   private abort;
   private started;
   private disposed;
+  /** attachmentId → 宿主完整图片引用，供 attachmentData 补全 DSH 0.2.2+ 的读图参数。 */
+  private readonly imageRefs;
   readonly promptDeliveries: DispatchJournal<{
     sessionId: string;
     content: unknown;
@@ -1417,11 +1435,22 @@ export declare class HostBridge {
     messages: MessageProjection[];
     hasMore: boolean;
   } | null>;
-  /** Result of one attachment read-back for the phone. */
+  /**
+   * Result of one attachment read-back for the phone.
+   *
+   * 宿主读图参数有两代：DSH ≤ 0.2.1 收 `{sessionId, attachmentId}` 并自己在会话日志里
+   * 找引用；DSH 0.2.2 起改收 `{sessionId, attachment: 完整引用}`，且不再核对会话。
+   * 控制器是直接注入的实例、不经参数 schema 校验，所以两代字段一起传：旧宿主读前者，
+   * 新宿主读后者。完整引用来自 imageRefs（本会话投影过的图片）；找不到时不带
+   * `attachment`，旧宿主照常自查，新宿主读不到即回 null（E_NOT_FOUND）——手机因此
+   * 读不到不属于该会话的图片。
+   */
   attachmentData(sessionId: string, attachmentId: string): Promise<{
     mediaType?: string;
     data: string;
   } | null>;
+  /** 图片引用回查用的原始历史页：只取事件，不投影、不推给手机。 */
+  private readHistoryEvents;
   commandOperation(operation: 'list' | 'execute' | 'permissions' | 'feedback', payload: Record<string, unknown>): Promise<SessionManagementResult<unknown>>;
   exportSession(sessionId: string, signal: AbortSignal, format?: SessionExportFormat): Promise<Response>;
   /** 由会话目录决定技能可见性；不读取正文，也不把本机路径发给移动端。 */
