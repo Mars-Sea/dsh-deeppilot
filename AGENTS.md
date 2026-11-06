@@ -117,8 +117,16 @@ release commit, npm package, Git tag, and GitHub Release must all agree.
    from unrelated worktree edits before committing.
 2. Commit the release, push it, wait for CI, then create and push the matching
    annotated `vX.Y.Z` tag from that exact commit.
-3. Prepare the GitHub Release as a draft. Its notes must contain an English
-   section and a Simplified Chinese section describing the same changes.
+3. Prepare the GitHub Release as a draft from `docs/RELEASE_NOTES-X.Y.Z.md`
+   (its first line is the title, the rest is the body):
+   - Title: `DeepPilot X.Y.Z` only, with no tagline.
+   - Body: `## 中文` first, then `## English`, with the same items in both.
+   - One bullet per user-visible change: a bold lead-in and one sentence, at
+     most about seven bullets, compatibility last. Keep at most one key number
+     per item; protocol fields, capability bits and test counts belong in
+     `PROTOCOL.md` and the evidence docs, not here.
+   - Do not hard-wrap: each bullet is one line, because GitHub release pages
+     render every newline as a line break.
 4. 获授权后，在匹配的版本标签上手动运行 `.github/workflows/publish.yml`，
    通过 OIDC 身份认证完成 npm 可信发布并生成来源证明（Provenance）。
    稳定版使用 `latest`（稳定分发标签），预发布版使用 `alpha`（预发布分发标签）；

@@ -45,7 +45,7 @@
    `package-lock.json` 顶层与根包条目的版本；提交并推送，等待持续集成（CI）通过。
    版本提交必须已经进入 `main`，且该提交包含 `publish.yml`。
 2. 经用户授权发布该版本后，从精确的发布提交创建并推送附注标签 `v<版本>`，
-   准备包含英文与简体中文说明的 GitHub 发布草稿。
+   按 `AGENTS.md` 发布流程第 3 步的格式（中文在前、英文在后、短标题、不硬换行）准备 GitHub 发布草稿。
 3. 在对应标签上手动运行工作流。下例的 `0.9.5` 仅为示例，替换为已授权发布的版本：
 
    ```sh
@@ -210,6 +210,15 @@
     `dsh-deeppilot@0.9.15`，用真实 `0.2.2-rc.1` 宿主启动：插件自有端口 `/phone/health`
     返回 200，`serverVersion` 为 `0.9.15`、`protocolVersion` 2、`dataPlane: true`，
     日志显示按需完成通知工具已注册；GitHub Release 在这一步通过后才公开并标记 Latest。
+
+14. `0.9.16` 的实际发布结果（2026-11-06）：PR #43 压缩合并为 `1515b7b`，`main` 上 CI（`42170870772`）、
+    CodeQL（`42170870769`）、helper 构建（`42170870802`）均绿；附注标签 `v0.9.16` 指向
+    `1515b7b7059be850e6abf15071b1a5075e5bfd27`。`publish.yml` 运行 `42171736739`（`latest`）整次为绿，
+    **首次直接公开**，未进入 staged 区。注册表 `latest = 0.9.16`，来源证明类型为
+    `https://slsa.dev/provenance/v1`；69 个条目、解包 131,743,027 字节。随后在全新隔离 `DSH_HOME` 中从 npm
+    安装 `dsh-deeppilot@0.9.16`，用真实 `0.2.2-rc.1` 宿主启动：`/phone/health` 返回 200，`serverVersion`
+    为 `0.9.16`、`protocolVersion` 2、`dataPlane: true`，补丁未写 `local.enabled` 时局域网监听照常上线；
+    GitHub Release 在这一步通过后才公开并标记 Latest。
 
 ## 五、官方资料
 
