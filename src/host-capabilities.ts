@@ -107,6 +107,10 @@ export const BRIDGE_INVARIANT_CAPABILITIES = [
   'widgetPush',
   'liveActivityPush',
   'deviceRevoke',
+  'sessionInterest',
+  'compressedFrames',
+  'incrementalTail',
+  'routeHints',
 ] as const satisfies ReadonlyArray<keyof WelcomeCapabilities>
 
 /**
@@ -122,6 +126,14 @@ export function capabilityBits(
     replay: true,
     // 插件自身能力，不依赖宿主：导出块与附件可按请求改用二进制帧。
     binaryFrames: true,
+    // 插件自身能力：连接声明关注集合后，会话事件只发给打开或关注的会话。
+    sessionInterest: true,
+    // 插件自身能力：客户端声明 acceptEncoding 后，超过 8 KB 的下行帧以 deflate-raw 压缩。
+    compressedFrames: true,
+    // 插件自身能力：session.open 带 sinceSeq 时回增量 tail（无法保证完整时回全量）。
+    incrementalTail: true,
+    // 插件自身能力：welcome 带当前可用的局域网 / Funnel 地址，供手机自动选路。
+    routeHints: true,
     approvals: true,
     questions: true,
     pendingSnapshot: true,

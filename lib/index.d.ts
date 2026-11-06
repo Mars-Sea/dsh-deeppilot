@@ -406,6 +406,26 @@ interface WelcomeCapabilities {
    * see binary-frame.ts). Plugin-level, independent of the host. Absent ⇒ the
    * client must keep requesting base64 text frames. */
   binaryFrames?: boolean;
+  /** Bridge honours `watchSessions` on c2s.auth.prove and c2s.session.watch:
+   * a connection that declared an interest set only receives
+   * s2c.session.event / s2c.session.queue (live and replayed) for sessions it
+   * opened or watches. Plugin-level. Absent ⇒ the client gets every
+   * session's events, as before. */
+  sessionInterest?: boolean;
+  /** Bridge compresses downlink frames over 8 KB as binary format 2
+   * (`[2][deflate-raw(envelope JSON)]`) once the client listed "deflate-raw"
+   * in `acceptEncoding` on c2s.auth.prove. Plugin-level. Absent ⇒ the field is
+   * ignored and every JSON frame stays a text frame. */
+  compressedFrames?: boolean;
+  /** Bridge answers c2s.session.open carrying `sinceSeq` with an incremental
+   * tail (`incremental: true`) holding only rows changed after that seq, or
+   * with a full tail when it cannot prove the delta complete. Plugin-level. */
+  incrementalTail?: boolean;
+  /** Bridge includes `routes` (current LAN endpoints with their certificate
+   * fingerprint, and the public Funnel URL) in s2c.welcome so the client can
+   * prefer the LAN on the same network and fall back to Funnel elsewhere.
+   * Plugin-level. */
+  routeHints?: boolean;
 }
 type SessionStatus = "running" | "idle" | "error" | "unknown";
 /**
@@ -1122,6 +1142,14 @@ interface BridgeSink {
    * every push/replay delivery; unknown broadcast types are denied.
    */
   canReceive(scope: DeviceScope): boolean;
+  /**
+   * Interest filter (capability `sessionInterest`): whether this sink wants a
+   * frame it is already permitted to receive. Connections that declared an
+   * interest set drop other sessions' events here. Absent ⇒ wants everything.
+   * The bridge consults it when sizing a replay window; sinks apply it again
+   * on every push.
+   */
+  accepts?(type: string, payload: unknown): boolean;
 }
 /**
  * Offline push fan-out (F-9 离线推送). The bridge forwards every
@@ -1219,6 +1247,13 @@ export declare class HostBridge {
   private readonly log?;
   readonly id: number;
   private summaries;
+  /**
+   * 列表推送节流（连接传输第二批 P5）。每个会话最近一次推出去的摘要指纹，
+   * 用来丢掉内容完全相同的重复推送；只改了 `stats` 的变化按 SUMMARY_STATS_THROTTLE_MS
+   * 合并，状态、标题、任务清单、待处理标记、活动描述的变化照旧立即推。
+   */
+  private readonly summaryPushed;
+  private readonly summaryStatsTimers;
   private activeTools;
   private approvals;
   private questions;
@@ -1307,6 +1342,12 @@ export declare class HostBridge {
    * reader without interactions.respond never gets the missed approval
    * frames back (R1/P2).
    */
+  /**
+   * 按序补发游标之后的帧。先按权限与关注集合筛出该 sink 真正会收到的帧，
+   * 估算字节数超过 REPLAY_RESYNC_BYTES 时改发 `s2c.resync`：补发是同步一次性
+   * 写出的，经 Funnel 时插件这侧看不到积压，大补发会把之后所有请求响应堵在
+   * 链路上（实测 450 帧堵 37 秒）。重新同步让客户端只拉列表和正在看的会话。
+   */
   resumeFrom(cursor: number, target?: BridgeSink): boolean;
   refreshLiveActivities(): void;
   private record;
@@ -1345,6 +1386,8 @@ export declare class HostBridge {
   private applyProjection;
   private bumpPendingFlags;
   private pushSummary;
+  private noteSummaryPushed;
+  private forgetSummaryPush;
   listSessions(): SessionSummary[];
   /**
    * Archived rows from the last sessions.list, newest first. Served only on
@@ -1361,7 +1404,7 @@ export declare class HostBridge {
   /** Resolve only the exact invocation in this session; never guess from the latest tool. */
   private loadApprovalArguments;
   /** Tail history for an opened session; pushes s2c.session.tail to the sink. */
-  openSession(sink: BridgeSink, sessionId: string, tailCount: number): Promise<boolean>;
+  openSession(sink: BridgeSink, sessionId: string, tailCount: number, sinceSeq?: number): Promise<boolean>;
   /**
    * Pull one session's projection baseline and fold every key
    * through applyProjection — unknown keys are ignored there, `null` means the

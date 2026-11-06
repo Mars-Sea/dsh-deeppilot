@@ -13,6 +13,7 @@ import {
   normalizePageLimit,
   projectHistory,
 } from '../src/host-event-projection.ts'
+import { incrementalTail } from '../src/host-bridge.ts'
 
 const event = (seq: number, type: string, data?: unknown): unknown => ({ type, seq, time: 1, data })
 
@@ -117,4 +118,37 @@ test('duplicate seqs keep the last projection', () => {
   assert.equal(messages.length, 1, '同一 seq 只保留一条')
   const window = historyWindow(source, { limit: 1 })
   assert.equal(projectHistory(window.events as never).length, 1)
+})
+
+// ---------- 增量 tail（能力 incrementalTail） ----------
+
+const incrementalEvents = [
+  { event: { type: 'user/message', seq: 1, data: '问题' } },
+  { event: { type: 'assistant/message', seq: 2, data: { text: '先看看' } } },
+  { event: { type: 'tool/call', seq: 3, data: { name: 'bash', arguments: '{"command":"ls"}', callId: 'c1' } } },
+  { event: { type: 'turn/start', seq: 4, data: {} } },
+  { event: { type: 'tool/result', seq: 5, data: { callId: 'c1', message: { content: 'ok' } } } },
+  { event: { type: 'assistant/message', seq: 6, data: { text: '完成' } } },
+] as any[]
+
+function deltaFor(sinceSeq: number) {
+  const touched = new Map<number, number>()
+  const projected = projectHistory(incrementalEvents, touched)
+  return incrementalTail(incrementalEvents, projected, touched, sinceSeq)
+}
+
+test('incremental tail includes rows after sinceSeq and older tool rows completed after it', () => {
+  const delta = deltaFor(4)!
+  assert.deepEqual(delta.map((m) => m.seq), [3, 6], 'tool call 3 changed at seq 5; assistant 6 is new')
+  assert.equal(delta[0]!.tool?.state, 'ok')
+})
+
+test('incremental tail is empty when nothing changed after sinceSeq', () => {
+  assert.deepEqual(deltaFor(6), [])
+})
+
+test('incremental tail falls back to a full tail when completeness cannot be proven', () => {
+  assert.equal(deltaFor(0), undefined, 'window starts after sinceSeq: events in between may be missing')
+  assert.equal(deltaFor(7), undefined, 'client claims a seq the host never produced')
+  assert.equal(incrementalTail([], [], new Map(), 3), undefined)
 })

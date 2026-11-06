@@ -9,7 +9,7 @@
  * tests/wire-rows.test.ts 固定为显式期望）。
  */
 
-import { validSendId } from './connection-policy.ts'
+import { MAX_WATCH_SESSION_ID_CHARS, MAX_WATCH_SESSIONS, parseWatchSessions, validSendId } from './connection-policy.ts'
 import { normalizePageLimit } from './host-event-projection.ts'
 import { BINARY_CHUNK_BYTES, MAX_BINARY_ATTACHMENT_BYTES } from './binary-frame.ts'
 import type { SessionAttachmentBinaryAck } from './protocol.ts'
@@ -185,12 +185,21 @@ export const sessionRows: readonly WireFrameRow[] = [
       if (!isOptionalField(checked.value, 'tailCount', (v) => isInteger(v, 1, 10000))) {
         return reject('E_PROTOCOL', 'invalid tailCount')
       }
+      // 能力 incrementalTail：客户端本机已完整同步到的消息 seq。
+      if (!isOptionalField(checked.value, 'sinceSeq', (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0)) {
+        return reject('E_PROTOCOL', 'invalid sinceSeq')
+      }
       return checked
     },
     handle: async (ctx, payload) => {
       const sessionId = payload.sessionId as string
       const buffered = ctx.bufferOpenEvents(sessionId)
-      const ok = await ctx.bridge.openSession(ctx, sessionId, (payload.tailCount as number | undefined) ?? 100)
+      const ok = await ctx.bridge.openSession(
+        ctx,
+        sessionId,
+        (payload.tailCount as number | undefined) ?? 100,
+        payload.sinceSeq as number | undefined,
+      )
       if (!ok) {
         // 打开失败：仅当缓冲仍属于本次尝试时才移除，避免清掉并发打开的新缓冲。
         ctx.discardOpenBuffer(sessionId, buffered)
@@ -213,6 +222,27 @@ export const sessionRows: readonly WireFrameRow[] = [
     },
     handle: (ctx, payload) => {
       ctx.closeOpenSession(payload.sessionId as string)
+      ctx.send('s2c.ack', {})
+    },
+  },
+  {
+    // 关注集合整体替换：不回 tail、不打"正在查看"标记，所以不影响通知过滤。
+    type: 'c2s.session.watch',
+    stage: 'authenticated',
+    scopes: READ,
+    capability: 'sessionInterest',
+    doc: 'PROTOCOL.md c2s.session.watch',
+    validate: (payload) => {
+      const checked = payloadObject(payload)
+      if (!checked.ok) return checked
+      const ids = checked.value.sessionIds
+      if (!Array.isArray(ids) || ids.length > MAX_WATCH_SESSIONS || !ids.every((id) => isText(id, MAX_WATCH_SESSION_ID_CHARS))) {
+        return reject('E_PROTOCOL', `sessionIds must be an array of at most ${MAX_WATCH_SESSIONS} session ids`)
+      }
+      return checked
+    },
+    handle: (ctx, payload) => {
+      ctx.setWatchedSessions(parseWatchSessions(payload.sessionIds) ?? [])
       ctx.send('s2c.ack', {})
     },
   },

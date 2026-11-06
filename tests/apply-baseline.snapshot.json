@@ -1,8 +1,8 @@
 {
   "snapshot": {
     "protocolVersion": 2,
-    "serverVersion": "0.9.15",
-    "pluginVersion": "0.9.15",
+    "serverVersion": "0.9.16",
+    "pluginVersion": "0.9.16",
     "enabled": true,
     "identityPath": "<dataDir>/devices-v2.json",
     "pairingReady": true,
@@ -12,10 +12,14 @@
       "<lanIp>"
     ],
     "local": {
-      "phase": "disabled",
-      "port": 3098,
-      "endpoints": [],
-      "updatedAt": "<ts>"
+      "phase": "online",
+      "port": "<port>",
+      "endpoints": [
+        "<endpoint>"
+      ],
+      "tlsFingerprint": "<fingerprint>",
+      "updatedAt": "<ts>",
+      "tlsIdentityRegenerated": true
     },
     "remote": {
       "provider": "tailscale-funnel",
@@ -87,8 +91,8 @@
   ],
   "snapshotAfterLocalEnabled": {
     "protocolVersion": 2,
-    "serverVersion": "0.9.15",
-    "pluginVersion": "0.9.15",
+    "serverVersion": "0.9.16",
+    "pluginVersion": "0.9.16",
     "enabled": true,
     "identityPath": "<dataDir>/devices-v2.json",
     "pairingReady": true,
@@ -132,8 +136,8 @@
   "idleVolatileUpdateKeepsLocalOnline": true,
   "snapshotAfterRemoteEnabled": {
     "protocolVersion": 2,
-    "serverVersion": "0.9.15",
-    "pluginVersion": "0.9.15",
+    "serverVersion": "0.9.16",
+    "pluginVersion": "0.9.16",
     "enabled": true,
     "identityPath": "<dataDir>/devices-v2.json",
     "pairingReady": true,
@@ -174,15 +178,14 @@
     "remoteProviderRetained": "tailscale-funnel",
     "remoteEnabledRetained": true,
     "remoteHostnameRetained": "dsh-deeppilot",
-    "localEnabledRetained": true,
     "localPortRetained": true,
     "pushProviderRetained": "none",
     "pushRelayUrlRetained": "http://insecure.example",
     "devicesPathUnderDataDir": true
   },
   "transportLogs": [
-    "[deeppilot] <ts> INFO local transport disabled",
     "[deeppilot] <ts> INFO LAN TLS identity created: fingerprint=<fingerprint>; previously paired LAN devices must pair again",
+    "[deeppilot] <ts> INFO local transport listening on https://<bind>:<port> (tls fingerprint <fingerprint>)",
     "[deeppilot] <ts> INFO local transport listening on https://<bind>:<port> (tls fingerprint <fingerprint>)",
     "[deeppilot] <ts> INFO remote Funnel unavailable: embedded tunnel helper unavailable: <path>: Error: ENOENT: no such file or directory, access '<path>'"
   ],

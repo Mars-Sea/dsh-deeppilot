@@ -31,6 +31,20 @@ v2 不接受 v1 Bearer Token、`c2s.hello.auth` 或任何降级握手；升级�
 - `welcome.capabilities.binaryFrames` 缺失或 false 时客户端不得带 `binary: true`；旧服务端会忽略该字段，照常回文本帧。
 - 客户端发往服务端的帧仍然只能是文本帧。
 
+### 1.2 压缩帧（可选，能力位 `compressedFrames`）
+
+客户端在 `c2s.auth.prove` 的 `acceptEncoding` 里列出 `"deflate-raw"` 后，服务端把序列化后超过
+8 KB 的下行 JSON 帧改为 WebSocket 二进制帧发送，布局为：
+
+`[格式 u8 = 2][整个信封 JSON（UTF-8）经 deflate-raw（RFC 1951，无 zlib 头）压缩后的字节]`
+
+- 解压后就是原来的文本帧，`id`、`seq`、重放与诊断规则全部不变；任何类型的帧都可能被压缩，
+  包括 welcome、补发帧和请求响应。8 KB 及以下的帧照旧发文本帧。
+- 认证完成之前（challenge 等）一律是文本帧。
+- 客户端须对解压后的大小设上限（建议与单帧上限相同），超限或解压失败时丢弃该帧。
+- 未声明 `acceptEncoding` 的客户端永远收不到格式 2。格式 1（§1.1）不压缩，仍只用于请求了
+  `binary: true` 的分块响应。
+
 ## 2. 连接与鉴权
 
 ### 2.0 传输层诊断标识（可选扩展）
@@ -165,6 +179,8 @@ LAN Host 回显自己的证书指纹，App 若持有二维码指纹则必须比�
   "deviceName": "iPhone 15 Pro",
   "appVersion": "0.1.0",
   "resumeCursor": 1042,
+  "watchSessions": ["session-…"],
+  "acceptEncoding": ["deflate-raw"],
   "clientRole": "widget",
   "signature": "<ASN.1 DER ECDSA P-256/SHA-256 signature, base64url>"
 } }
@@ -177,6 +193,13 @@ LAN Host 回显自己的证书指纹，App 若持有二维码指纹则必须比�
   广播 sink、不参与 seq 重放（`resumeCursor` 被忽略）、不更新设备
   lastSeen，也**不**抑制离线 APNs 告警推送（小组件连接不算"设备在线"）。
   签名输入不含 `clientRole`，v2 签名规范不变。
+- `watchSessions` 可选（能力 `sessionInterest`）：客户端本机有缓存、需要保持最新的
+  会话 ID，最多 16 个。带上这个字段（空数组也算）后，该连接只收到已打开或在这个集合里的
+  会话的 `s2c.session.event` 与 `s2c.session.queue`，实时推送和断线补发都按这个范围；
+  不带则照旧收全部会话事件。服务端在补发之前就应用这个集合。字段不合法时按"未声明"
+  处理，不拒绝认证。它只收窄本设备已有权限的下行内容，所以不进签名输入。
+- `acceptEncoding` 可选（能力 `compressedFrames`）：客户端能解的下行压缩编码，目前只认
+  `"deflate-raw"`，见 §1.2。只改变下行编码，不进签名输入；旧服务端忽略。
 
 签名输入必须是下列 UTF-8 字节。文本字段先做无 padding 的 base64url；时间戳和游标
 必须是十进制有限整数，缺失游标写 `-`：
@@ -249,9 +272,24 @@ APNs 必须同时具备 notifications.register 和对应通知类别的内容权
   "scopes": ["sessions.read", "prompt.send"],
   "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "pendingSnapshot": true, "notifyAllCategories": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true, "widgetPush": true, "deviceRevoke": true },
   "cursor": 1042,
-  "resumed": true
+  "resumed": true,
+  "routes": {
+    "lan": { "urls": ["https://192.168.1.20:3098"], "tlsFingerprint": "sha256:…" },
+    "remote": { "url": "https://example.funnel.ts.net" }
+  }
 } }
 ```
+
+`routes` 可选（能力 `routeHints`）：本主机当前可用的连接地址，形式与配对信息的 `host` 相同。
+`lan` 只在局域网监听在线时出现，只含 RFC1918 地址（物理网卡优先），客户端按顺序尝试，连接时只信任
+`tlsFingerprint` 一致的证书；`remote` 只在 Funnel 在线时出现，走系统信任链。插件的局域网监听始终开启，
+不提供关闭开关。小组件连接（`clientRole: "widget"`）不带此字段。
+
+- 这些地址只经已认证的连接下发，因此可信。客户端应保存并在每次 welcome 时覆盖（电脑的局域网地址、
+  Funnel 状态都会变）。
+- 客户端可以据此在同一网络下先走局域网、失败或在外时走 `remote`；经局域网配对的设备也因此获得公网地址。
+- 局域网证书密钥重建后指纹会变：经 `remote` 认证的连接收到的新 `tlsFingerprint` 可以直接替换本机保存的值，
+  无需重新配对。只能走局域网、拿不到 `remote` 的设备仍须重新配对。
 
 ## 3. 会话列表
 
@@ -312,18 +350,42 @@ cacheWriteTokens)`；输入总量 = `inputTokens + cacheReadTokens + cacheWriteT
 { "type": "s2c.sessions.delta", "payload": { "upserted": [SessionSummary], "removedIds": [] } }
 ```
 
+推送节流：同一会话内容完全相同的摘要不重复推送；只有 `stats` 变化的推送，同一会话 5 秒内最多一次（窗口结束时推出最新值），状态、标题、任务清单、待处理标记、`activity` 的变化立即推送并带上当时最新的 `stats`。客户端不应依赖 `stats` 逐步实时到达。
+
 会话与项目均按 `lastActivityTs` 从新到旧展示；项目使用项目内最新会话时间排序。归档后 Bridge 必须把该会话放入 `removedIds`，不得继续出现在普通列表。
 
 ## 4. 会话明细
 
-### c2s.session.open（payload: sessionId, tailCount? 默认 100）
+### c2s.session.open（payload: sessionId, tailCount? 默认 100, sinceSeq?）
 
-服务端先回一次性 `s2c.session.tail`，随后该会话实时事件以 `s2c.session.event` 推送。历史快照请求尚未完成时产生的实时事件必须暂存，并在 tail 之后按原顺序发送，客户端不得先看到 event 再被较旧的 tail 回滚。多设备各自 open 各自收，互不影响。
+服务端先回一次性 `s2c.session.tail`，随后该会话实时事件以 `s2c.session.event` 推送。没有声明关注集合的连接（见 `c2s.auth.prove` 的 `watchSessions`）还会收到所有其他会话的事件，这是旧行为，客户端必须容忍并忽略自己不需要的事件。
+
+`sinceSeq` 可选（能力 `incrementalTail`）：客户端本机已经和服务端完整同步到的消息 `seq`。服务端能证明增量完整时，
+回的 `s2c.session.tail` 带 `incremental: true` 与回显的 `sinceSeq`，`messages` 只含在 `sinceSeq` 之后**被改动过**
+的行：既包括 `seq > sinceSeq` 的新行，也包括 `seq ≤ sinceSeq`、但之后才收到结果的工具行（结果按 `callId`
+合并回调用行）。客户端合并规则：用增量行替换本机 `(sinceSeq, 增量最新 seq]` 区间内的行，其余行保留，
+`seq ≤ sinceSeq` 的增量行按 `seq` 覆盖；`oldestSeq` 与 `hasMore` 在增量帧里不改变本机的分页状态。
+服务端无法证明增量完整时回普通全量 tail（没有 `incremental` 字段），客户端两种都必须能处理。以下情况一律回全量：
+本次历史窗口没有覆盖到 `sinceSeq`、`sinceSeq` 比窗口里最新的事件还新、增量本身超过单页 900 KB。
+客户端应以最近一次 tail（全量或增量）实际覆盖到的位置作为 `sinceSeq`，而不是本机收到的最大实时事件序号：
+不在关注集合里的会话会漏收实时事件，最大序号之前可能有缺口。历史快照请求尚未完成时产生的实时事件必须暂存，并在 tail 之后按原顺序发送，客户端不得先看到 event 再被较旧的 tail 回滚。多设备各自 open 各自收，互不影响。
 
 ### c2s.session.close（payload: sessionId）
 
 客户端离开会话详情时发送；服务端取消该连接对该会话的实时订阅与“正在查看”标记，
-不关闭 WebSocket，也不终止会话 turn。该帧为幂等通知，不产生响应。
+不关闭 WebSocket，也不终止会话 turn。该帧为幂等通知，服务端回 `s2c.ack`，客户端可以忽略。
+
+### c2s.session.watch（payload: sessionIds）
+
+可选 v2 扩展，需要 `welcome.capabilities.sessionInterest=true`。用新列表整体替换本连接的关注集合，
+最多 16 个会话 ID，服务端回 `s2c.ack`。超过上限或载荷不合法时回 `E_PROTOCOL`，集合保持不变。
+
+- 关注只决定这个会话的 `s2c.session.event` / `s2c.session.queue` 是否下发：不回 tail，不打"正在查看"
+  标记，因此不影响通知过滤与 APNs 抑制。
+- 已打开（含正在打开、tail 还没回）的会话不论是否在集合里都会收到事件；关闭后若不在集合里即停止。
+- 未在 `auth.prove` 声明过关注集合的连接发送此帧后，同样切换为按关注投递。
+- 客户端维护建议：集合 = 当前打开的会话 + 本机有缓存且需要保持最新的会话（如预取的会话）。
+  移出集合的会话本机缓存视为过期，再次进入时重新拉取。
 
 ### s2c.session.tail 与 c2s.session.history
 
@@ -853,6 +915,10 @@ deeppilot/setDeviceName(deviceId, customName) -> customName | null
 
 - 每个 s2c 推送帧信封额外携带数值字段 seq（服务端本次启动以来单调递增），覆盖 sessions.delta / session.event / notify / pending.* 。请求响应帧不占 seq。
 - 重连时 `c2s.auth.prove` 带 `resumeCursor`：命中缓冲则按序补发原帧，补发完追加一帧 `s2c.resume.done`。
+- 补发只包含这台设备有权限、并且在其关注范围内的帧（见 `watchSessions`）。这些帧的载荷合计超过
+  512 KB 时，服务端不逐条补发，改发 `s2c.resync`；此时 welcome 的 `resumed` 已经是 true，客户端
+  以 resync 为准、不再等待 `s2c.resume.done`。原因：补发是一次性写出的，过大的补发会把之后的
+  请求响应全部堵在链路后面。
 - 游标过旧（超出环形缓冲）则发 `s2c.resync`（payload.reason 为 gap），客户端应重新拉 sessions.list 并重开关注的会话。
 
 ## 8. 心跳与生命周期
@@ -932,6 +998,14 @@ Bridge 侧 Host code 到 wire 码的映射是 `src/wire-errors.ts` 的单一属�
   schedule 帧。旧帧在宿主级模型上仍由 Bridge 映射，旧客户端无需升级。
 - `binaryFrames` 是插件自身能力，不依赖 Host：true 表示导出与附件请求可以带 `binary: true`
   改用二进制帧（见 §1.1）。缺失/false 时客户端照旧请求 base64 文本帧。
+- `sessionInterest` 是插件自身能力：true 表示接受 `c2s.auth.prove` 的 `watchSessions` 与
+  `c2s.session.watch`。缺失/false 时客户端不得发送 `c2s.session.watch`，并且要容忍收到全部会话事件。
+- `routeHints` 是插件自身能力：true 表示 welcome 可能带 `routes`（见 §2 `s2c.welcome`）。缺失/false 时
+  客户端只使用配对时的地址。
+- `incrementalTail` 是插件自身能力：true 表示 `c2s.session.open` 接受 `sinceSeq` 并可能回增量 tail。
+  缺失/false 时客户端不得发送 `sinceSeq`（旧服务端会忽略它，照旧回全量，但客户端不应依赖）。
+- `compressedFrames` 是插件自身能力：true 表示接受 `acceptEncoding` 并按 §1.2 压缩大帧。客户端可以
+  无条件在 prove 里声明 `acceptEncoding`（旧服务端忽略），但必须能处理格式 2 的二进制帧。
 - v2 同版本新增可选字段时双方必须忽略未知字段。
 - 旧 Host 不认识 `deeppilot/setDeviceName` 时，设置页应显示“不支持设备重命名”的降级提示，
   不得把失败伪装成保存成功；新客户端仍须正常显示和删除设备。

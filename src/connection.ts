@@ -1,11 +1,11 @@
 import type { WebSocket } from 'ws'
 import { PROTOCOL_VERSION } from './protocol.ts'
-import type { Envelope } from './protocol.ts'
+import type { Envelope, WelcomeRoutes } from './protocol.ts'
 import type { BridgeSink, HostBridge } from './host-bridge.ts'
 import type { DeviceStore } from './token.ts'
 import type { DeviceScope } from './device-auth.ts'
 import { MAX_OUTBOUND_BUFFER_BYTES } from './connection-policy.ts'
-import { encodeBinaryFrame } from './binary-frame.ts'
+import { COMPRESS_MIN_BYTES, encodeBinaryFrame, encodeCompressedFrame } from './binary-frame.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import type { WireErrorCode } from './wire-errors.ts'
 import type { DiagnosticsRecorder } from './diagnostics.ts'
@@ -36,6 +36,8 @@ export interface ConnectionStateDeps {
   diagnostics?: DiagnosticsRecorder
   /** 客户端带来的 attemptId（WS 升级 query `at`），只记录不校验。 */
   attemptId?: string
+  /** 当前可用线路（能力 `routeHints`），每次 welcome 现取：地址或 Funnel 状态可能已变。 */
+  routes?: () => WelcomeRoutes | undefined
   /** Called once when the socket closes (cleanly or not). */
   onClosed?: (connection: BridgeConnection) => void
   /**
@@ -84,6 +86,14 @@ export class BridgeConnection implements BridgeSink {
     seq?: number
   }>>()
   private readonly openSessions = new Set<string>()
+  /**
+   * 关注集合（能力 `sessionInterest`）：客户端本机有缓存、需要保持最新的会话。
+   * undefined = 旧客户端从未声明，照旧收全部会话事件。来源：auth.prove 的
+   * `watchSessions`（须在重放前生效）与之后的 c2s.session.watch（整体替换）。
+   */
+  private watchedSessions: Set<string> | undefined
+  /** 客户端认证时声明接受 deflate-raw（能力 `compressedFrames`）；认证前一律文本帧。 */
+  private compressDownlink = false
   private liveActivityRegistrationGeneration = 0
   private pendingLiveActivityId?: string
   private lastActivity = Date.now()
@@ -140,6 +150,8 @@ export class BridgeConnection implements BridgeSink {
       fail: (id, code, message) => connection.fail(id, code, message),
       close: (code, reason) => connection.close(code, reason),
       canReceive: (scope) => connection.canReceive(scope),
+      accepts: (type, payload) => connection.accepts(type, payload),
+      setWatchedSessions: (sessionIds) => connection.setWatchedSessions(sessionIds),
       push: (type, payload, seq) => connection.push(type, payload, seq),
       lastCursor: () => connection.lastCursor(),
       replay: (entries) => connection.replay(entries),
@@ -241,7 +253,27 @@ export class BridgeConnection implements BridgeSink {
     return this.identity?.scopes.has(scope) ?? false
   }
 
+  /**
+   * 关注过滤：只管按会话投递的两类帧。正在打开（tail 未发出、事件进缓冲）、
+   * 已打开或在关注集合里的会话放行；未声明关注集合的连接全部放行。
+   */
+  accepts(type: string, payload: unknown): boolean {
+    if (this.watchedSessions === undefined) return true
+    if (type !== 's2c.session.event' && type !== 's2c.session.queue') return true
+    const sessionId = (payload as { sessionId?: unknown } | undefined)?.sessionId
+    if (typeof sessionId !== 'string') return true
+    return this.openSessions.has(sessionId) ||
+      this.openingSessionEvents.has(sessionId) ||
+      this.watchedSessions.has(sessionId)
+  }
+
+  /** c2s.session.watch：整体替换关注集合；也让从未声明的连接切到按关注投递。 */
+  setWatchedSessions(sessionIds: readonly string[]): void {
+    this.watchedSessions = new Set(sessionIds)
+  }
+
   push(type: string, payload: unknown, seq?: number): void {
+    if (!this.accepts(type, payload)) return
     if (type === 's2c.notify') payload = { ...(payload as object), hostAudience: this.deps.audience }
     // 队列快照与会话事件一样要排在 tail 之后：打开期间到达的先进缓冲。
     if (type === 's2c.session.event' || type === 's2c.session.queue') {
@@ -279,9 +311,15 @@ export class BridgeConnection implements BridgeSink {
   /** 认证成功：门只做安全判定，欢迎与重放归连接（数据面）。 */
   private onAuthenticated(identity: AuthenticatedIdentity): void {
     this.identity = identity
+    // 必须先于重放生效：resumeFrom 同步补发，补发范围按关注集合筛选。
+    if (identity.watchSessions !== undefined) this.watchedSessions = new Set(identity.watchSessions)
+    // welcome 本身就可能被压缩：客户端在 prove 里声明过，已经能解。
+    this.compressDownlink = identity.acceptsDeflate
     const cursor = identity.resumeCursor
     // Each replayed business frame is authorized separately by HostBridge.
     const canResume = cursor !== undefined && this.deps.bridge.canResumeFrom(cursor)
+    // 小组件连接只读概览，不需要选路信息。
+    const routes = identity.widgetClient ? undefined : this.deps.routes?.()
     // Welcome strictly precedes any replayed pushes.
     this.send('s2c.welcome', {
       protocolVersion: PROTOCOL_VERSION,
@@ -291,6 +329,7 @@ export class BridgeConnection implements BridgeSink {
       capabilities: this.deps.bridge.capabilities,
       cursor: this.deps.bridge.currentCursor(),
       resumed: canResume,
+      ...(routes !== undefined ? { routes } : {}),
     })
     if (!identity.widgetClient) this.deps.bridge.addSink(this)
     if (cursor !== undefined) {
@@ -355,7 +394,17 @@ export class BridgeConnection implements BridgeSink {
       this.close(1013, 'client too slow')
       return
     }
-    this.ws.send(body === undefined ? JSON.stringify(envelope) : encodeBinaryFrame(envelope, body))
+    if (body !== undefined) {
+      this.ws.send(encodeBinaryFrame(envelope, body))
+      return
+    }
+    const json = JSON.stringify(envelope)
+    // 大帧压缩（PROTOCOL.md §1.1 格式 2）：只看这一帧序列化后的字节数。
+    if (this.compressDownlink && Buffer.byteLength(json) > COMPRESS_MIN_BYTES) {
+      this.ws.send(encodeCompressedFrame(json))
+      return
+    }
+    this.ws.send(json)
   }
 
   private fail(id: string | undefined, code: WireErrorCode, message: string): void {

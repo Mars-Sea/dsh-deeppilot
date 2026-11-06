@@ -77,8 +77,11 @@ Simulator or when the camera is unavailable. Switching between the LAN and
 public address issues a matching new QR code and string immediately, with the
 panel staying open.
 
-LAN access is enabled by default on the plugin's independent TCP port `3098`
-and is TLS-only. The plugin generates a self-signed certificate on first start
+LAN access is always on (there is no switch) on the plugin's independent TCP
+port `3098` and is TLS-only. After every connection the plugin tells the app
+its current LAN addresses and the public Funnel address, so a paired phone
+connects over the LAN on the same Wi-Fi and falls back to Funnel elsewhere,
+without pairing again. The plugin generates a self-signed certificate on first start
 (key under `$DSH_HOME/deeppilot/lan-tls/`), and the pairing QR code carries its
 public-key fingerprint so the app pins that exact Host. DSH may continue
 listening only on `127.0.0.1:3080`; the plugin no longer registers any `/phone`

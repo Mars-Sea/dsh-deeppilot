@@ -155,6 +155,7 @@ const TABLES: LocaleTables = {
 
     // ---- local connection ----
     'local.title': '局域网连接',
+    'local.autoRoute': '局域网连接始终开启：手机和电脑在同一 Wi-Fi 下会自动走局域网，在外面自动改走公网。',
     'local.on': '已开启：手机可通过独立端口 {port} 以 TLS 加密连接。',
     'local.off': '已关闭：不接受局域网连接。',
     'local.tlsFingerprint': '证书指纹',
@@ -352,7 +353,6 @@ const TABLES: LocaleTables = {
     'diag.settingsUnavailable': '设置表单不可用（configForms 未提供）',
     'diag.missingReportHook': 'useDeepPilotReport hook 缺失',
     'diag.missingEnabledHook': 'useDeepPilotEnabled hook 缺失',
-    'diag.missingLocalEnabledHook': 'useDeepPilotLocalEnabled hook 缺失',
     'diag.missingLocalPortHook': 'useDeepPilotLocalPort hook 缺失',
     'diag.missingRemoteEnabledHook': 'useDeepPilotRemoteEnabled hook 缺失',
     'diag.missingRemoteLimitHook': 'useDeepPilotRemoteConnectionLimit hook 缺失',
@@ -364,7 +364,6 @@ const TABLES: LocaleTables = {
     'diag.missingTestRelay': 'testRelay 回调缺失',
     'diag.missingTestPush': 'testPush 回调缺失',
     'diag.missingSetEnabled': 'setDeepPilotEnabled 回调缺失',
-    'diag.missingSetLocal': 'setDeepPilotLocalEnabled 回调缺失',
     'diag.missingSetLocalPort': 'setDeepPilotLocalPort 回调缺失',
     'diag.missingSetRemote': 'setDeepPilotRemoteEnabled 回调缺失',
     'diag.missingSetRemoteLimit': 'setDeepPilotRemoteConnectionLimit 回调缺失',
@@ -476,6 +475,7 @@ const TABLES: LocaleTables = {
 
     // ---- local connection ----
     'local.title': 'LAN connection',
+    'local.autoRoute': 'LAN connections are always on: on the same Wi-Fi the phone connects over the LAN automatically, and switches to the public route when away.',
     'local.on': 'On: phones connect over TLS through the independent port {port}.',
     'local.off': 'Off: LAN connections are not accepted.',
     'local.tlsFingerprint': 'Certificate fingerprint',
@@ -671,7 +671,6 @@ const TABLES: LocaleTables = {
     'diag.settingsUnavailable': 'Settings form unavailable (configForms not provided)',
     'diag.missingReportHook': 'useDeepPilotReport hook missing',
     'diag.missingEnabledHook': 'useDeepPilotEnabled hook missing',
-    'diag.missingLocalEnabledHook': 'useDeepPilotLocalEnabled hook missing',
     'diag.missingLocalPortHook': 'useDeepPilotLocalPort hook missing',
     'diag.missingRemoteEnabledHook': 'useDeepPilotRemoteEnabled hook missing',
     'diag.missingRemoteLimitHook': 'useDeepPilotRemoteConnectionLimit hook missing',
@@ -683,7 +682,6 @@ const TABLES: LocaleTables = {
     'diag.missingTestRelay': 'testRelay callback missing',
     'diag.missingTestPush': 'testPush callback missing',
     'diag.missingSetEnabled': 'setDeepPilotEnabled callback missing',
-    'diag.missingSetLocal': 'setDeepPilotLocalEnabled callback missing',
     'diag.missingSetLocalPort': 'setDeepPilotLocalPort callback missing',
     'diag.missingSetRemote': 'setDeepPilotRemoteEnabled callback missing',
     'diag.missingSetRemoteLimit': 'setDeepPilotRemoteConnectionLimit callback missing',

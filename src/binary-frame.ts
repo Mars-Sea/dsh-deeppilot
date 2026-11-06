@@ -11,6 +11,8 @@
  * `binary: true` 时 Bridge 才回这种帧；旧客户端永远收不到。
  */
 
+import { deflateRawSync, inflateRawSync } from 'node:zlib'
+
 /** 帧首字节。客户端遇到未知值直接丢弃该帧，留给以后扩展。 */
 export const BINARY_FRAME_FORMAT = 1
 
@@ -41,6 +43,38 @@ export function decodeBinaryFrame(frame: Uint8Array): { header: unknown; body: B
   if (5 + headerLength > buffer.length) return undefined
   try {
     return { header: JSON.parse(buffer.subarray(5, 5 + headerLength).toString('utf8')), body: buffer.subarray(5 + headerLength) }
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 压缩帧（compressedFrames 能力）：`[格式 u8 = 2][整个 envelope JSON 的 deflate-raw 字节]`。
+ *
+ * 为什么有它：经 Funnel 的实测下行吞吐只有 40～80 KB/s，会话列表、最近消息这类
+ * JSON 大帧压到 1/4～1/5 后传输时间同比缩短。只在客户端认证时声明
+ * `acceptEncoding: ["deflate-raw"]` 后，对序列化后超过 COMPRESS_MIN_BYTES 的
+ * 文本帧启用；小帧压缩收益抵不上开销，照旧发文本帧。level 1：压缩比 4.3 倍，
+ * CPU 明显低于默认 level 6（5.3 倍）。
+ */
+export const COMPRESSED_FRAME_FORMAT = 2
+export const COMPRESS_MIN_BYTES = 8 * 1024
+export const COMPRESS_LEVEL = 1
+
+export function encodeCompressedFrame(json: string): Buffer {
+  const deflated = deflateRawSync(Buffer.from(json, 'utf8'), { level: COMPRESS_LEVEL })
+  const frame = Buffer.allocUnsafe(1 + deflated.length)
+  frame.writeUInt8(COMPRESSED_FRAME_FORMAT, 0)
+  deflated.copy(frame, 1)
+  return frame
+}
+
+/** 解出压缩帧里的 envelope；格式不对返回 undefined。插件自身不收，供测试与工具复用。 */
+export function decodeCompressedFrame(frame: Uint8Array): unknown {
+  const buffer = Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength)
+  if (buffer.length < 2 || buffer.readUInt8(0) !== COMPRESSED_FRAME_FORMAT) return undefined
+  try {
+    return JSON.parse(inflateRawSync(buffer.subarray(1)).toString('utf8'))
   } catch {
     return undefined
   }

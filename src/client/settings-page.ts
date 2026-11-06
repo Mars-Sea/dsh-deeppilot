@@ -262,9 +262,6 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     hooks.enabled = enabledState.enabled
     hooks.switchReady = enabledState.status === 'ready'
     if (enabledState.status === 'unavailable') diag.push(t(props.t, 'diag.settingsUnavailable'))
-    const localEnabledState = props.useDeepPilotLocalEnabled((s) => s)
-    hooks.localEnabled = localEnabledState.enabled
-    hooks.localSwitchReady = localEnabledState.status === 'ready'
     const localPortState = props.useDeepPilotLocalPort((s) => s)
     hooks.localPort = localPortState.value
     hooks.localPortReady = localPortState.status === 'ready'
@@ -282,8 +279,6 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     report: DeepPilotReport | null
     enabled: boolean
     switchReady: boolean
-    localEnabled: boolean
-    localSwitchReady: boolean
     localPort: number
     localPortReady: boolean
     remoteEnabled: boolean
@@ -294,7 +289,6 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     debugSwitchReady: boolean
   } = {
     report: null, enabled: true, switchReady: false,
-    localEnabled: true, localSwitchReady: false,
     localPort: DEFAULT_LOCAL_PORT, localPortReady: false,
     remoteEnabled: false, remoteSwitchReady: false,
     remoteConnectionLimit: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, remoteConnectionLimitReady: false,
@@ -309,8 +303,6 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
   const report = hooks.report
   const enabled = hooks.enabled
   const switchReady = hooks.switchReady
-  const localEnabled = hooks.localEnabled
-  const localSwitchReady = hooks.localSwitchReady
   const localPort = hooks.localPort
   const localPortReady = hooks.localPortReady
   const remoteEnabled = hooks.remoteEnabled
@@ -875,14 +867,6 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
               h('span', { className: 'pbb-controlTitle' },
                 t(props.t, 'local.title')),
               h('div', { className: 'pbb-channelState' }, h('span', { className: localMeta?.label === 'online' ? 'pbb-ok' : localMeta?.label === 'error' ? 'pbb-bad' : undefined }, localStateText))),
-            h(Switch, {
-              checked: localEnabled,
-              label: t(props.t, 'local.title'),
-              disabled: !localSwitchReady,
-              onChange: (next: boolean) => {
-                if (can('setLocalEnabled')) props.setDeepPilotLocalEnabled!(next)
-              },
-            }),
             h('button', {
               type: 'button', className: 'pbb-iconButton pbb-expand',
               'aria-label': t(props.t, 'local.options'),
@@ -897,6 +881,8 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
             ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'local.tlsRegenerated'))
             : null,
           fold(localOptionsOpen, h('div', { className: 'pbb-channelBody', id: localOptionsId },
+            // 局域网连接常开：说明手机如何选路，替代原来的开关。
+            h('p', { className: 'pbb-controlDescription' }, t(props.t, 'local.autoRoute')),
             report !== null && report.local.phase === 'online'
               ? h('p', { className: 'pbb-diag pbb-endpoint' }, report.local.endpoints.join(' · ')) : null,
             h('div', { className: 'pbb-limitRow' },

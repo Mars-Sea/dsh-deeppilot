@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert'
 import {
   HostBridge,
+  SUMMARY_STATS_THROTTLE_MS,
   MAX_MESSAGE_PROJECTION_BYTES,
   MAX_SESSION_PAGE_MESSAGES_BYTES,
   limitMessageProjection,
@@ -1292,6 +1293,97 @@ test('resumeFrom filters replayed frames by the S→C permission policy per sink
     !responderTypes.includes('s2c.session.event'),
     'responder without sessions.read never gets session content replay',
   )
+  bridge.dispose()
+})
+
+test('resumeFrom skips frames the sink does not accept (interest set)', () => {
+  const { proxy } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  ;(bridge as any).record('s2c.session.event', { sessionId: 'keep', kind: 'message.final', seq: 1, data: {} })
+  ;(bridge as any).record('s2c.session.event', { sessionId: 'drop', kind: 'message.final', seq: 2, data: {} })
+  ;(bridge as any).record('s2c.sessions.delta', { upserted: [], removedIds: [] })
+  const sink = {
+    ...makeRecordingSink(),
+    accepts: (type: string, payload: any) => type !== 's2c.session.event' || payload.sessionId === 'keep',
+  }
+  bridge.resumeFrom(0, sink as any)
+  assert.deepEqual(sink.frames.map((f) => f.type), ['s2c.session.event', 's2c.sessions.delta'])
+  assert.equal(sink.doneCount(), 1)
+  bridge.dispose()
+})
+
+test('resumeFrom sends resync instead of a replay window over REPLAY_RESYNC_BYTES', () => {
+  const { proxy } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  const big = 'x'.repeat(200 * 1024)
+  for (let i = 0; i < 3; i += 1) {
+    ;(bridge as any).record('s2c.session.event', { sessionId: 's', kind: 'message.final', seq: i, data: { text: big } })
+  }
+  let resyncs = 0
+  const sink = { ...makeRecordingSink(), resync: () => { resyncs += 1 } }
+  assert.equal(bridge.resumeFrom(0, sink as any), true, 'cursor is still inside the ring')
+  assert.equal(resyncs, 1)
+  assert.deepEqual(sink.frames, [], 'no partial replay before the resync')
+  assert.equal(sink.doneCount(), 0, 'resync replaces resume.done')
+
+  // 只计算这个 sink 真正会收到的帧：过滤掉大帧后照常补发。
+  let narrowResyncs = 0
+  const narrow = {
+    ...makeRecordingSink(),
+    resync: () => { narrowResyncs += 1 },
+    accepts: (type: string) => type !== 's2c.session.event',
+  }
+  bridge.resumeFrom(0, narrow as any)
+  assert.equal(narrowResyncs, 0)
+  assert.equal(narrow.doneCount(), 1)
+  bridge.dispose()
+})
+
+// ---------- 列表推送节流（第二批 P5） ----------
+
+function summaryHarness() {
+  const { proxy } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  const deltas: any[] = []
+  bridge.addSink({ ...makeRecordingSink(), push: (type: string, payload: any) => { if (type === 's2c.sessions.delta') deltas.push(JSON.parse(JSON.stringify(payload))) } } as any)
+  const row: any = { id: 's1', title: 't', status: 'running', lastActivityTs: 1, todos: null, todoItems: null,
+    pendingApproval: false, pendingQuestion: false, stats: { turns: 1 } }
+  ;(bridge as any).summaries.set('s1', row)
+  const push = () => (bridge as any).pushSummary(row)
+  return { bridge, deltas, row, push }
+}
+
+test('identical summary pushes are sent once', () => {
+  const { bridge, deltas, push } = summaryHarness()
+  push(); push(); push()
+  assert.equal(deltas.length, 1)
+  bridge.dispose()
+})
+
+test('stats-only changes are coalesced to one push per window; other changes go out at once', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const { bridge, deltas, row, push } = summaryHarness()
+  push()
+  row.stats = { turns: 2 }; push()
+  row.stats = { turns: 3 }; push()
+  assert.equal(deltas.length, 1, 'stats-only changes inside the window wait')
+
+  row.status = 'idle'; push()
+  assert.equal(deltas.length, 2, 'a status change is sent immediately, carrying the latest stats')
+  assert.equal(deltas[1].upserted[0].stats.turns, 3)
+
+  row.stats = { turns: 4 }; push()
+  row.stats = { turns: 5 }; push()
+  assert.equal(deltas.length, 2)
+  t.mock.timers.tick(SUMMARY_STATS_THROTTLE_MS)
+  assert.equal(deltas.length, 3, 'the window closes with one push of the newest stats')
+  assert.equal(deltas[2].upserted[0].stats.turns, 5)
+
+  t.mock.timers.tick(SUMMARY_STATS_THROTTLE_MS)
+  row.stats = { turns: 6 }; push()
+  assert.equal(deltas.length, 4, 'outside the window a stats change goes out at once')
   bridge.dispose()
 })
 

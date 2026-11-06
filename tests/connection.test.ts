@@ -7,7 +7,7 @@ import { BridgeConnection, AUTH_TIMEOUT_MS, MAX_OUTBOUND_BUFFER_BYTES, PRE_AUTH_
 import { HostBridge } from '../src/host-bridge.ts'
 import type { ApiProxyLike } from '../src/host-bridge.ts'
 import { DeviceStore } from '../src/token.ts'
-import { BINARY_CHUNK_BYTES, MAX_BINARY_ATTACHMENT_BYTES, decodeBinaryFrame } from '../src/binary-frame.ts'
+import { BINARY_CHUNK_BYTES, MAX_BINARY_ATTACHMENT_BYTES, decodeBinaryFrame, decodeCompressedFrame } from '../src/binary-frame.ts'
 import type { DeviceScope } from '../src/device-auth.ts'
 import { authenticateTestSocket, createTestIdentity, registerTestIdentity, type TestIdentity } from './auth-fixture.ts'
 
@@ -33,6 +33,12 @@ class FakeWebSocket {
 
   send(data: string | Buffer): void {
     if (typeof data === 'string') return void this.sent.push(JSON.parse(data))
+    // 压缩帧（格式 2）：解出 envelope，标记 compressed 供断言。
+    if (data[0] === 2) {
+      const envelope = decodeCompressedFrame(data)
+      assert.ok(envelope, 'compressed frame must decode')
+      return void this.sent.push({ ...(envelope as object), compressed: true, wireBytes: data.length })
+    }
     // 二进制帧：头部照常进 sent，原始字节挂在 body 上供断言。
     const decoded = decodeBinaryFrame(data)
     assert.ok(decoded, 'binary frame must decode')
@@ -93,7 +99,7 @@ interface Harness {
   logs: string[]
   closed: Promise<void>
   identity: TestIdentity
-  authenticate: (overrides?: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string; clientRole?: 'widget' }) => void
+  authenticate: (overrides?: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string; clientRole?: 'widget'; watchSessions?: unknown; acceptEncoding?: unknown }) => void
 }
 
 async function makeConnection(opts: {
@@ -106,6 +112,7 @@ async function makeConnection(opts: {
   diagnostics?: { record: (kind: string, reason: string, extra?: any) => unknown }
   auditLabel?: (value: string) => string
   attemptId?: string
+  routes?: () => any
 } = {}): Promise<Harness> {
   const bridge = new HostBridge(makeProxy(opts.proxyOverrides), 100)
   // Each harness gets its own registry file so tests never share state.
@@ -130,6 +137,7 @@ async function makeConnection(opts: {
     ...(opts.diagnostics !== undefined ? { diagnostics: opts.diagnostics as never } : {}),
     ...(opts.auditLabel !== undefined ? { auditLabel: opts.auditLabel } : {}),
     ...(opts.attemptId !== undefined ? { attemptId: opts.attemptId } : {}),
+    ...(opts.routes !== undefined ? { routes: opts.routes } : {}),
     onClosed: () => {
       void (async () => {
         await store.drain()
@@ -921,6 +929,187 @@ test('session.open sends tail before realtime events produced during history loo
     ['s2c.session.tail', 's2c.session.event'],
   )
   assert.equal(ws.sent[1].payload.data.text, 'new token')
+})
+
+// ---------- 关注集合（能力 sessionInterest） ----------
+
+function emitAssistantMessage(bridge: HostBridge, sessionId: string, seq: number, text = 'body'): void {
+  ;(bridge as any).onMuxFrame({
+    type: 'session/event', rpcId: 'rpc-' + sessionId + '-' + seq, sessionId,
+    event: { type: 'assistant/message', seq, data: { text } },
+  })
+}
+
+const sessionEventIds = (ws: FakeWebSocket) =>
+  ws.sent.filter((f) => f.type === 's2c.session.event').map((f) => f.payload.sessionId as string)
+
+test('welcome advertises sessionInterest', async () => {
+  const { ws, authenticate } = await makeConnection()
+  authenticate()
+  const welcome = ws.sent.find((f) => f.type === 's2c.welcome')!
+  assert.equal(welcome.payload.capabilities.sessionInterest, true)
+})
+
+test('a client that never declares an interest set keeps receiving every session event', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate()
+  emitAssistantMessage(bridge, 's-a', 1)
+  emitAssistantMessage(bridge, 's-b', 2)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-a', 's-b'])
+})
+
+test('watchSessions limits live session events to watched sessions; list deltas still flow', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate({ watchSessions: ['s-watched'] })
+  emitAssistantMessage(bridge, 's-watched', 1)
+  emitAssistantMessage(bridge, 's-other', 2)
+  ;(bridge as any).record('s2c.sessions.delta', { upserted: [{ id: 's-other' }], removedIds: [] })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-watched'], 'unwatched, unopened session events are not sent')
+  assert.ok(ws.sent.some((f) => f.type === 's2c.sessions.delta'), 'session list changes are not filtered')
+})
+
+test('watchSessions narrows the resume replay before it is written', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  emitAssistantMessage(bridge, 's-watched', 1)
+  emitAssistantMessage(bridge, 's-other', 2)
+  await new Promise((r) => setTimeout(r, 10))
+  authenticate({ resumeCursor: 0, watchSessions: ['s-watched'] })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(ws.sent.find((f) => f.type === 's2c.welcome')!.payload.resumed, true)
+  assert.deepEqual(sessionEventIds(ws), ['s-watched'])
+  assert.ok(ws.sent.some((f) => f.type === 's2c.resume.done'))
+})
+
+test('an opened session receives its events even when it is not in the watch set', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate({ watchSessions: [] })
+  ws.receive({ v: 2, type: 'c2s.session.open', id: 'o1', payload: { sessionId: 's-open' } })
+  await new Promise((r) => setTimeout(r, 10))
+  emitAssistantMessage(bridge, 's-open', 3)
+  emitAssistantMessage(bridge, 's-other', 4)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-open'])
+
+  // 关闭后不再在关注集合里，事件随之停止。
+  ws.receive({ v: 2, type: 'c2s.session.close', id: 'c1', payload: { sessionId: 's-open' } })
+  await new Promise((r) => setTimeout(r, 10))
+  emitAssistantMessage(bridge, 's-open', 5)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-open'])
+})
+
+test('c2s.session.watch replaces the interest set and switches a legacy connection over', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate()
+  ws.receive({ v: 2, type: 'c2s.session.watch', id: 'w1', payload: { sessionIds: ['s-b'] } })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(lastFrame(ws).type, 's2c.ack')
+  emitAssistantMessage(bridge, 's-a', 1)
+  emitAssistantMessage(bridge, 's-b', 2)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-b'])
+
+  ws.receive({ v: 2, type: 'c2s.session.watch', id: 'w2', payload: { sessionIds: ['s-a'] } })
+  await new Promise((r) => setTimeout(r, 10))
+  emitAssistantMessage(bridge, 's-a', 3)
+  emitAssistantMessage(bridge, 's-b', 4)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-b', 's-a'])
+})
+
+test('malformed watchSessions on auth.prove falls back to the full broadcast instead of failing auth', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate({ watchSessions: 'not-an-array' })
+  assert.ok(ws.sent.some((f) => f.type === 's2c.welcome'), 'authentication still succeeds')
+  emitAssistantMessage(bridge, 's-a', 1)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(sessionEventIds(ws), ['s-a'])
+})
+
+// ---------- 线路提示（能力 routeHints） ----------
+
+test('welcome carries the current routes; widget clients do not get them', async () => {
+  const routes = { lan: { urls: ['https://192.168.1.20:3098'], tlsFingerprint: 'sha256:abc' }, remote: { url: 'https://h.ts.net' } }
+  const app = await makeConnection({ routes: () => routes })
+  app.authenticate()
+  const welcome = app.ws.sent.find((f) => f.type === 's2c.welcome')!
+  assert.equal(welcome.payload.capabilities.routeHints, true)
+  assert.deepEqual(welcome.payload.routes, routes)
+
+  const widget = await makeConnection({ routes: () => routes })
+  widget.authenticate({ clientRole: 'widget' })
+  assert.equal(widget.ws.sent.find((f) => f.type === 's2c.welcome')!.payload.routes, undefined)
+
+  const none = await makeConnection({ routes: () => undefined })
+  none.authenticate()
+  assert.equal('routes' in none.ws.sent.find((f) => f.type === 's2c.welcome')!.payload, false)
+})
+
+// ---------- 增量 tail（能力 incrementalTail） ----------
+
+test('session.open with sinceSeq answers an incremental tail; without it, the full tail', async () => {
+  const history = [
+    { event: { type: 'user/message', seq: 1, time: 1, data: { kind: 'user', text: '问题' } } },
+    { event: { type: 'tool/call', seq: 2, time: 2, data: { name: 'bash', arguments: '{}', callId: 'c1' } } },
+    { event: { type: 'tool/result', seq: 4, time: 4, data: { callId: 'c1', message: { content: 'ok' } } } },
+    { event: { type: 'assistant/message', seq: 5, time: 5, data: { text: '完成' } } },
+  ]
+  const { ws, authenticate } = await makeConnection({
+    proxyOverrides: {
+      sessions: {
+        list: async () => ({ result: { ok: true, value: { items: [] } } }),
+        history: async () => ({ result: { ok: true, value: { events: history, hasMore: false } } }),
+        projections: async () => ({ result: { ok: true, value: null } }),
+      },
+    } as unknown as Partial<ApiProxyLike>,
+  })
+  authenticate()
+  assert.equal(ws.sent.find((f) => f.type === 's2c.welcome')!.payload.capabilities.incrementalTail, true)
+
+  ws.receive({ v: 2, type: 'c2s.session.open', id: 'o1', payload: { sessionId: 's1', sinceSeq: 3 } })
+  await new Promise((r) => setTimeout(r, 10))
+  const incremental = ws.sent.filter((f) => f.type === 's2c.session.tail').at(-1)!
+  assert.equal(incremental.payload.incremental, true)
+  assert.equal(incremental.payload.sinceSeq, 3)
+  assert.deepEqual(incremental.payload.messages.map((m: any) => m.seq), [2, 5])
+
+  ws.receive({ v: 2, type: 'c2s.session.open', id: 'o2', payload: { sessionId: 's1' } })
+  await new Promise((r) => setTimeout(r, 10))
+  const full = ws.sent.filter((f) => f.type === 's2c.session.tail').at(-1)!
+  assert.equal(full.payload.incremental, undefined)
+  assert.deepEqual(full.payload.messages.map((m: any) => m.seq), [1, 2, 5])
+})
+
+// ---------- 压缩帧（能力 compressedFrames） ----------
+
+test('frames over 8 KB are deflate-raw compressed once the client accepts it; small frames stay text', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate({ acceptEncoding: ['deflate-raw'], watchSessions: ['s-big'] })
+  const welcome = ws.sent.find((f) => f.type === 's2c.welcome')!
+  assert.equal(welcome.payload.capabilities.compressedFrames, true)
+  assert.equal(welcome.compressed, undefined, 'a small welcome stays a text frame')
+
+  const text = '会话正文 '.repeat(4000)
+  emitAssistantMessage(bridge, 's-big', 1, text)
+  await new Promise((r) => setTimeout(r, 10))
+  const event = ws.sent.find((f) => f.type === 's2c.session.event')!
+  assert.equal(event.compressed, true)
+  assert.equal(event.payload.data.text, text, 'round-trips byte for byte')
+  assert.ok(event.wireBytes < Buffer.byteLength(text) / 4, 'repetitive JSON shrinks well')
+  assert.equal(typeof event.seq, 'number', 'replay seq survives compression')
+})
+
+test('clients that do not list deflate-raw never get compressed frames', async () => {
+  for (const acceptEncoding of [undefined, ['gzip'], 'deflate-raw']) {
+    const { ws, bridge, authenticate } = await makeConnection()
+    authenticate(acceptEncoding === undefined ? {} : { acceptEncoding })
+    emitAssistantMessage(bridge, 's-a', 1, 'x'.repeat(20 * 1024))
+    await new Promise((r) => setTimeout(r, 10))
+    const event = ws.sent.find((f) => f.type === 's2c.session.event')!
+    assert.equal(event.compressed, undefined, `acceptEncoding=${JSON.stringify(acceptEncoding)}`)
+  }
 })
 
 test('session.history correlates the page with the request id', async () => {

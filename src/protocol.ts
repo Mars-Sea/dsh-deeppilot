@@ -38,6 +38,10 @@ export interface AuthProofPayload extends AuthChallengePayload {
   appVersion: string
   signature: string
   resumeCursor?: number
+  /** 能力 `sessionInterest`：本机缓存、需保持最新的会话（最多 16 个）。不进签名原文。 */
+  watchSessions?: string[]
+  /** 能力 `compressedFrames`：可接受的下行压缩编码，目前只有 "deflate-raw"。不进签名原文。 */
+  acceptEncoding?: string[]
 }
 
 /** Content-free WidgetKit invalidation; never a user-visible alert. */
@@ -444,6 +448,26 @@ export interface WelcomeCapabilities {
    * see binary-frame.ts). Plugin-level, independent of the host. Absent ⇒ the
    * client must keep requesting base64 text frames. */
   binaryFrames?: boolean
+  /** Bridge honours `watchSessions` on c2s.auth.prove and c2s.session.watch:
+   * a connection that declared an interest set only receives
+   * s2c.session.event / s2c.session.queue (live and replayed) for sessions it
+   * opened or watches. Plugin-level. Absent ⇒ the client gets every
+   * session's events, as before. */
+  sessionInterest?: boolean
+  /** Bridge compresses downlink frames over 8 KB as binary format 2
+   * (`[2][deflate-raw(envelope JSON)]`) once the client listed "deflate-raw"
+   * in `acceptEncoding` on c2s.auth.prove. Plugin-level. Absent ⇒ the field is
+   * ignored and every JSON frame stays a text frame. */
+  compressedFrames?: boolean
+  /** Bridge answers c2s.session.open carrying `sinceSeq` with an incremental
+   * tail (`incremental: true`) holding only rows changed after that seq, or
+   * with a full tail when it cannot prove the delta complete. Plugin-level. */
+  incrementalTail?: boolean
+  /** Bridge includes `routes` (current LAN endpoints with their certificate
+   * fingerprint, and the public Funnel URL) in s2c.welcome so the client can
+   * prefer the LAN on the same network and fall back to Funnel elsewhere.
+   * Plugin-level. */
+  routeHints?: boolean
 }
 
 export interface WelcomePayload {
@@ -454,6 +478,19 @@ export interface WelcomePayload {
   capabilities: WelcomeCapabilities
   cursor: number
   resumed: boolean
+  /** 能力 `routeHints`：本主机当前可用的连接地址，客户端据此自动选路。 */
+  routes?: WelcomeRoutes
+}
+
+/**
+ * 可用线路（PROTOCOL.md s2c.welcome `routes`）。地址形如配对信息里的 `host`
+ * （`https://…`，不带路径）。只在已认证的连接上下发，局域网仍按指纹校验证书。
+ */
+export interface WelcomeRoutes {
+  /** 局域网监听在线时出现；地址按物理网卡优先排序，客户端按顺序尝试。 */
+  lan?: { urls: string[]; tlsFingerprint: string }
+  /** Funnel 在线时出现。 */
+  remote?: { url: string }
 }
 
 export type SessionStatus = "running" | "idle" | "error" | "unknown"
@@ -636,6 +673,9 @@ export interface SessionTailPayload {
   messages: MessageProjection[]
   oldestSeq: number
   hasMore: boolean
+  /** 能力 `incrementalTail`：本帧只含 sinceSeq 之后改动过的行，客户端按增量合并。 */
+  incremental?: true
+  sinceSeq?: number
 }
 
 export interface HistoryPagePayload {
