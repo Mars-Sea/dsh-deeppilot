@@ -47,7 +47,9 @@
    pending flags and activity still go out immediately, carrying the latest
    stats.
 7. Compatibility: still protocol v2; every addition is an optional capability,
-   so older apps behave as before. No Funnel helper change. The DSH
+   so older apps behave as before. The Funnel helper only moves its indirect
+   dependency `github.com/klauspost/compress` to v1.20.2 (GO-2026-6865), with
+   the six-platform `bin/` matrix and `SHA256SUMS` rebuilt. The DSH
    compatibility range stays `>=0.2.1-rc.5 <0.3.0-0`. If a firewall is on,
    allow inbound TCP on the LAN port (default `3098`).
 
@@ -78,6 +80,8 @@
 6. **会话列表推送去重与节流。** 与上次推出内容完全相同的 `s2c.sessions.delta` 不再发送；
    只改了 `stats` 的变化，同一会话 5 秒内最多推一次，推出的是最新值。状态、标题、任务
    清单、待处理标记、活动描述的变化仍立即推送，并带上最新统计。
-7. 兼容性：协议仍为 v2，新增内容都是可选能力位，旧版 App 行为不变。Funnel helper 未改。
+7. 兼容性：协议仍为 v2，新增内容都是可选能力位，旧版 App 行为不变。Funnel helper 只把间接依赖
+   `github.com/klauspost/compress` 升到 v1.20.2（GO-2026-6865），并重建六个平台的 `bin/` 与
+   `SHA256SUMS`。
    DSH 兼容范围仍为 `>=0.2.1-rc.5 <0.3.0-0`。启用防火墙时请放行局域网端口（默认 `3098`）
    的入站 TCP。
