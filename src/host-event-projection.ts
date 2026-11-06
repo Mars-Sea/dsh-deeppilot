@@ -454,12 +454,21 @@ function truncate(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, max - 1) + '…';
 }
 
-export function projectHistory(events: Array<{ event: SessionEventLike; view?: unknown }>): MessageProjection[] {
+/**
+ * `touched`（可选，增量 tail 用）：记录每一行最后一次被哪个事件改动，键为行的 seq。
+ * 行由自身事件生成时等于它的 seq；工具结果合并回较早的工具调用行时更新为结果事件的
+ * seq。增量 tail 据此找出「sinceSeq 之后改动过的行」，而不只是 seq 更大的行。
+ */
+export function projectHistory(
+  events: Array<{ event: SessionEventLike; view?: unknown }>,
+  touched?: Map<number, number>,
+): MessageProjection[] {
   const messages: MessageProjection[] = [];
   const toolByCall = new Map<string, MessageProjection>();
   for (const entry of events) {
     const event = entry.event;
     const base = { seq: event.seq, ts: tsOf(event) };
+    touched?.set(event.seq, Math.max(touched.get(event.seq) ?? event.seq, event.seq));
     switch (event.type) {
       // DSH 0.1.5 (session format V3) records the system prompt in message
       // history as a native `system/message` surface event. It is
@@ -515,6 +524,7 @@ export function projectHistory(events: Array<{ event: SessionEventLike; view?: u
         if (target?.tool) {
           target.tool = { ...target.tool, state: failed ? 'error' : 'ok', summary };
           if (attachments.attachments) Object.assign(target, attachments);
+          touched?.set(target.seq, Math.max(touched.get(target.seq) ?? target.seq, event.seq));
         } else {
           messages.push({
             ...base,

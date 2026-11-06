@@ -962,7 +962,7 @@ export class HostBridge {
   // ---------- data operations ----------
 
   /** Tail history for an opened session; pushes s2c.session.tail to the sink. */
-  async openSession(sink: BridgeSink, sessionId: string, tailCount: number): Promise<boolean> {
+  async openSession(sink: BridgeSink, sessionId: string, tailCount: number, sinceSeq?: number): Promise<boolean> {
     try {
       const response = await this.apiProxy.sessions.history({
         rpcId: randomUUID(),
@@ -970,16 +970,18 @@ export class HostBridge {
       });
       if (!response.result || !response.result.ok) return false;
       const result = response.result.value;
-      const projected = projectHistory(result.events ?? []);
+      const events = result.events ?? [];
+      const touched = new Map<number, number>();
+      const projected = projectHistory(events, touched);
       const page = limitSessionPageMessages(projected);
       const messages = page.messages;
       const oldestSeq = messages.length > 0 ? messages[0]!.seq : 0;
-      sink.push('s2c.session.tail', {
-        sessionId,
-        messages,
-        oldestSeq,
-        hasMore: Boolean(result.hasMore) || page.dropped > 0,
-      });
+      const hasMore = Boolean(result.hasMore) || page.dropped > 0;
+      const delta = sinceSeq === undefined ? undefined : incrementalTail(events, projected, touched, sinceSeq);
+      sink.push('s2c.session.tail', delta === undefined
+        ? { sessionId, messages, oldestSeq, hasMore }
+        // 增量：只含 sinceSeq 之后改动过的行；oldestSeq/hasMore 仍是本次窗口的值，客户端忽略。
+        : { sessionId, messages: delta, oldestSeq, hasMore, incremental: true, sinceSeq });
       this.deriveTitleFallback(sessionId, messages);
       // DSH exposes a complete per-session projection baseline; fold it
       // into the summary row when the phone opens a session so the first paint
@@ -2081,6 +2083,32 @@ function receiptFailureReason(receipt: { accepted: boolean; reason?: string } | 
  * 区间与 wire 行校验（tailCount 1..10000、limit 1..500）共用投影 module 的
  * 常量——「一页能要多少条消息」本是一条规则，原先散在三处。
  */
+/**
+ * 增量 tail（能力 `incrementalTail`）：返回 sinceSeq 之后改动过的行；不能保证完整时
+ * 返回 undefined，调用方回退全量。三种回退：
+ * - 窗口没覆盖到 sinceSeq（最旧事件比它新）：中间可能有事件没取到；
+ * - sinceSeq 比窗口里最新事件还新：客户端的视图和主机对不上（例如历史被改写）；
+ * - 增量本身超过单页 900 KB 预算。
+ */
+export function incrementalTail(
+  events: Array<{ event: SessionEventLike }>,
+  projected: MessageProjection[],
+  touched: Map<number, number>,
+  sinceSeq: number,
+): MessageProjection[] | undefined {
+  if (events.length === 0) return undefined
+  let oldest = Infinity
+  let newest = -Infinity
+  for (const { event } of events) {
+    if (event.seq < oldest) oldest = event.seq
+    if (event.seq > newest) newest = event.seq
+  }
+  if (oldest > sinceSeq || sinceSeq > newest) return undefined
+  const delta = projected.filter((message) => (touched.get(message.seq) ?? message.seq) > sinceSeq)
+  const limited = limitSessionPageMessages(delta)
+  return limited.dropped > 0 ? undefined : limited.messages
+}
+
 function clampTail(n: number): number {
   if (!Number.isFinite(n)) return DEFAULT_HISTORY_PAGE_MESSAGES;
   return Math.max(MIN_TAIL_MESSAGES, Math.min(MAX_HISTORY_PAGE_MESSAGES, Math.floor(n)));

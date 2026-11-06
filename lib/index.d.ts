@@ -417,6 +417,10 @@ interface WelcomeCapabilities {
    * in `acceptEncoding` on c2s.auth.prove. Plugin-level. Absent ⇒ the field is
    * ignored and every JSON frame stays a text frame. */
   compressedFrames?: boolean;
+  /** Bridge answers c2s.session.open carrying `sinceSeq` with an incremental
+   * tail (`incremental: true`) holding only rows changed after that seq, or
+   * with a full tail when it cannot prove the delta complete. Plugin-level. */
+  incrementalTail?: boolean;
 }
 type SessionStatus = "running" | "idle" | "error" | "unknown";
 /**
@@ -1386,7 +1390,7 @@ export declare class HostBridge {
   /** Resolve only the exact invocation in this session; never guess from the latest tool. */
   private loadApprovalArguments;
   /** Tail history for an opened session; pushes s2c.session.tail to the sink. */
-  openSession(sink: BridgeSink, sessionId: string, tailCount: number): Promise<boolean>;
+  openSession(sink: BridgeSink, sessionId: string, tailCount: number, sinceSeq?: number): Promise<boolean>;
   /**
    * Pull one session's projection baseline and fold every key
    * through applyProjection — unknown keys are ignored there, `null` means the

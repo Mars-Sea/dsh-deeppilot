@@ -185,12 +185,21 @@ export const sessionRows: readonly WireFrameRow[] = [
       if (!isOptionalField(checked.value, 'tailCount', (v) => isInteger(v, 1, 10000))) {
         return reject('E_PROTOCOL', 'invalid tailCount')
       }
+      // 能力 incrementalTail：客户端本机已完整同步到的消息 seq。
+      if (!isOptionalField(checked.value, 'sinceSeq', (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0)) {
+        return reject('E_PROTOCOL', 'invalid sinceSeq')
+      }
       return checked
     },
     handle: async (ctx, payload) => {
       const sessionId = payload.sessionId as string
       const buffered = ctx.bufferOpenEvents(sessionId)
-      const ok = await ctx.bridge.openSession(ctx, sessionId, (payload.tailCount as number | undefined) ?? 100)
+      const ok = await ctx.bridge.openSession(
+        ctx,
+        sessionId,
+        (payload.tailCount as number | undefined) ?? 100,
+        payload.sinceSeq as number | undefined,
+      )
       if (!ok) {
         // 打开失败：仅当缓冲仍属于本次尝试时才移除，避免清掉并发打开的新缓冲。
         ctx.discardOpenBuffer(sessionId, buffered)

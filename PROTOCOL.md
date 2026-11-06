@@ -339,9 +339,19 @@ cacheWriteTokens)`；输入总量 = `inputTokens + cacheReadTokens + cacheWriteT
 
 ## 4. 会话明细
 
-### c2s.session.open（payload: sessionId, tailCount? 默认 100）
+### c2s.session.open（payload: sessionId, tailCount? 默认 100, sinceSeq?）
 
-服务端先回一次性 `s2c.session.tail`，随后该会话实时事件以 `s2c.session.event` 推送。没有声明关注集合的连接（见 `c2s.auth.prove` 的 `watchSessions`）还会收到所有其他会话的事件，这是旧行为，客户端必须容忍并忽略自己不需要的事件。历史快照请求尚未完成时产生的实时事件必须暂存，并在 tail 之后按原顺序发送，客户端不得先看到 event 再被较旧的 tail 回滚。多设备各自 open 各自收，互不影响。
+服务端先回一次性 `s2c.session.tail`，随后该会话实时事件以 `s2c.session.event` 推送。没有声明关注集合的连接（见 `c2s.auth.prove` 的 `watchSessions`）还会收到所有其他会话的事件，这是旧行为，客户端必须容忍并忽略自己不需要的事件。
+
+`sinceSeq` 可选（能力 `incrementalTail`）：客户端本机已经和服务端完整同步到的消息 `seq`。服务端能证明增量完整时，
+回的 `s2c.session.tail` 带 `incremental: true` 与回显的 `sinceSeq`，`messages` 只含在 `sinceSeq` 之后**被改动过**
+的行：既包括 `seq > sinceSeq` 的新行，也包括 `seq ≤ sinceSeq`、但之后才收到结果的工具行（结果按 `callId`
+合并回调用行）。客户端合并规则：用增量行替换本机 `(sinceSeq, 增量最新 seq]` 区间内的行，其余行保留，
+`seq ≤ sinceSeq` 的增量行按 `seq` 覆盖；`oldestSeq` 与 `hasMore` 在增量帧里不改变本机的分页状态。
+服务端无法证明增量完整时回普通全量 tail（没有 `incremental` 字段），客户端两种都必须能处理。以下情况一律回全量：
+本次历史窗口没有覆盖到 `sinceSeq`、`sinceSeq` 比窗口里最新的事件还新、增量本身超过单页 900 KB。
+客户端应以最近一次 tail（全量或增量）实际覆盖到的位置作为 `sinceSeq`，而不是本机收到的最大实时事件序号：
+不在关注集合里的会话会漏收实时事件，最大序号之前可能有缺口。历史快照请求尚未完成时产生的实时事件必须暂存，并在 tail 之后按原顺序发送，客户端不得先看到 event 再被较旧的 tail 回滚。多设备各自 open 各自收，互不影响。
 
 ### c2s.session.close（payload: sessionId）
 
@@ -973,6 +983,8 @@ Bridge 侧 Host code 到 wire 码的映射是 `src/wire-errors.ts` 的单一属�
   改用二进制帧（见 §1.1）。缺失/false 时客户端照旧请求 base64 文本帧。
 - `sessionInterest` 是插件自身能力：true 表示接受 `c2s.auth.prove` 的 `watchSessions` 与
   `c2s.session.watch`。缺失/false 时客户端不得发送 `c2s.session.watch`，并且要容忍收到全部会话事件。
+- `incrementalTail` 是插件自身能力：true 表示 `c2s.session.open` 接受 `sinceSeq` 并可能回增量 tail。
+  缺失/false 时客户端不得发送 `sinceSeq`（旧服务端会忽略它，照旧回全量，但客户端不应依赖）。
 - `compressedFrames` 是插件自身能力：true 表示接受 `acceptEncoding` 并按 §1.2 压缩大帧。客户端可以
   无条件在 prove 里声明 `acceptEncoding`（旧服务端忽略），但必须能处理格式 2 的二进制帧。
 - v2 同版本新增可选字段时双方必须忽略未知字段。

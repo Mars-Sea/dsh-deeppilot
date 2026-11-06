@@ -109,6 +109,7 @@ export const BRIDGE_INVARIANT_CAPABILITIES = [
   'deviceRevoke',
   'sessionInterest',
   'compressedFrames',
+  'incrementalTail',
 ] as const satisfies ReadonlyArray<keyof WelcomeCapabilities>
 
 /**
@@ -128,6 +129,8 @@ export function capabilityBits(
     sessionInterest: true,
     // 插件自身能力：客户端声明 acceptEncoding 后，超过 8 KB 的下行帧以 deflate-raw 压缩。
     compressedFrames: true,
+    // 插件自身能力：session.open 带 sinceSeq 时回增量 tail（无法保证完整时回全量）。
+    incrementalTail: true,
     approvals: true,
     questions: true,
     pendingSnapshot: true,

@@ -1026,6 +1026,41 @@ test('malformed watchSessions on auth.prove falls back to the full broadcast ins
   assert.deepEqual(sessionEventIds(ws), ['s-a'])
 })
 
+// ---------- 增量 tail（能力 incrementalTail） ----------
+
+test('session.open with sinceSeq answers an incremental tail; without it, the full tail', async () => {
+  const history = [
+    { event: { type: 'user/message', seq: 1, time: 1, data: { kind: 'user', text: '问题' } } },
+    { event: { type: 'tool/call', seq: 2, time: 2, data: { name: 'bash', arguments: '{}', callId: 'c1' } } },
+    { event: { type: 'tool/result', seq: 4, time: 4, data: { callId: 'c1', message: { content: 'ok' } } } },
+    { event: { type: 'assistant/message', seq: 5, time: 5, data: { text: '完成' } } },
+  ]
+  const { ws, authenticate } = await makeConnection({
+    proxyOverrides: {
+      sessions: {
+        list: async () => ({ result: { ok: true, value: { items: [] } } }),
+        history: async () => ({ result: { ok: true, value: { events: history, hasMore: false } } }),
+        projections: async () => ({ result: { ok: true, value: null } }),
+      },
+    } as unknown as Partial<ApiProxyLike>,
+  })
+  authenticate()
+  assert.equal(ws.sent.find((f) => f.type === 's2c.welcome')!.payload.capabilities.incrementalTail, true)
+
+  ws.receive({ v: 2, type: 'c2s.session.open', id: 'o1', payload: { sessionId: 's1', sinceSeq: 3 } })
+  await new Promise((r) => setTimeout(r, 10))
+  const incremental = ws.sent.filter((f) => f.type === 's2c.session.tail').at(-1)!
+  assert.equal(incremental.payload.incremental, true)
+  assert.equal(incremental.payload.sinceSeq, 3)
+  assert.deepEqual(incremental.payload.messages.map((m: any) => m.seq), [2, 5])
+
+  ws.receive({ v: 2, type: 'c2s.session.open', id: 'o2', payload: { sessionId: 's1' } })
+  await new Promise((r) => setTimeout(r, 10))
+  const full = ws.sent.filter((f) => f.type === 's2c.session.tail').at(-1)!
+  assert.equal(full.payload.incremental, undefined)
+  assert.deepEqual(full.payload.messages.map((m: any) => m.seq), [1, 2, 5])
+})
+
 // ---------- 压缩帧（能力 compressedFrames） ----------
 
 test('frames over 8 KB are deflate-raw compressed once the client accepts it; small frames stay text', async () => {

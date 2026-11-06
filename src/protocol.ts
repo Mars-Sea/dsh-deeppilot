@@ -459,6 +459,10 @@ export interface WelcomeCapabilities {
    * in `acceptEncoding` on c2s.auth.prove. Plugin-level. Absent ⇒ the field is
    * ignored and every JSON frame stays a text frame. */
   compressedFrames?: boolean
+  /** Bridge answers c2s.session.open carrying `sinceSeq` with an incremental
+   * tail (`incremental: true`) holding only rows changed after that seq, or
+   * with a full tail when it cannot prove the delta complete. Plugin-level. */
+  incrementalTail?: boolean
 }
 
 export interface WelcomePayload {
@@ -651,6 +655,9 @@ export interface SessionTailPayload {
   messages: MessageProjection[]
   oldestSeq: number
   hasMore: boolean
+  /** 能力 `incrementalTail`：本帧只含 sinceSeq 之后改动过的行，客户端按增量合并。 */
+  incremental?: true
+  sinceSeq?: number
 }
 
 export interface HistoryPagePayload {
