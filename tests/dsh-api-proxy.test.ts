@@ -693,3 +693,32 @@ test('schedule capability follows the optional service mounting after the bridge
     bridge.dispose()
   }
 })
+
+// 两代宿主读图契约（真实行为摘自 dsh-api-session-controller 源码）：
+// - 0.2.1-rc.5：读 request.attachmentId，自己在会话日志里找引用，找不到报 ATTACHMENT_NOT_REFERENCED；
+// - 0.2.2-rc.1：只读 request.attachment，按引用的 mediaType/bytes/width/height 核对文件，不查会话。
+for (const generation of ['0.2.1', '0.2.2'] as const) {
+  test(`image read-back works against the ${generation} host attachment contract`, async () => {
+    const stored = { attachmentId: 'sha256:abc', mediaType: 'image/png', bytes: 3, width: 2, height: 1 }
+    const records = [{ type: 'event', event: { type: 'tool/result', seq: 4, data: { callId: 'c', message: { role: 'tool', content: [{ type: 'image', attachment: stored }] } } } }]
+    const sessionController = {
+      page: async () => ({ records, hasMore: false }),
+      attachment: async (request: { sessionId: string; attachmentId?: string; attachment?: typeof stored }) => {
+        const ref = generation === '0.2.1'
+          ? (request.sessionId === 'session-1' && request.attachmentId === stored.attachmentId ? stored : undefined)
+          : request.attachment
+        if (!ref) throw new Error(generation === '0.2.1' ? 'ATTACHMENT_NOT_REFERENCED' : 'invalid reference')
+        if (ref.attachmentId !== stored.attachmentId || ref.bytes !== stored.bytes || ref.width !== stored.width ||
+            ref.height !== stored.height || ref.mediaType !== stored.mediaType) throw new Error('ATTACHMENT_CORRUPT')
+        return { attachment: ref, data: 'aGk=' }
+      },
+    }
+    const proxy = new DshApiProxy({ get: (key: string) => key === 'sessionController' ? sessionController : undefined } as never)
+    const bridge = new HostBridge(proxy as never, 100)
+
+    assert.deepEqual(await bridge.attachmentData('session-1', 'sha256:abc'), { mediaType: 'image/png', data: 'aGk=' })
+    // 本会话没引用过的图：两代宿主都读不到（新宿主靠 Bridge 不给引用）。
+    assert.equal(await bridge.attachmentData('session-1', 'sha256:other'), null)
+    bridge.dispose()
+  })
+}

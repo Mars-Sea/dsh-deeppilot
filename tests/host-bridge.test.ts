@@ -1816,6 +1816,90 @@ test('attachmentData relays host bytes and degrades when unsupported', async () 
   bridge.dispose()
 })
 
+// DSH 0.2.2 起宿主读图只认完整引用（且逐项核对字节数与宽高），旧宿主只认 attachmentId。
+const hostRef = (attachmentId: string) => ({ attachmentId, mediaType: 'image/png', bytes: 2048, width: 800, height: 600 })
+
+test('attachmentData sends the full host reference seen on a live tool result', async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  const payloads: any[] = []
+  proxy.sessions.attachment = async (req: any) => {
+    payloads.push(req.payload)
+    return { result: { ok: true, value: { attachment: { mediaType: 'image/png' }, data: 'aGk=' } } }
+  }
+  let historyReads = 0
+  proxy.sessions.history = async () => { historyReads++; return { result: { ok: true, value: { events: [], hasMore: false } } } }
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  await new Promise((r) => setTimeout(r, 10))
+  getPush()({
+    type: 'session/event', rpcId: 'r1', sessionId: 'session-a',
+    event: { type: 'tool/result', seq: 3, data: { callId: 'c1', message: { role: 'tool', content: [{ type: 'image', attachment: hostRef('att-live') }] } } },
+  })
+  await new Promise((r) => setTimeout(r, 20))
+
+  assert.deepEqual(await bridge.attachmentData('session-a', 'att-live'), { mediaType: 'image/png', data: 'aGk=' })
+  assert.deepEqual(payloads.at(-1), { sessionId: 'session-a', attachmentId: 'att-live', attachment: hostRef('att-live') },
+    'both generations of the host parameter travel together')
+  assert.equal(historyReads, 0, 'a reference seen live needs no history scan')
+
+  // 另一会话的同名 id 不借用本会话的引用：新宿主拿不到引用就读不到图。
+  await bridge.attachmentData('session-b', 'att-live')
+  assert.deepEqual(payloads.at(-1), { sessionId: 'session-b', attachmentId: 'att-live' })
+  bridge.dispose()
+})
+
+test('attachmentData recovers the reference from session history after a restart', async () => {
+  const { proxy } = makeFakeProxy()
+  const payloads: any[] = []
+  proxy.sessions.attachment = async (req: any) => {
+    payloads.push(req.payload)
+    return { result: { ok: true, value: { attachment: { mediaType: 'image/png' }, data: 'aGk=' } } }
+  }
+  const historyRequests: any[] = []
+  proxy.sessions.history = async (req: any) => {
+    historyRequests.push(req.payload)
+    const events = req.payload.beforeSeq === undefined
+      ? [{ event: { type: 'turn/end', seq: 40, data: {} } }]
+      : [{ event: { type: 'user/message', seq: 2, data: { message: { role: 'user', content: [{ type: 'image', attachment: hostRef('att-old') }] } } } }]
+    return { result: { ok: true, value: { events, hasMore: req.payload.beforeSeq === undefined } } }
+  }
+  const bridge = new HostBridge(proxy, 100)
+
+  assert.deepEqual(await bridge.attachmentData('session-a', 'att-old'), { mediaType: 'image/png', data: 'aGk=' })
+  assert.deepEqual(payloads.at(-1), { sessionId: 'session-a', attachmentId: 'att-old', attachment: hostRef('att-old') })
+  assert.deepEqual(historyRequests.map((p) => p.beforeSeq), [undefined, 40])
+  assert.ok(historyRequests.every((p) => p.sessionId === 'session-a' && p.maxMessages === 500))
+
+  await bridge.attachmentData('session-a', 'att-old')
+  assert.equal(historyRequests.length, 2, 'the recovered reference is cached')
+  bridge.dispose()
+})
+
+test('history pages opened by the phone also feed the reference cache', async () => {
+  const { proxy } = makeFakeProxy()
+  const payloads: any[] = []
+  proxy.sessions.attachment = async (req: any) => {
+    payloads.push(req.payload)
+    return { result: { ok: true, value: { attachment: { mediaType: 'image/png' }, data: 'aGk=' } } }
+  }
+  let historyReads = 0
+  proxy.sessions.history = async () => {
+    historyReads++
+    return { result: { ok: true, value: { events: [
+      { event: { type: 'user/message', seq: 1, data: { message: { role: 'user', content: [{ type: 'image', attachment: hostRef('att-tail') }] } } } },
+    ], hasMore: false } } }
+  }
+  const bridge = new HostBridge(proxy, 100)
+  const store: Array<{ type: string; payload: any }> = []
+  assert.equal(await bridge.openSession(makeSinkInto(store), 'session-a', 20), true)
+  const reads = historyReads
+
+  await bridge.attachmentData('session-a', 'att-tail')
+  assert.deepEqual(payloads.at(-1)?.attachment, hostRef('att-tail'))
+  assert.equal(historyReads, reads, 'the tail read already supplied the reference')
+  bridge.dispose()
+})
+
 for (const resolved of [false, true]) {
   test(`approval arguments match the exact call and do not revive resolved requests (${resolved})`, async () => {
     const { proxy, getPush } = makeFakeProxy()
