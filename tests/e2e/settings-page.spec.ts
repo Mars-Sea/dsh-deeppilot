@@ -29,11 +29,11 @@ const hostButtonStyle = (button: Locator) => button.evaluate((el) => {
 })
 
 for (const theme of ['light', 'dark']) {
-  test(`${theme}：四个开关直接沿用宿主组件的轨道、滑块和焦点样式`, async ({ page }) => {
+  test(`${theme}：三个开关直接沿用宿主组件的轨道、滑块和焦点样式`, async ({ page }) => {
     await page.goto(`/?theme=${theme}`)
     await page.getByRole('button', { name: /诊断工具/ }).click()
     const switches = page.locator('.pbb-section [role="switch"]')
-    await expect(switches).toHaveCount(4)
+    await expect(switches).toHaveCount(3)
     for (const control of await switches.all()) {
       const checked = await control.getAttribute('aria-checked')
       const reference = page.getByTestId('host-switch-reference').locator(`[aria-checked="${checked}"]`)
@@ -50,11 +50,11 @@ for (const theme of ['light', 'dark']) {
   })
 }
 
-test('四个宿主开关支持鼠标与空格，每次按新状态回写一次', async ({ page }) => {
+test('三个宿主开关支持鼠标与空格，每次按新状态回写一次；局域网连接常开、没有开关', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: /诊断工具/ }).click()
   const controls = [
-    ['允许手机连接', 'enabled', true], ['局域网连接', 'local', false],
+    ['允许手机连接', 'enabled', true],
     ['远程连接', 'remote', true], ['调试日志', 'debug', false],
   ] as const
   for (const [name, operation, initial] of controls) {
@@ -67,20 +67,21 @@ test('四个宿主开关支持鼠标与空格，每次按新状态回写一次',
     await expect(control).toHaveAttribute('aria-checked', String(initial))
     expect((await operations(page))[operation]).toBe(2)
   }
+  await expect(page.getByRole('switch', { name: '局域网连接', exact: true })).toHaveCount(0)
 })
 
-test('配置不可用时四个宿主开关禁用，不回写配置', async ({ page }) => {
+test('配置不可用时三个宿主开关禁用，不回写配置', async ({ page }) => {
   await page.goto('/?scenario=config-unavailable')
   await page.getByRole('button', { name: /诊断工具/ }).click()
   const switches = page.locator('.pbb-section [role="switch"]')
-  await expect(switches).toHaveCount(4)
+  await expect(switches).toHaveCount(3)
   for (const control of await switches.all()) {
     await expect(control).toBeDisabled()
     await expect(control).toHaveCSS('opacity', '0.5')
     await control.evaluate((el) => (el as HTMLButtonElement).click())
   }
   const recorded = await operations(page)
-  expect([recorded.enabled, recorded.local, recorded.remote, recorded.debug]).toEqual([0, 0, 0, 0])
+  expect([recorded.enabled, recorded.remote, recorded.debug]).toEqual([0, 0, 0])
 })
 
 for (const theme of ['light', 'dark']) {

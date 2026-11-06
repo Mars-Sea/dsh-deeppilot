@@ -421,6 +421,11 @@ interface WelcomeCapabilities {
    * tail (`incremental: true`) holding only rows changed after that seq, or
    * with a full tail when it cannot prove the delta complete. Plugin-level. */
   incrementalTail?: boolean;
+  /** Bridge includes `routes` (current LAN endpoints with their certificate
+   * fingerprint, and the public Funnel URL) in s2c.welcome so the client can
+   * prefer the LAN on the same network and fall back to Funnel elsewhere.
+   * Plugin-level. */
+  routeHints?: boolean;
 }
 type SessionStatus = "running" | "idle" | "error" | "unknown";
 /**

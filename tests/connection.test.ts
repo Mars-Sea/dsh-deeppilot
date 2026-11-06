@@ -112,6 +112,7 @@ async function makeConnection(opts: {
   diagnostics?: { record: (kind: string, reason: string, extra?: any) => unknown }
   auditLabel?: (value: string) => string
   attemptId?: string
+  routes?: () => any
 } = {}): Promise<Harness> {
   const bridge = new HostBridge(makeProxy(opts.proxyOverrides), 100)
   // Each harness gets its own registry file so tests never share state.
@@ -136,6 +137,7 @@ async function makeConnection(opts: {
     ...(opts.diagnostics !== undefined ? { diagnostics: opts.diagnostics as never } : {}),
     ...(opts.auditLabel !== undefined ? { auditLabel: opts.auditLabel } : {}),
     ...(opts.attemptId !== undefined ? { attemptId: opts.attemptId } : {}),
+    ...(opts.routes !== undefined ? { routes: opts.routes } : {}),
     onClosed: () => {
       void (async () => {
         await store.drain()
@@ -1024,6 +1026,25 @@ test('malformed watchSessions on auth.prove falls back to the full broadcast ins
   emitAssistantMessage(bridge, 's-a', 1)
   await new Promise((r) => setTimeout(r, 10))
   assert.deepEqual(sessionEventIds(ws), ['s-a'])
+})
+
+// ---------- 线路提示（能力 routeHints） ----------
+
+test('welcome carries the current routes; widget clients do not get them', async () => {
+  const routes = { lan: { urls: ['https://192.168.1.20:3098'], tlsFingerprint: 'sha256:abc' }, remote: { url: 'https://h.ts.net' } }
+  const app = await makeConnection({ routes: () => routes })
+  app.authenticate()
+  const welcome = app.ws.sent.find((f) => f.type === 's2c.welcome')!
+  assert.equal(welcome.payload.capabilities.routeHints, true)
+  assert.deepEqual(welcome.payload.routes, routes)
+
+  const widget = await makeConnection({ routes: () => routes })
+  widget.authenticate({ clientRole: 'widget' })
+  assert.equal(widget.ws.sent.find((f) => f.type === 's2c.welcome')!.payload.routes, undefined)
+
+  const none = await makeConnection({ routes: () => undefined })
+  none.authenticate()
+  assert.equal('routes' in none.ws.sent.find((f) => f.type === 's2c.welcome')!.payload, false)
 })
 
 // ---------- 增量 tail（能力 incrementalTail） ----------

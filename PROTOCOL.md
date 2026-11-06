@@ -272,9 +272,24 @@ APNs 必须同时具备 notifications.register 和对应通知类别的内容权
   "scopes": ["sessions.read", "prompt.send"],
   "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "pendingSnapshot": true, "notifyAllCategories": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true, "widgetPush": true, "deviceRevoke": true },
   "cursor": 1042,
-  "resumed": true
+  "resumed": true,
+  "routes": {
+    "lan": { "urls": ["https://192.168.1.20:3098"], "tlsFingerprint": "sha256:…" },
+    "remote": { "url": "https://example.funnel.ts.net" }
+  }
 } }
 ```
+
+`routes` 可选（能力 `routeHints`）：本主机当前可用的连接地址，形式与配对信息的 `host` 相同。
+`lan` 只在局域网监听在线时出现，只含 RFC1918 地址（物理网卡优先），客户端按顺序尝试，连接时只信任
+`tlsFingerprint` 一致的证书；`remote` 只在 Funnel 在线时出现，走系统信任链。插件的局域网监听始终开启，
+不提供关闭开关。小组件连接（`clientRole: "widget"`）不带此字段。
+
+- 这些地址只经已认证的连接下发，因此可信。客户端应保存并在每次 welcome 时覆盖（电脑的局域网地址、
+  Funnel 状态都会变）。
+- 客户端可以据此在同一网络下先走局域网、失败或在外时走 `remote`；经局域网配对的设备也因此获得公网地址。
+- 局域网证书密钥重建后指纹会变：经 `remote` 认证的连接收到的新 `tlsFingerprint` 可以直接替换本机保存的值，
+  无需重新配对。只能走局域网、拿不到 `remote` 的设备仍须重新配对。
 
 ## 3. 会话列表
 
@@ -985,6 +1000,8 @@ Bridge 侧 Host code 到 wire 码的映射是 `src/wire-errors.ts` 的单一属�
   改用二进制帧（见 §1.1）。缺失/false 时客户端照旧请求 base64 文本帧。
 - `sessionInterest` 是插件自身能力：true 表示接受 `c2s.auth.prove` 的 `watchSessions` 与
   `c2s.session.watch`。缺失/false 时客户端不得发送 `c2s.session.watch`，并且要容忍收到全部会话事件。
+- `routeHints` 是插件自身能力：true 表示 welcome 可能带 `routes`（见 §2 `s2c.welcome`）。缺失/false 时
+  客户端只使用配对时的地址。
 - `incrementalTail` 是插件自身能力：true 表示 `c2s.session.open` 接受 `sinceSeq` 并可能回增量 tail。
   缺失/false 时客户端不得发送 `sinceSeq`（旧服务端会忽略它，照旧回全量，但客户端不应依赖）。
 - `compressedFrames` 是插件自身能力：true 表示接受 `acceptEncoding` 并按 §1.2 压缩大帧。客户端可以

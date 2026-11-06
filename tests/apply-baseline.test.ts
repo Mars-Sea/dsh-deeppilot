@@ -194,10 +194,19 @@ async function recordBaseline(): Promise<ApplyBaseline> {
     const relayTestHttpRelay = await harness.testRelay()
     harness.setConfig({ push: { provider: 'none' } })
 
-    // ---- 5. 配置序列之二：LAN 监听启用（内核临时端口）应走到 online ----
+    // ---- 5. 配置序列之二：LAN 监听常开，换到另一个内核临时端口后应重新走到 online ----
     const ephemeralPort = await reserveEphemeralPort()
-    harness.setConfig({ local: { enabled: true, port: ephemeralPort } })
-    await harness.waitForLocal((phase) => phase === 'online' || phase === 'error')
+    harness.setConfig({ local: { port: ephemeralPort } })
+    // 启动时已在线：只等 phase 会立刻满足，必须等到新端口上线（或报错）且监听日志已写出。
+    const listeningLogsBefore = harness.logs.filter((line) => line.includes('local transport listening')).length
+    const deadline = Date.now() + 10_000
+    for (;;) {
+      const local = ((await harness.report()) as any).local
+      const relistened = harness.logs.filter((line) => line.includes('local transport listening')).length > listeningLogsBefore
+      if ((local.port === ephemeralPort && local.phase === 'online' && relistened) || local.phase === 'error') break
+      if (Date.now() > deadline) throw new Error('timed out waiting for LAN to relisten on the new port')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
     const snapshotAfterLocalEnabled = await harness.report() as any
     assert.equal(snapshotAfterLocalEnabled.local.phase, 'online', 'LAN 传输必须走到 online')
     const localSummaryAfterEnabled = summarizeLocal(snapshotAfterLocalEnabled.local, true)
@@ -234,7 +243,6 @@ async function recordBaseline(): Promise<ApplyBaseline> {
       remoteProviderRetained: effective.remote.provider,
       remoteEnabledRetained: effective.remote.enabled,
       remoteHostnameRetained: effective.remote.hostname,
-      localEnabledRetained: effective.local.enabled,
       localPortRetained: typeof effective.local.port === 'number',
       pushProviderRetained: effective.push.provider,
       pushRelayUrlRetained: effective.push.relayUrl,
@@ -254,7 +262,8 @@ async function recordBaseline(): Promise<ApplyBaseline> {
     await harness.dispose()
 
     return {
-      snapshot: normalize(snapshot, { dataDir }),
+      // 启动时局域网已在临时端口上线：端口随机，统一哨兵化。
+      snapshot: normalize(snapshot, { dataDir, maskPort: true }),
       reportFieldTypes,
       dataDirIsolation,
       relayTestNotRelay,
@@ -321,7 +330,7 @@ test('apply() 可观测面与基线快照一致', async (t) => {
     assert.deepEqual(actual.relayTestHttpRelay, expected.relayTestHttpRelay)
   })
   await t.test('配对授权形状', () => assert.deepEqual(actual.pairingShape, expected.pairingShape))
-  await t.test('启用 LAN 后走到 online', () => {
+  await t.test('LAN 常开，换端口后重新走到 online', () => {
     assert.deepEqual(actual.snapshotAfterLocalEnabled, expected.snapshotAfterLocalEnabled)
     assert.deepEqual(actual.localSummaryAfterEnabled, expected.localSummaryAfterEnabled)
     assert.equal(actual.idleVolatileUpdateKeepsLocalOnline, expected.idleVolatileUpdateKeepsLocalOnline)

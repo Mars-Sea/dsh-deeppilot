@@ -110,6 +110,7 @@ export const BRIDGE_INVARIANT_CAPABILITIES = [
   'sessionInterest',
   'compressedFrames',
   'incrementalTail',
+  'routeHints',
 ] as const satisfies ReadonlyArray<keyof WelcomeCapabilities>
 
 /**
@@ -131,6 +132,8 @@ export function capabilityBits(
     compressedFrames: true,
     // 插件自身能力：session.open 带 sinceSeq 时回增量 tail（无法保证完整时回全量）。
     incrementalTail: true,
+    // 插件自身能力：welcome 带当前可用的局域网 / Funnel 地址，供手机自动选路。
+    routeHints: true,
     approvals: true,
     questions: true,
     pendingSnapshot: true,

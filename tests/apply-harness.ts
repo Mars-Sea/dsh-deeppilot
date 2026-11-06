@@ -35,10 +35,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import { Config, plainConfig } from '../src/config.ts'
 import { bridgeDataDir } from '../src/token.ts'
 
-/** 默认启动项：master switch 打开，两条传输都关闭，推送 provider=none。 */
+/**
+ * 默认启动项：master switch 打开，Funnel 关闭，推送 provider=none。局域网监听常开
+ * （不受配置开关影响），bootApply 每次给它分配一个内核临时端口，避免撞上本机已有监听。
+ */
 export const DEFAULT_BOOT_OPTIONS: Record<string, unknown> = {
   enabled: true,
-  local: { enabled: false },
   remote: { enabled: false },
   push: { provider: 'none' },
 }
@@ -602,7 +604,11 @@ export async function bootApply(input: Record<string, unknown> = {}): Promise<Ap
     const { services, recorder } = createFakeControllers()
     for (const [name, value] of Object.entries(extraServices)) services.set(name, value)
 
-    const options = parseConfig({ ...DEFAULT_BOOT_OPTIONS, ...override })
+    const overrideLocal = isPlainObject(override.local) ? override.local : {}
+    const local = overrideLocal.port === undefined
+      ? { ...overrideLocal, port: await reserveEphemeralPort() }
+      : overrideLocal
+    const options = parseConfig({ ...DEFAULT_BOOT_OPTIONS, ...override, local })
     pinPerBootPaths(options, override, dataDir)
 
     const ctx = new FakeContext(services)

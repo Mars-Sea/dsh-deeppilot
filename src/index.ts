@@ -15,6 +15,7 @@ import { registerQuietCompletionTool, type ToolsServiceLike } from './quiet-comp
 import { DshApiProxy, type DshInteractionKind } from './dsh-api-proxy.ts'
 import { applyReportRemote } from './report-remote.ts'
 import type { DeepPilotReport } from './report-wire.ts'
+import type { WelcomeRoutes } from './protocol.ts'
 import { DeviceStore, MAX_DEVICES, bridgeDataDir, deviceDisplayName, ensurePrivateBridgeDataDir, expandHome, migrateLegacyBridgeDataDir } from './token.ts'
 import type { ApnsEnvironment } from './token.ts'
 import {
@@ -35,6 +36,7 @@ import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
 import { localEndpointURLs } from './local-policy.ts'
+import { welcomeRoutes } from './welcome-routes.ts'
 import { closeServer, createPhoneServer, listen, type PhoneServerTransportError } from './phone-server.ts'
 import { loadOrCreateLanTlsIdentity, type LanTlsIdentity } from './lan-tls.ts'
 import {
@@ -576,6 +578,7 @@ export function apply(ctx: Context, options: unknown): void {
             try {
               const connection = new BridgeConnection(ws, {
                 bridge,
+                routes: phoneRoutes,
                 devices,
                 serverVersion: SERVER_VERSION,
                 audience,
@@ -685,6 +688,14 @@ export function apply(ctx: Context, options: unknown): void {
     dataDir,
     log,
   })
+  /**
+   * welcome.routes（能力 routeHints）：手机据此在同一 Wi-Fi 下先走局域网、在外走 Funnel。
+   * 局域网只给 RFC1918 地址（不含 tailnet 的 100.64/10：手机未入 tailnet 时只会白等超时），
+   * 物理网卡优先；Funnel 只在 online 时给。每次 welcome 现算：地址与 Funnel 状态都会变。
+   */
+  const phoneRoutes = (): WelcomeRoutes | undefined =>
+    welcomeRoutes(localTransport.status(), remoteTransport.status(), localLANIPv4Addresses())
+
   const localStatus = (addresses: readonly string[]): DeepPilotReport['local'] => {
     const state = localTransport.status()
     return {

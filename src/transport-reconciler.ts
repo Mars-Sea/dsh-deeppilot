@@ -241,7 +241,9 @@ export interface LocalTransportDeps {
 export function createLocalTransport(deps: LocalTransportDeps): TransportReconciler<LocalInstance, LocalStatus> {
   const spec: TransportSpec<LocalInstance, LocalStatus> = {
     keyOf: (config) => ({
-      enabled: config.enabled === true && config.local?.enabled !== false,
+      // 局域网监听常开（不受 local.enabled 影响）：手机在同一 Wi-Fi 下要能自动切到局域网，
+      // 见 PROTOCOL.md welcome.routes。只随插件总开关启停。
+      enabled: config.enabled === true,
       port: normalizeLocalPort(config.local?.port),
     }),
     skipWhenDisabled: true,
@@ -305,7 +307,7 @@ export function createLocalTransport(deps: LocalTransportDeps): TransportReconci
     },
   }
   return new TransportReconciler<LocalInstance, LocalStatus>(spec, deps.config, deps.log, {
-    phase: deps.config().enabled === true && deps.config().local?.enabled !== false ? 'starting' : 'disabled',
+    phase: deps.config().enabled === true ? 'starting' : 'disabled',
     port: normalizeLocalPort(deps.config().local?.port),
     endpoints: [],
     updatedAt: Date.now(),

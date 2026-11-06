@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws'
 import { PROTOCOL_VERSION } from './protocol.ts'
-import type { Envelope } from './protocol.ts'
+import type { Envelope, WelcomeRoutes } from './protocol.ts'
 import type { BridgeSink, HostBridge } from './host-bridge.ts'
 import type { DeviceStore } from './token.ts'
 import type { DeviceScope } from './device-auth.ts'
@@ -36,6 +36,8 @@ export interface ConnectionStateDeps {
   diagnostics?: DiagnosticsRecorder
   /** 客户端带来的 attemptId（WS 升级 query `at`），只记录不校验。 */
   attemptId?: string
+  /** 当前可用线路（能力 `routeHints`），每次 welcome 现取：地址或 Funnel 状态可能已变。 */
+  routes?: () => WelcomeRoutes | undefined
   /** Called once when the socket closes (cleanly or not). */
   onClosed?: (connection: BridgeConnection) => void
   /**
@@ -316,6 +318,8 @@ export class BridgeConnection implements BridgeSink {
     const cursor = identity.resumeCursor
     // Each replayed business frame is authorized separately by HostBridge.
     const canResume = cursor !== undefined && this.deps.bridge.canResumeFrom(cursor)
+    // 小组件连接只读概览，不需要选路信息。
+    const routes = identity.widgetClient ? undefined : this.deps.routes?.()
     // Welcome strictly precedes any replayed pushes.
     this.send('s2c.welcome', {
       protocolVersion: PROTOCOL_VERSION,
@@ -325,6 +329,7 @@ export class BridgeConnection implements BridgeSink {
       capabilities: this.deps.bridge.capabilities,
       cursor: this.deps.bridge.currentCursor(),
       resumed: canResume,
+      ...(routes !== undefined ? { routes } : {}),
     })
     if (!identity.widgetClient) this.deps.bridge.addSink(this)
     if (cursor !== undefined) {

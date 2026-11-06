@@ -23,7 +23,6 @@ function fullProps(overrides: Record<string, unknown> = {}): Record<string, unkn
   return {
     useDeepPilotReport: () => ({ status: 'ready', report: null, message: '' }),
     useDeepPilotEnabled: () => ({ status: 'ready', enabled: true }),
-    useDeepPilotLocalEnabled: () => ({ status: 'ready', enabled: true }),
     useDeepPilotLocalPort: () => ({ status: 'ready', value: 3098 }),
     useDeepPilotRemoteEnabled: () => ({ status: 'ready', enabled: false }),
     useDeepPilotRemoteConnectionLimit: () => ({ status: 'ready', value: 8 }),
@@ -35,7 +34,6 @@ function fullProps(overrides: Record<string, unknown> = {}): Record<string, unkn
     testRelay: async () => ({ url: '', overall: 'failed', tokenIssued: false, steps: [] }),
     testPush: async () => ({ transport: 'none', overall: 'not-configured', message: '', results: [] }),
     setDeepPilotEnabled: () => {},
-    setDeepPilotLocalEnabled: () => {},
     setDeepPilotLocalPort: async () => {},
     setDeepPilotRemoteEnabled: () => {},
     setDeepPilotRemoteConnectionLimit: async () => {},
@@ -45,13 +43,13 @@ function fullProps(overrides: Record<string, unknown> = {}): Record<string, unkn
   }
 }
 
-test('宿主给全时没有诊断，十二个能力全部在位', () => {
+test('宿主给全时没有诊断，十一个能力全部在位', () => {
   const surface = normalizeSettingsPageProps(fullProps())
   assert.deepEqual(surface.diagnostics, [])
   assert.equal(surface.reportHookMissing, false)
   assert.deepEqual([...surface.can].sort(), [
     'beginPairing', 'refresh', 'revokeDevice', 'setDebug', 'setDeviceName',
-    'setEnabled', 'setLocalEnabled', 'setLocalPort', 'setRemoteEnabled',
+    'setEnabled', 'setLocalPort', 'setRemoteEnabled',
     'setRemoteLimit', 'testPush', 'testRelay',
   ].sort())
 })
@@ -68,9 +66,7 @@ test('一个 prop 都不给时，诊断逐条对上且顺序与迁移前一致',
     'diag.missingTestRelay',
     'diag.missingTestPush',
     'diag.missingSetEnabled',
-    'diag.missingLocalEnabledHook',
     'diag.missingLocalPortHook',
-    'diag.missingSetLocal',
     'diag.missingSetLocalPort',
     'diag.missingRemoteEnabledHook',
     'diag.missingSetRemote',
@@ -104,9 +100,8 @@ test('hook 缺失时换成引用恒定的 fallback，缺省态与迁移前逐项
     'fallback 必须是模块级常量，否则 React 会把它当作 hook 顺序变化')
   assert.equal(first.props.useDeepPilotEnabled, MISSING_ENABLED_HOOK)
 
-  // 缺省态：总开关默认开但未就绪；本地默认开；本地端口回落默认值；远程默认关。
+  // 缺省态：总开关默认开但未就绪；本地端口回落默认值；远程默认关（局域网连接常开，无开关）。
   assert.deepEqual(first.props.useDeepPilotEnabled((s) => s), { status: 'unavailable', enabled: true })
-  assert.deepEqual(first.props.useDeepPilotLocalEnabled((s) => s), { status: 'unavailable', enabled: true })
   assert.deepEqual(first.props.useDeepPilotLocalPort((s) => s), MISSING_LOCAL_PORT_HOOK((s) => s))
   assert.deepEqual(first.props.useDeepPilotRemoteConnectionLimit((s) => s), MISSING_REMOTE_LIMIT_HOOK((s) => s))
   assert.deepEqual(first.props.useDeepPilotReport((s) => s), { status: 'loading', report: null, message: '' },
@@ -125,7 +120,7 @@ test('可选函数在位时才进 props 与 can', () => {
 test('props 不是对象时不会炸', () => {
   for (const raw of [undefined, null, 42, 'nope']) {
     const surface = normalizeSettingsPageProps(raw)
-    assert.equal(surface.diagnostics.length, 19)
+    assert.equal(surface.diagnostics.length, 17)
     assert.equal(typeof surface.props.useDeepPilotReport, 'function')
   }
 })
@@ -136,9 +131,9 @@ test('t 缺失时退化为回显 key，页面仍能渲染', () => {
 })
 
 test('SettingsPageProps 的 hook 数量与注入面一致', () => {
-  // 注入面给 7 个 hook；这里防止将来加了 hook 却忘了进归一化。
+  // 注入面给 6 个 hook；这里防止将来加了 hook 却忘了进归一化。
   const hooks = Object.keys(fullProps()).filter((key) => key.startsWith('useDeepPilot'))
-  assert.equal(hooks.length, 7)
+  assert.equal(hooks.length, 6)
   const surface = normalizeSettingsPageProps(fullProps())
   for (const hook of hooks) {
     assert.equal(typeof (surface.props as unknown as Record<string, unknown>)[hook], 'function', hook)

@@ -76,6 +76,7 @@ export const Config = z.object({
     debug: false,
   }).volatile(),
   local: z.object({
+    // 已废弃：局域网监听常开，此值不再生效。保留字段只为让旧配置（含 enabled: false）照常加载。
     enabled: z.boolean().default(true),
     port: z.natural()
       .min(MIN_LOCAL_PORT)

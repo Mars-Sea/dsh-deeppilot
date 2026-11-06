@@ -53,7 +53,7 @@ function Fixture(): any {
   const [localPort, setLocalPort] = useState(3098)
   const [limit, setLimit] = useState(8)
   const [debug, setDebug] = useState(false)
-  const operations = useRef({ grants: 0, renames: 0, revokes: 0, ports: 0, limits: 0, pushes: 0, enabled: 0, local: 0, remote: 0, debug: 0 })
+  const operations = useRef({ grants: 0, renames: 0, revokes: 0, ports: 0, limits: 0, pushes: 0, enabled: 0, remote: 0, debug: 0 })
   const [revision, setRevision] = useState(0)
   const record = (key: keyof typeof operations.current): void => {
     operations.current[key] += 1
@@ -64,13 +64,11 @@ function Fixture(): any {
     t: (key, vars) => interpolate(translateOrThrow(locale, key), vars), refresh,
     useDeepPilotReport: (select) => select({ status: 'ready', report, message: '' }),
     useDeepPilotEnabled: (select) => select({ status: 'ready', enabled: report.enabled }),
-    useDeepPilotLocalEnabled: (select) => select({ status: 'ready', enabled: report.local.phase !== 'disabled' }),
     useDeepPilotRemoteEnabled: (select) => select({ status: 'ready', enabled: report.remote.phase !== 'disabled' }),
     useDeepPilotLocalPort: (select) => select({ status: 'ready', value: localPort }),
     useDeepPilotRemoteConnectionLimit: (select) => select({ status: 'ready', value: limit }),
     useDeepPilotDebug: (select) => select({ status: 'ready', enabled: debug }),
     setDeepPilotEnabled: (enabled) => { record('enabled'); setReport((r) => ({ ...r, enabled })) },
-    setDeepPilotLocalEnabled: (enabled) => { record('local'); setReport((r) => ({ ...r, local: { ...r.local, phase: enabled ? 'online' : 'disabled' } })) },
     setDeepPilotRemoteEnabled: (enabled) => { record('remote'); setReport((r) => ({ ...r, remote: { ...r.remote, phase: enabled ? 'online' : 'disabled' } })) },
     setDeepPilotDebug: (enabled) => { record('debug'); setDebug(enabled) },
     setDeepPilotLocalPort: (value) => { record('ports'); setLocalPort(value) },
@@ -98,7 +96,6 @@ function Fixture(): any {
   if (scenario === 'report-error') props.useDeepPilotReport = (select) => select({ status: 'error', report: null, message: 'E_FIXTURE_REPORT' })
   if (scenario === 'config-unavailable') {
     props.useDeepPilotEnabled = (select) => select({ status: 'unavailable', enabled: report.enabled })
-    props.useDeepPilotLocalEnabled = (select) => select({ status: 'unavailable', enabled: false })
     props.useDeepPilotRemoteEnabled = (select) => select({ status: 'unavailable', enabled: true })
     props.useDeepPilotDebug = (select) => select({ status: 'unavailable', enabled: false })
   }

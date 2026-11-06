@@ -19,7 +19,6 @@
 import type {
   DebugState,
   EnabledState,
-  LocalEnabledState,
   LocalPortState,
   PageState,
   RemoteConnectionLimitState,
@@ -35,7 +34,6 @@ export type Selector<S> = (select: (state: S) => S) => S
 
 export type ReportSelector = Selector<PageState>
 export type EnabledSelector = Selector<EnabledState>
-export type LocalEnabledSelector = Selector<LocalEnabledState>
 export type LocalPortSelector = Selector<LocalPortState>
 export type RemoteEnabledSelector = Selector<RemoteEnabledState>
 export type RemoteLimitSelector = Selector<RemoteConnectionLimitState>
@@ -48,7 +46,6 @@ export interface SettingsPageProps {
   // ---------- hooks（恒为函数：缺失时由 seam 换成 fallback） ----------
   useDeepPilotReport: ReportSelector
   useDeepPilotEnabled: EnabledSelector
-  useDeepPilotLocalEnabled: LocalEnabledSelector
   useDeepPilotLocalPort: LocalPortSelector
   useDeepPilotRemoteEnabled: RemoteEnabledSelector
   useDeepPilotRemoteConnectionLimit: RemoteLimitSelector
@@ -61,7 +58,6 @@ export interface SettingsPageProps {
   testRelay?: () => Promise<RelayTestResult>
   testPush?: () => Promise<PushTestResult>
   setDeepPilotEnabled?: (enabled: boolean) => unknown
-  setDeepPilotLocalEnabled?: (enabled: boolean) => unknown
   setDeepPilotLocalPort?: (port: number) => Promise<unknown> | unknown
   setDeepPilotRemoteEnabled?: (enabled: boolean) => unknown
   setDeepPilotRemoteConnectionLimit?: (limit: number) => Promise<unknown> | unknown
@@ -79,7 +75,6 @@ export type SettingsCapability =
   | 'testRelay'
   | 'testPush'
   | 'setEnabled'
-  | 'setLocalEnabled'
   | 'setLocalPort'
   | 'setRemoteEnabled'
   | 'setRemoteLimit'
@@ -98,7 +93,6 @@ export interface SettingsPageSurface {
 
 export const MISSING_REPORT_HOOK: ReportSelector = () => ({ status: 'loading', report: null, message: '' })
 export const MISSING_ENABLED_HOOK: EnabledSelector = () => ({ status: 'unavailable', enabled: true })
-export const MISSING_LOCAL_ENABLED_HOOK: LocalEnabledSelector = () => ({ status: 'unavailable', enabled: true })
 export const MISSING_LOCAL_PORT_HOOK: LocalPortSelector = () => ({ status: 'unavailable', value: DEFAULT_LOCAL_PORT })
 export const MISSING_REMOTE_ENABLED_HOOK: RemoteEnabledSelector = () => ({ status: 'unavailable', enabled: false })
 export const MISSING_REMOTE_LIMIT_HOOK: RemoteLimitSelector = () => ({ status: 'unavailable', value: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE })
@@ -108,7 +102,6 @@ export const MISSING_DEBUG_HOOK: DebugSelector = () => ({ status: 'unavailable',
 const DIAG_KEY = {
   reportHook: 'diag.missingReportHook',
   enabledHook: 'diag.missingEnabledHook',
-  localEnabledHook: 'diag.missingLocalEnabledHook',
   localPortHook: 'diag.missingLocalPortHook',
   remoteEnabledHook: 'diag.missingRemoteEnabledHook',
   remoteLimitHook: 'diag.missingRemoteLimitHook',
@@ -120,7 +113,6 @@ const DIAG_KEY = {
   testRelay: 'diag.missingTestRelay',
   testPush: 'diag.missingTestPush',
   setEnabled: 'diag.missingSetEnabled',
-  setLocal: 'diag.missingSetLocal',
   setLocalPort: 'diag.missingSetLocalPort',
   setRemote: 'diag.missingSetRemote',
   setRemoteLimit: 'diag.missingSetRemoteLimit',
@@ -136,7 +128,6 @@ const CAPABILITY_BY_PROP: ReadonlyArray<[SettingsCapability, keyof SettingsPageP
   ['testRelay', 'testRelay'],
   ['testPush', 'testPush'],
   ['setEnabled', 'setDeepPilotEnabled'],
-  ['setLocalEnabled', 'setDeepPilotLocalEnabled'],
   ['setLocalPort', 'setDeepPilotLocalPort'],
   ['setRemoteEnabled', 'setDeepPilotRemoteEnabled'],
   ['setRemoteLimit', 'setDeepPilotRemoteConnectionLimit'],
@@ -160,7 +151,6 @@ export function normalizeSettingsPageProps(raw: unknown): SettingsPageSurface {
 
   const useReport = isFn(source.useDeepPilotReport) ? (source.useDeepPilotReport as ReportSelector) : MISSING_REPORT_HOOK
   const useEnabled = isFn(source.useDeepPilotEnabled) ? (source.useDeepPilotEnabled as EnabledSelector) : MISSING_ENABLED_HOOK
-  const useLocalEnabled = isFn(source.useDeepPilotLocalEnabled) ? (source.useDeepPilotLocalEnabled as LocalEnabledSelector) : MISSING_LOCAL_ENABLED_HOOK
   const useLocalPort = isFn(source.useDeepPilotLocalPort) ? (source.useDeepPilotLocalPort as LocalPortSelector) : MISSING_LOCAL_PORT_HOOK
   const useRemoteEnabled = isFn(source.useDeepPilotRemoteEnabled) ? (source.useDeepPilotRemoteEnabled as RemoteEnabledSelector) : MISSING_REMOTE_ENABLED_HOOK
   const useRemoteLimit = isFn(source.useDeepPilotRemoteConnectionLimit) ? (source.useDeepPilotRemoteConnectionLimit as RemoteLimitSelector) : MISSING_REMOTE_LIMIT_HOOK
@@ -176,9 +166,7 @@ export function normalizeSettingsPageProps(raw: unknown): SettingsPageSurface {
   if (!isFn(source.testRelay)) diagnostics.push(t(DIAG_KEY.testRelay))
   if (!isFn(source.testPush)) diagnostics.push(t(DIAG_KEY.testPush))
   if (!isFn(source.setDeepPilotEnabled)) diagnostics.push(t(DIAG_KEY.setEnabled))
-  if (!isFn(source.useDeepPilotLocalEnabled)) diagnostics.push(t(DIAG_KEY.localEnabledHook))
   if (!isFn(source.useDeepPilotLocalPort)) diagnostics.push(t(DIAG_KEY.localPortHook))
-  if (!isFn(source.setDeepPilotLocalEnabled)) diagnostics.push(t(DIAG_KEY.setLocal))
   if (!isFn(source.setDeepPilotLocalPort)) diagnostics.push(t(DIAG_KEY.setLocalPort))
   if (!isFn(source.useDeepPilotRemoteEnabled)) diagnostics.push(t(DIAG_KEY.remoteEnabledHook))
   if (!isFn(source.setDeepPilotRemoteEnabled)) diagnostics.push(t(DIAG_KEY.setRemote))
@@ -194,7 +182,6 @@ export function normalizeSettingsPageProps(raw: unknown): SettingsPageSurface {
   const props: SettingsPageProps = {
     useDeepPilotReport: useReport,
     useDeepPilotEnabled: useEnabled,
-    useDeepPilotLocalEnabled: useLocalEnabled,
     useDeepPilotLocalPort: useLocalPort,
     useDeepPilotRemoteEnabled: useRemoteEnabled,
     useDeepPilotRemoteConnectionLimit: useRemoteLimit,
@@ -207,7 +194,6 @@ export function normalizeSettingsPageProps(raw: unknown): SettingsPageSurface {
     testRelay: isFn(source.testRelay) ? (source.testRelay as () => Promise<RelayTestResult>) : undefined,
     testPush: isFn(source.testPush) ? (source.testPush as () => Promise<PushTestResult>) : undefined,
     setDeepPilotEnabled: isFn(source.setDeepPilotEnabled) ? (source.setDeepPilotEnabled as SettingsPageProps['setDeepPilotEnabled']) : undefined,
-    setDeepPilotLocalEnabled: isFn(source.setDeepPilotLocalEnabled) ? (source.setDeepPilotLocalEnabled as SettingsPageProps['setDeepPilotLocalEnabled']) : undefined,
     setDeepPilotLocalPort: isFn(source.setDeepPilotLocalPort) ? (source.setDeepPilotLocalPort as SettingsPageProps['setDeepPilotLocalPort']) : undefined,
     setDeepPilotRemoteEnabled: isFn(source.setDeepPilotRemoteEnabled) ? (source.setDeepPilotRemoteEnabled as SettingsPageProps['setDeepPilotRemoteEnabled']) : undefined,
     setDeepPilotRemoteConnectionLimit: isFn(source.setDeepPilotRemoteConnectionLimit) ? (source.setDeepPilotRemoteConnectionLimit as SettingsPageProps['setDeepPilotRemoteConnectionLimit']) : undefined,

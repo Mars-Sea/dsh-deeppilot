@@ -463,6 +463,11 @@ export interface WelcomeCapabilities {
    * tail (`incremental: true`) holding only rows changed after that seq, or
    * with a full tail when it cannot prove the delta complete. Plugin-level. */
   incrementalTail?: boolean
+  /** Bridge includes `routes` (current LAN endpoints with their certificate
+   * fingerprint, and the public Funnel URL) in s2c.welcome so the client can
+   * prefer the LAN on the same network and fall back to Funnel elsewhere.
+   * Plugin-level. */
+  routeHints?: boolean
 }
 
 export interface WelcomePayload {
@@ -473,6 +478,19 @@ export interface WelcomePayload {
   capabilities: WelcomeCapabilities
   cursor: number
   resumed: boolean
+  /** 能力 `routeHints`：本主机当前可用的连接地址，客户端据此自动选路。 */
+  routes?: WelcomeRoutes
+}
+
+/**
+ * 可用线路（PROTOCOL.md s2c.welcome `routes`）。地址形如配对信息里的 `host`
+ * （`https://…`，不带路径）。只在已认证的连接上下发，局域网仍按指纹校验证书。
+ */
+export interface WelcomeRoutes {
+  /** 局域网监听在线时出现；地址按物理网卡优先排序，客户端按顺序尝试。 */
+  lan?: { urls: string[]; tlsFingerprint: string }
+  /** Funnel 在线时出现。 */
+  remote?: { url: string }
 }
 
 export type SessionStatus = "running" | "idle" | "error" | "unknown"
