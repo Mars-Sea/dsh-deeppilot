@@ -106,6 +106,8 @@ export interface AuthenticatedIdentity {
   resumeCursor: number | undefined
   /** `watchSessions`（能力 `sessionInterest`）：缺省 = 旧客户端，收全部会话事件。 */
   watchSessions: string[] | undefined
+  /** `acceptEncoding` 含 "deflate-raw"（能力 `compressedFrames`）：大下行帧可压缩发送。 */
+  acceptsDeflate: boolean
   deviceName: string
   appVersion: string
 }
@@ -420,6 +422,8 @@ export class ConnectionGate {
       resumeCursor: this.widgetClient ? undefined : resumeCursor,
       // 不在签名原文里：它只会收窄本设备已有权限的下行内容，不扩大任何权限。
       watchSessions: this.widgetClient ? undefined : parseWatchSessions(p.watchSessions),
+      // 同样不进签名原文：只改变下行编码，不改变内容与权限。
+      acceptsDeflate: Array.isArray(p.acceptEncoding) && p.acceptEncoding.includes('deflate-raw'),
       deviceName,
       appVersion,
     })

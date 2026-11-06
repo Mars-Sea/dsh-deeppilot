@@ -108,6 +108,7 @@ export const BRIDGE_INVARIANT_CAPABILITIES = [
   'liveActivityPush',
   'deviceRevoke',
   'sessionInterest',
+  'compressedFrames',
 ] as const satisfies ReadonlyArray<keyof WelcomeCapabilities>
 
 /**
@@ -125,6 +126,8 @@ export function capabilityBits(
     binaryFrames: true,
     // 插件自身能力：连接声明关注集合后，会话事件只发给打开或关注的会话。
     sessionInterest: true,
+    // 插件自身能力：客户端声明 acceptEncoding 后，超过 8 KB 的下行帧以 deflate-raw 压缩。
+    compressedFrames: true,
     approvals: true,
     questions: true,
     pendingSnapshot: true,

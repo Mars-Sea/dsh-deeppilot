@@ -5,7 +5,7 @@ import type { BridgeSink, HostBridge } from './host-bridge.ts'
 import type { DeviceStore } from './token.ts'
 import type { DeviceScope } from './device-auth.ts'
 import { MAX_OUTBOUND_BUFFER_BYTES } from './connection-policy.ts'
-import { encodeBinaryFrame } from './binary-frame.ts'
+import { COMPRESS_MIN_BYTES, encodeBinaryFrame, encodeCompressedFrame } from './binary-frame.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import type { WireErrorCode } from './wire-errors.ts'
 import type { DiagnosticsRecorder } from './diagnostics.ts'
@@ -90,6 +90,8 @@ export class BridgeConnection implements BridgeSink {
    * `watchSessions`（须在重放前生效）与之后的 c2s.session.watch（整体替换）。
    */
   private watchedSessions: Set<string> | undefined
+  /** 客户端认证时声明接受 deflate-raw（能力 `compressedFrames`）；认证前一律文本帧。 */
+  private compressDownlink = false
   private liveActivityRegistrationGeneration = 0
   private pendingLiveActivityId?: string
   private lastActivity = Date.now()
@@ -309,6 +311,8 @@ export class BridgeConnection implements BridgeSink {
     this.identity = identity
     // 必须先于重放生效：resumeFrom 同步补发，补发范围按关注集合筛选。
     if (identity.watchSessions !== undefined) this.watchedSessions = new Set(identity.watchSessions)
+    // welcome 本身就可能被压缩：客户端在 prove 里声明过，已经能解。
+    this.compressDownlink = identity.acceptsDeflate
     const cursor = identity.resumeCursor
     // Each replayed business frame is authorized separately by HostBridge.
     const canResume = cursor !== undefined && this.deps.bridge.canResumeFrom(cursor)
@@ -385,7 +389,17 @@ export class BridgeConnection implements BridgeSink {
       this.close(1013, 'client too slow')
       return
     }
-    this.ws.send(body === undefined ? JSON.stringify(envelope) : encodeBinaryFrame(envelope, body))
+    if (body !== undefined) {
+      this.ws.send(encodeBinaryFrame(envelope, body))
+      return
+    }
+    const json = JSON.stringify(envelope)
+    // 大帧压缩（PROTOCOL.md §1.1 格式 2）：只看这一帧序列化后的字节数。
+    if (this.compressDownlink && Buffer.byteLength(json) > COMPRESS_MIN_BYTES) {
+      this.ws.send(encodeCompressedFrame(json))
+      return
+    }
+    this.ws.send(json)
   }
 
   private fail(id: string | undefined, code: WireErrorCode, message: string): void {

@@ -40,6 +40,8 @@ export interface AuthProofPayload extends AuthChallengePayload {
   resumeCursor?: number
   /** 能力 `sessionInterest`：本机缓存、需保持最新的会话（最多 16 个）。不进签名原文。 */
   watchSessions?: string[]
+  /** 能力 `compressedFrames`：可接受的下行压缩编码，目前只有 "deflate-raw"。不进签名原文。 */
+  acceptEncoding?: string[]
 }
 
 /** Content-free WidgetKit invalidation; never a user-visible alert. */
@@ -452,6 +454,11 @@ export interface WelcomeCapabilities {
    * opened or watches. Plugin-level. Absent ⇒ the client gets every
    * session's events, as before. */
   sessionInterest?: boolean
+  /** Bridge compresses downlink frames over 8 KB as binary format 2
+   * (`[2][deflate-raw(envelope JSON)]`) once the client listed "deflate-raw"
+   * in `acceptEncoding` on c2s.auth.prove. Plugin-level. Absent ⇒ the field is
+   * ignored and every JSON frame stays a text frame. */
+  compressedFrames?: boolean
 }
 
 export interface WelcomePayload {

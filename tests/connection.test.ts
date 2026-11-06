@@ -7,7 +7,7 @@ import { BridgeConnection, AUTH_TIMEOUT_MS, MAX_OUTBOUND_BUFFER_BYTES, PRE_AUTH_
 import { HostBridge } from '../src/host-bridge.ts'
 import type { ApiProxyLike } from '../src/host-bridge.ts'
 import { DeviceStore } from '../src/token.ts'
-import { BINARY_CHUNK_BYTES, MAX_BINARY_ATTACHMENT_BYTES, decodeBinaryFrame } from '../src/binary-frame.ts'
+import { BINARY_CHUNK_BYTES, MAX_BINARY_ATTACHMENT_BYTES, decodeBinaryFrame, decodeCompressedFrame } from '../src/binary-frame.ts'
 import type { DeviceScope } from '../src/device-auth.ts'
 import { authenticateTestSocket, createTestIdentity, registerTestIdentity, type TestIdentity } from './auth-fixture.ts'
 
@@ -33,6 +33,12 @@ class FakeWebSocket {
 
   send(data: string | Buffer): void {
     if (typeof data === 'string') return void this.sent.push(JSON.parse(data))
+    // 压缩帧（格式 2）：解出 envelope，标记 compressed 供断言。
+    if (data[0] === 2) {
+      const envelope = decodeCompressedFrame(data)
+      assert.ok(envelope, 'compressed frame must decode')
+      return void this.sent.push({ ...(envelope as object), compressed: true, wireBytes: data.length })
+    }
     // 二进制帧：头部照常进 sent，原始字节挂在 body 上供断言。
     const decoded = decodeBinaryFrame(data)
     assert.ok(decoded, 'binary frame must decode')
@@ -93,7 +99,7 @@ interface Harness {
   logs: string[]
   closed: Promise<void>
   identity: TestIdentity
-  authenticate: (overrides?: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string; clientRole?: 'widget'; watchSessions?: unknown }) => void
+  authenticate: (overrides?: { deviceName?: string; appVersion?: string; resumeCursor?: number; signature?: string; clientRole?: 'widget'; watchSessions?: unknown; acceptEncoding?: unknown }) => void
 }
 
 async function makeConnection(opts: {
@@ -1018,6 +1024,36 @@ test('malformed watchSessions on auth.prove falls back to the full broadcast ins
   emitAssistantMessage(bridge, 's-a', 1)
   await new Promise((r) => setTimeout(r, 10))
   assert.deepEqual(sessionEventIds(ws), ['s-a'])
+})
+
+// ---------- 压缩帧（能力 compressedFrames） ----------
+
+test('frames over 8 KB are deflate-raw compressed once the client accepts it; small frames stay text', async () => {
+  const { ws, bridge, authenticate } = await makeConnection()
+  authenticate({ acceptEncoding: ['deflate-raw'], watchSessions: ['s-big'] })
+  const welcome = ws.sent.find((f) => f.type === 's2c.welcome')!
+  assert.equal(welcome.payload.capabilities.compressedFrames, true)
+  assert.equal(welcome.compressed, undefined, 'a small welcome stays a text frame')
+
+  const text = '会话正文 '.repeat(4000)
+  emitAssistantMessage(bridge, 's-big', 1, text)
+  await new Promise((r) => setTimeout(r, 10))
+  const event = ws.sent.find((f) => f.type === 's2c.session.event')!
+  assert.equal(event.compressed, true)
+  assert.equal(event.payload.data.text, text, 'round-trips byte for byte')
+  assert.ok(event.wireBytes < Buffer.byteLength(text) / 4, 'repetitive JSON shrinks well')
+  assert.equal(typeof event.seq, 'number', 'replay seq survives compression')
+})
+
+test('clients that do not list deflate-raw never get compressed frames', async () => {
+  for (const acceptEncoding of [undefined, ['gzip'], 'deflate-raw']) {
+    const { ws, bridge, authenticate } = await makeConnection()
+    authenticate(acceptEncoding === undefined ? {} : { acceptEncoding })
+    emitAssistantMessage(bridge, 's-a', 1, 'x'.repeat(20 * 1024))
+    await new Promise((r) => setTimeout(r, 10))
+    const event = ws.sent.find((f) => f.type === 's2c.session.event')!
+    assert.equal(event.compressed, undefined, `acceptEncoding=${JSON.stringify(acceptEncoding)}`)
+  }
 })
 
 test('session.history correlates the page with the request id', async () => {

@@ -412,6 +412,11 @@ interface WelcomeCapabilities {
    * opened or watches. Plugin-level. Absent ⇒ the client gets every
    * session's events, as before. */
   sessionInterest?: boolean;
+  /** Bridge compresses downlink frames over 8 KB as binary format 2
+   * (`[2][deflate-raw(envelope JSON)]`) once the client listed "deflate-raw"
+   * in `acceptEncoding` on c2s.auth.prove. Plugin-level. Absent ⇒ the field is
+   * ignored and every JSON frame stays a text frame. */
+  compressedFrames?: boolean;
 }
 type SessionStatus = "running" | "idle" | "error" | "unknown";
 /**

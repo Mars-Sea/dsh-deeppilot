@@ -31,6 +31,20 @@ v2 不接受 v1 Bearer Token、`c2s.hello.auth` 或任何降级握手；升级�
 - `welcome.capabilities.binaryFrames` 缺失或 false 时客户端不得带 `binary: true`；旧服务端会忽略该字段，照常回文本帧。
 - 客户端发往服务端的帧仍然只能是文本帧。
 
+### 1.2 压缩帧（可选，能力位 `compressedFrames`）
+
+客户端在 `c2s.auth.prove` 的 `acceptEncoding` 里列出 `"deflate-raw"` 后，服务端把序列化后超过
+8 KB 的下行 JSON 帧改为 WebSocket 二进制帧发送，布局为：
+
+`[格式 u8 = 2][整个信封 JSON（UTF-8）经 deflate-raw（RFC 1951，无 zlib 头）压缩后的字节]`
+
+- 解压后就是原来的文本帧，`id`、`seq`、重放与诊断规则全部不变；任何类型的帧都可能被压缩，
+  包括 welcome、补发帧和请求响应。8 KB 及以下的帧照旧发文本帧。
+- 认证完成之前（challenge 等）一律是文本帧。
+- 客户端须对解压后的大小设上限（建议与单帧上限相同），超限或解压失败时丢弃该帧。
+- 未声明 `acceptEncoding` 的客户端永远收不到格式 2。格式 1（§1.1）不压缩，仍只用于请求了
+  `binary: true` 的分块响应。
+
 ## 2. 连接与鉴权
 
 ### 2.0 传输层诊断标识（可选扩展）
@@ -166,6 +180,7 @@ LAN Host 回显自己的证书指纹，App 若持有二维码指纹则必须比�
   "appVersion": "0.1.0",
   "resumeCursor": 1042,
   "watchSessions": ["session-…"],
+  "acceptEncoding": ["deflate-raw"],
   "clientRole": "widget",
   "signature": "<ASN.1 DER ECDSA P-256/SHA-256 signature, base64url>"
 } }
@@ -183,6 +198,8 @@ LAN Host 回显自己的证书指纹，App 若持有二维码指纹则必须比�
   会话的 `s2c.session.event` 与 `s2c.session.queue`，实时推送和断线补发都按这个范围；
   不带则照旧收全部会话事件。服务端在补发之前就应用这个集合。字段不合法时按"未声明"
   处理，不拒绝认证。它只收窄本设备已有权限的下行内容，所以不进签名输入。
+- `acceptEncoding` 可选（能力 `compressedFrames`）：客户端能解的下行压缩编码，目前只认
+  `"deflate-raw"`，见 §1.2。只改变下行编码，不进签名输入；旧服务端忽略。
 
 签名输入必须是下列 UTF-8 字节。文本字段先做无 padding 的 base64url；时间戳和游标
 必须是十进制有限整数，缺失游标写 `-`：
@@ -956,6 +973,8 @@ Bridge 侧 Host code 到 wire 码的映射是 `src/wire-errors.ts` 的单一属�
   改用二进制帧（见 §1.1）。缺失/false 时客户端照旧请求 base64 文本帧。
 - `sessionInterest` 是插件自身能力：true 表示接受 `c2s.auth.prove` 的 `watchSessions` 与
   `c2s.session.watch`。缺失/false 时客户端不得发送 `c2s.session.watch`，并且要容忍收到全部会话事件。
+- `compressedFrames` 是插件自身能力：true 表示接受 `acceptEncoding` 并按 §1.2 压缩大帧。客户端可以
+  无条件在 prove 里声明 `acceptEncoding`（旧服务端忽略），但必须能处理格式 2 的二进制帧。
 - v2 同版本新增可选字段时双方必须忽略未知字段。
 - 旧 Host 不认识 `deeppilot/setDeviceName` 时，设置页应显示“不支持设备重命名”的降级提示，
   不得把失败伪装成保存成功；新客户端仍须正常显示和删除设备。
