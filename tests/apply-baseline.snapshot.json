@@ -1,8 +1,8 @@
 {
   "snapshot": {
     "protocolVersion": 2,
-    "serverVersion": "0.9.17",
-    "pluginVersion": "0.9.17",
+    "serverVersion": "0.9.18",
+    "pluginVersion": "0.9.18",
     "enabled": true,
     "identityPath": "<dataDir>/devices-v2.json",
     "pairingReady": true,
@@ -91,8 +91,8 @@
   ],
   "snapshotAfterLocalEnabled": {
     "protocolVersion": 2,
-    "serverVersion": "0.9.17",
-    "pluginVersion": "0.9.17",
+    "serverVersion": "0.9.18",
+    "pluginVersion": "0.9.18",
     "enabled": true,
     "identityPath": "<dataDir>/devices-v2.json",
     "pairingReady": true,
@@ -136,8 +136,8 @@
   "idleVolatileUpdateKeepsLocalOnline": true,
   "snapshotAfterRemoteEnabled": {
     "protocolVersion": 2,
-    "serverVersion": "0.9.17",
-    "pluginVersion": "0.9.17",
+    "serverVersion": "0.9.18",
+    "pluginVersion": "0.9.18",
     "enabled": true,
     "identityPath": "<dataDir>/devices-v2.json",
     "pairingReady": true,
