@@ -220,6 +220,22 @@
     为 `0.9.16`、`protocolVersion` 2、`dataPlane: true`，补丁未写 `local.enabled` 时局域网监听照常上线；
     GitHub Release 在这一步通过后才公开并标记 Latest。
 
+15. `0.9.17` 的实际发布结果（2026-11-07）：功能提交 `b64d3d7` 与发布提交 `c6b9b76` 一起推到
+    `main`，CI（`42350766805`，8 分 19 秒）与 CodeQL（`42350766768`，3 分 30 秒）均绿；
+    附注标签 `v0.9.17` 指向 `c6b9b76dbfcb96767e2a51eba090b093bbbcfa60`。`publish.yml`
+    运行 `42351492324`（`latest`，11 分 33 秒）整次为绿，直接公开、未进入 staged 区：
+    发布步骤输出 `Publishing to … with tag latest and public access` 与
+    `+ dsh-deeppilot@0.9.17`，来源证明写入 Sigstore（logIndex `3732498541`）。注册表
+    `latest = 0.9.17`；tarball SHA1 `c39823120f70aabaa100fa4f20605916fe45bfec`、69 个条目、
+    解包 131,808,021 字节，与本地 `npm pack --dry-run` 一致；来源证明类型为
+    `https://slsa.dev/provenance/v1`。**可见性延迟仍存在**：末尾核对第 16 次（约 4.5 分钟）
+    才通过，随后 `dsh plugin add` 首次取压缩包仍报 HTTP 404，待 tarball 返回 200 后安装
+    成功（与第 10 条同形态，安装验证必须带重试）。随后在全新隔离 `DSH_HOME` 中以 registry
+    精确 spec 安装 `dsh-deeppilot@0.9.17`（非 link），补丁把局域网端口改到 3598 以避开本机
+    已占用的 3098，用真实 `0.2.2-rc.1` 宿主启动：`/phone/health` 返回 200，`serverVersion`
+    为 `0.9.17`、`protocolVersion` 2、`dataPlane: true`、`local.phase: online`；停掉宿主后
+    3597/3598 端口均释放。GitHub Release 在这一步通过后才公开并标记 Latest。
+
 ## 五、官方资料
 
 1. [npm 可信发布配置与限制](https://docs.npmjs.com/trusted-publishers/)
