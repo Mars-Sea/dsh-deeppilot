@@ -236,6 +236,23 @@
     为 `0.9.17`、`protocolVersion` 2、`dataPlane: true`、`local.phase: online`；停掉宿主后
     3597/3598 端口均释放。GitHub Release 在这一步通过后才公开并标记 Latest。
 
+16. `0.9.18` 的实际发布结果（2026-11-07）：功能提交 `139909c` 与发布提交 `44db01b` 一起推到
+    `main`，CI（`42387715044`）与 CodeQL（`42387715017`）均绿；附注标签 `v0.9.18` 指向
+    `44db01b`。`publish.yml` 运行 `42388432312`（`latest`）26 个步骤整次为绿，直接公开、
+    未进入 staged 区。注册表 `latest = 0.9.18`；tarball SHA1
+    `59b462cecd75b251911ec1e1ff14cf16af160b56`、69 个条目、解包 131,892,637 字节，与本地
+    `npm pack --dry-run` 一致；来源证明类型为 `https://slsa.dev/provenance/v1`（工作流末尾
+    核对步骤已验签）。本次注册表可见性正常：末尾核对一次通过，安装验证首次拉取即成功，
+    未再出现 0.9.6～0.9.17 的 404 重试窗口。随后在全新隔离 `DSH_HOME`
+    （`/tmp/dsh-verify-0.9.18`）中以 registry 精确 spec 安装 `dsh-deeppilot@0.9.18`
+    （非 link），补丁把局域网端口改到 3598 以避开本机已占用的 3098，用真实 `0.2.2-rc.1`
+    宿主（web 端口取 0 避开 3080）启动：`/phone/health` 返回 200，`serverVersion` 为
+    `0.9.18`、`protocolVersion` 2、`dataPlane: true`、`local.phase: online`（端口 3598）；
+    停掉宿主后 3597/3598 端口均释放。GitHub Release 在这一步通过后才公开并标记 Latest。
+    **环境备注**：本机 `~/.npm/_cacache` 存在 root 所有文件，`npx`/`npm view`/
+    `npm pack` 报 EPERM；本次以 `npm_config_cache=<临时目录>` 绕过，未改动缓存属主。
+    后续在本机执行发布前检查时同样需要该绕法。
+
 ## 五、官方资料
 
 1. [npm 可信发布配置与限制](https://docs.npmjs.com/trusted-publishers/)
