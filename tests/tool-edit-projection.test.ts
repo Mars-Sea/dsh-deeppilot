@@ -86,3 +86,31 @@ test('整条消息超过上限时先丢改动正文，保留路径与 truncated'
   })
   assert.deepEqual(limited.tool?.edit, { path: 'a.ts', operation: 'replace', truncated: true })
 })
+
+test('toolEditOf：宿主 edit / write 工具同样归一化', () => {
+  assert.deepEqual(
+    toolEditOf('edit', args({ file_path: 'src/a.ts', old_string: 'x', new_string: 'y', replace_all: false })),
+    { path: 'src/a.ts', operation: 'replace', oldText: 'x', newText: 'y' },
+  )
+  assert.deepEqual(
+    toolEditOf('edit', args({ file_path: 'src/a.ts', old_string: 'x' })),
+    { path: 'src/a.ts', operation: 'replace', oldText: 'x', newText: '' },
+    'new_string 缺失视为删除',
+  )
+  assert.deepEqual(
+    toolEditOf('edit', args({ file_path: 'new.ts', old_string: '', new_string: 'body' })),
+    { path: 'new.ts', operation: 'create', newText: 'body' },
+    'old_string 为空串视为新建',
+  )
+  assert.deepEqual(
+    toolEditOf('write', args({ file_path: 'scripts/verify.mjs', content: 'line1\nline2\n', justification: '' })),
+    { path: 'scripts/verify.mjs', operation: 'create', newText: 'line1\nline2\n' },
+  )
+  assert.equal(toolEditOf('edit', args({ file_path: 'a.ts', new_string: 'y' })), undefined, '缺 old_string')
+  assert.equal(toolEditOf('edit', args({ path: 'a.ts', old_string: 'x', new_string: 'y' })), undefined, '路径键是 file_path')
+  assert.equal(toolEditOf('write', args({ file_path: 'a.ts' })), undefined, '缺 content')
+  assert.equal(
+    toolEditOf('write', args({ file_path: 'big.md', content: 'a'.repeat(MAX_TOOL_EDIT_TEXT_BYTES + 1) }))?.truncated,
+    true,
+  )
+})

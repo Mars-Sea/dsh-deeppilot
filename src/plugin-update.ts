@@ -374,10 +374,12 @@ export class PluginUpdater {
         record.restartPhase = 'rolled-back'
         return this.transition(record, 'restart-required', '目标安装失败，旧版已重新安装；请在电脑端重启 DSH 后确认恢复')
       }
-      if (restored.application === 'applied' && (restored.version === undefined || restored.version === record.fromVersion)) {
+      // 宿主可能把回滚整体报成 application:'failed'（例如组合树里另有行激活失败），
+      // 但 pnpm 已把旧版本装回。以 listBundles() 的实际安装版本为权威，而不是上报状态：
+      // 只有确实回到旧版本才算 rolled-back，避免手机端把已恢复的插件误报成「恢复未完成」。
+      if (restored.version === undefined || restored.version === record.fromVersion) {
         const installed = (await this.listBundles()).find(bundle => bundle.name === PACKAGE)
         if (installed?.version === record.fromVersion) return this.transition(record, 'rolled-back', '目标安装失败，宿主已自动恢复旧版本')
-        return this.transition(record, 'failed', '宿主已尝试回滚，但无法核对实际旧版本，请在电脑端检查插件')
       }
       return this.transition(record, 'failed', '目标安装失败，宿主恢复旧版也未完成，请在电脑端检查插件')
     }

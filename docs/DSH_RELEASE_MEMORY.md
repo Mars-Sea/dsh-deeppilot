@@ -2399,3 +2399,40 @@ release notes.
 - **发布后核验。** 来源证明类型 `https://slsa.dev/provenance/v1`，`gitCommit` 为发布提交，工作流引用 `refs/tags/v0.9.13`，invocation 为 `40911590022`；tarball SHA1 `ca2c754e3421cddd14a795c5b4d869c5ea4b3cf9`、SHA512 与注册表一致，69 个条目、解包 131,263,175 字节。全新隔离 `DSH_HOME`（`/tmp/dsh-verify-0913`，pnpm 从 npm 安装，不是 link）在真实 `0.2.2-alpha.2` 宿主上启动，`https://127.0.0.1:3098/phone/health` 返回 200，`serverVersion` 为 `0.9.13`、`dataPlane: true`；GitHub Release 在这一步通过后才公开并标记 Latest。
 - **流程变更。** 用户决定保留暂存流程；批准步骤与「工作流末尾核对在批准前必然失败」已写入 `docs/NPM_PUBLISHING.md` 与 `AGENTS.md` 发布第 4–5 步。工作流本身未改：末尾核对在 staged 版本上仍会标红，是否改成「检测到 staged 即视为成功并输出待批准」留待下次发布前决定。
 - **局限。** 未做真机、Funnel 端到端、真实 `updateBundle`/HMR 回滚安装，也没有在 `0.2.1-rc.4` 上做真实业务回合；上述健康检查只证明插件能被宿主组合、启动并应答。
+
+## 2026-11-07 — 插件自更新真实宿主验证：HMR 在线替换失败，禁用 HMR 后成功
+
+**环境。** `dsh 0.2.2-rc.1` / Node `24.22.1` / pnpm `12.8.1`；两套独立 `DSH_HOME`（`/tmp/dsh-plugin-update-verify/` 与工作区 `.verify-plugin-update/`，web 端口 3397/3497、插件 LAN TLS 3197/3297）；`dsh-deeppilot@0.9.15` 以 registry 精确 spec 安装，目标 `0.9.16`。真实 WSS 鉴权（P-256 挑战/证明）驱动 wire 帧，非内存假件。
+
+**结论：能力位与查询链路通，HMR 在线替换不通。**
+
+| 项目 | 实测 |
+|---|---|
+| `welcome.capabilities.pluginUpdate` | `true`（rc.1 上首次实测，此前只在 alpha.2 记过） |
+| `c2s.plugin.update.check` | `currentVersion 0.9.15`、`latestVersion 0.9.16`、`updateAvailable true`、`compatible true`、`protocolCompatible true`；宿主 `listVersions('dsh-deeppilot')` 真机返回 `listed`，补上 `.feature-scout/FEATURES.md:145` 的未验证项 |
+| `c2s.plugin.update.apply`（HMR 开启） | pnpm 成功装 0.9.16，宿主 `installBundle` 返回 `application:'failed', stage:'enable'`，触发 `restore` 装回 0.9.15；`restore` 报同一错误。两次独立复现（不同 `DSH_HOME`、不同卷、不同请求编号） |
+| `c2s.plugin.update.apply`（禁用 HMR） | progress → `restart-required`；profile 与磁盘变 0.9.16；重启后 health `serverVersion 0.9.16`、journal `done`（「重启后已运行目标版本，更新完成」）、`check` 返回 `currentVersion 0.9.16 / updateAvailable false`。**完整闭环成功** |
+
+**根因（宿主 `updateBundle` 完整返回，见 `.verify-plugin-update/diag-updatebundle.json`）。**
+
+```
+result.error / restore.error:
+  code: operation-error
+  diagnostic: dsh: warning: 1 entry did not activate
+    deeppilot-directory-picker-browse (@deepseek-ai/dsh-host-directory-picker-browse):
+    Error: service "directoryPicker" has been registered at <NativeDirectoryPicker>
+```
+
+`dsh-web-app` 的 `directory-picker` 行是 `-auto`，启动时按宿主打境用 `ctx.loader.create()` 把 native 或 browse 后端挂进内存根树，disposer 异步卸载。我方 bundle 用 `disabled: true` 禁用它、再 `insert` 一个不同 id 的 `-browse` 行。`updateBundle` 有 HMR 时走 `removeBundle → installBundle`：bundle 层被移除 → `-auto` 复活并挂 `NativeDirectoryPicker` → 重新加入 bundle 时 `-browse` 注册 `directoryPicker` 撞名 → 宿主按「1 entry did not activate」把整次包操作判失败并回滚。官方 `-auto` README:40 已写明「同时挂载选择器和某个后端行会明确报错（重复的 `directoryPicker` 服务）」。CLI 覆盖安装 + 重启是全新组合、无残留，0.9.16 能正常激活，故不是包或网络问题。
+
+**排除的错误修法（实测）。**
+
+- 「在 patch 里覆盖 `name` 为 `-browse`」不可行：`name` 是断言不是重命名（`dsh-app-boot/lib/index.js:546`），报 `name mismatch ... skipping`。
+- 「删掉 picker 替换，让 `-auto` 自选」不可取：macOS 本地宿主判定 native，`c2s.directory.list` 实测返回 `E_UNSUPPORTED: directory picker unavailable`，手机端目录浏览失效。
+- **验证方法约束**：`updateBundle` 的 pnpm install 会从 store 重新 clone 包，手改 `node_modules/dsh-deeppilot/cordis.patch.yml` 会被还原；改 bundle patch 必须发新包才能验证。运行时代码（已加载进内存）不受此影响，故 `src/plugin-update.ts` 的修复可在隔离副本产物上真机验证。
+
+**本轮代码修复（B）。** `src/plugin-update.ts` 的 `restore` 分支改为以 `listBundles()` 实际安装版本为权威，`restore.application` 降为辅助判据；`tests/plugin-update.test.ts` 同步期望并新增「实际版本未回到旧版仍判 `failed`」。单测 21 通过 / 0 失败，全量 766 通过 / 0 失败，`typecheck` 通过。真机验证：同一宿主 journal 终态由 `failed` 变为 `rolled-back`（「目标安装失败，宿主已自动恢复旧版本」）。
+
+**上游渠道。** `deepseek-ai/deepseek-harness` 的 `hasIssuesEnabled=false`、`hasDiscussionsEnabled=true`；README:45 指定 bug report 走 GitHub Discussions。已按用户确认的措辞发布 [discussion #12510](https://github.com/deepseek-ai/deepseek-harness/discussions/12510)（`q-a`/`Q&A` 分类，2026-11-07，作者 `Mars-Sea`）；英文正文与中文核对说明留在 [UPSTREAM_DISCUSSION-plugin-update-hmr.md](UPSTREAM_DISCUSSION-plugin-update-hmr.md)，脱敏后的提交正文在 `.verify-plugin-update/discussion-body.md`。线上标题、分类与正文长度已复核。等待上游答复，不承诺修复时限。
+
+**遗留。** ① 仓库 `lib/` 未重建（按用户选择只在隔离副本构建），发布前需 `npm run build` 并提交 `lib/`；② 启用 HMR 的 profile 上手机端一键更新仍会失败，需上游修复 `updateBundle` 原子性，或用户在该 profile 的 `cordis.patch.yml` 禁用 `hmr` 行（代价：配置改动不再热重载、更新后需重启）；③ 真机、Funnel、无 HMR 路径在官方默认 profile 上的验收仍缺；④ `docs/技能提示对接说明.md`、`docs/移动端命令对接说明.md` 的 `dsh-plugin-manager` 清单仍是 0.2.1 口径，未重盘。

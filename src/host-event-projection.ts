@@ -1,4 +1,4 @@
-import type { MessageProjection, SessionEventKind, ToolEditProjection } from './protocol.ts'
+import type { MessageProjection, SessionEventKind, ToolEditProjection, ToolTargetProjection } from './protocol.ts'
 import type { SessionEventLike } from './host-api.ts'
 import { projectedDocument } from './document-payload.ts'
 
@@ -95,6 +95,7 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
             // this exact row instead of guessing.
             ...(data?.callId ? { callId: String(data.callId) } : {}),
             ...editField(data?.name, data?.arguments),
+            ...targetField(data?.name, data?.arguments),
           },
           ts: tsOf(event)
         }
@@ -419,6 +420,121 @@ function editField(name: unknown, raw: unknown): { edit?: ToolEditProjection } {
   return edit ? { edit } : {}
 }
 
+function targetField(name: unknown, raw: unknown): { target?: ToolTargetProjection } {
+  const target = toolTargetOf(name, raw)
+  return target ? { target } : {}
+}
+
+/** `tool.target.value` / `scope` 的 UTF-8 上限。 */
+export const MAX_TOOL_TARGET_VALUE_BYTES = 1024
+/** `tool.target.label` 的 UTF-8 上限。 */
+export const MAX_TOOL_TARGET_LABEL_BYTES = 256
+
+/** 读写文件类工具：路径即操作对象。 */
+const PATH_TARGET_TOOLS = new Set(['read', 'write', 'edit', 'str_replace_editor'])
+/** 搜索类工具：搜索式为主值，搜索目录为范围。 */
+const PATTERN_TARGET_TOOLS = new Set(['grep', 'glob'])
+/** 网页类工具：有网址给网址，否则给查询词。 */
+const WEB_TARGET_TOOLS = new Set(['web_fetch', 'web_search'])
+/** 协作类工具：对象是另一个智能体或后台任务，按工具各取一个能认出对象的参数。 */
+const TEXT_TARGET_KEYS: Record<string, readonly string[]> = {
+  send_message: ['target', 'agent_id'],
+  spawn_teammate: ['name'],
+  subagent: ['description'],
+  job_output: ['job_id'],
+}
+
+/**
+ * 从工具调用的原始参数里挑出操作对象，归一化成 `ToolTargetProjection`。
+ *
+ * 为什么需要它：`tool.summary` 在结果回来后被替换成结果摘要（read 变成文件正文片段），
+ * 客户端从此拿不到「读的是哪个文件」。target 只在调用时生成一次，结果合并时不动。
+ * 规则表之外的工具、无法解析或缺少对应参数时返回 undefined，客户端退回 summary。
+ * 参数名只在这里出现，客户端不依赖宿主工具参数命名。
+ */
+export function toolTargetOf(name: unknown, raw: unknown): ToolTargetProjection | undefined {
+  if (typeof name !== 'string' || typeof raw !== 'string' || raw.length === 0) return undefined
+  let args: Record<string, unknown>
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+    args = parsed as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+  /** 取第一个非空字符串参数。 */
+  const pick = (...keys: string[]): string | undefined => {
+    for (const key of keys) {
+      const value = args[key]
+      if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+    }
+    return undefined
+  }
+
+  if (PATH_TARGET_TOOLS.has(name)) {
+    const path = pick('file_path', 'path')
+    return path ? { kind: 'path', value: boundPath(path) } : undefined
+  }
+  if (name === 'bash') {
+    const command = pick('command')
+    if (!command) return undefined
+    const label = pick('description')
+    return {
+      kind: 'command',
+      value: boundText(command, MAX_TOOL_TARGET_VALUE_BYTES),
+      ...(label ? { label: boundText(label, MAX_TOOL_TARGET_LABEL_BYTES) } : {}),
+    }
+  }
+  if (PATTERN_TARGET_TOOLS.has(name)) {
+    const pattern = pick('pattern')
+    if (!pattern) return undefined
+    const scope = pick('path')
+    return {
+      kind: 'pattern',
+      value: boundText(pattern, MAX_TOOL_TARGET_VALUE_BYTES),
+      ...(scope ? { scope: boundPath(scope) } : {}),
+    }
+  }
+  if (WEB_TARGET_TOOLS.has(name)) {
+    const url = pick('url')
+    if (url) return { kind: 'url', value: boundText(url, MAX_TOOL_TARGET_VALUE_BYTES) }
+    const query = pick('query')
+    return query ? { kind: 'text', value: boundText(query, MAX_TOOL_TARGET_VALUE_BYTES) } : undefined
+  }
+  const keys = TEXT_TARGET_KEYS[name]
+  if (keys) {
+    const text = pick(...keys)
+    return text ? { kind: 'text', value: boundText(text, MAX_TOOL_TARGET_VALUE_BYTES) } : undefined
+  }
+  return undefined
+}
+
+/** 命令 / 文本：空白折叠成单个空格（手机上只显示一行），超限砍结尾加「…」。 */
+function boundText(value: string, maxBytes: number): string {
+  const flat = value.replace(/\s+/g, ' ')
+  if (Buffer.byteLength(flat, 'utf8') <= maxBytes) return flat
+  return truncateUtf8(flat, maxBytes - Buffer.byteLength('…', 'utf8')) + '…'
+}
+
+/** 路径：超限时砍开头、保留结尾（如 `…/Views/A.swift`），保证文件名完整可认。 */
+function boundPath(value: string): string {
+  const maxBytes = MAX_TOOL_TARGET_VALUE_BYTES
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value
+  const budget = maxBytes - Buffer.byteLength('…', 'utf8')
+  // 从结尾往前找能放下的最长后缀；二分同 truncateUtf8。
+  let low = 0
+  let high = value.length
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2)
+    if (Buffer.byteLength(value.slice(value.length - mid), 'utf8') <= budget) low = mid
+    else high = mid - 1
+  }
+  let start = value.length - low
+  // 不从代理对的后半截开始。
+  if (start < value.length && /[\uDC00-\uDFFF]/.test(value[start]!)) start += 1
+  return '…' + value.slice(start)
+}
+
 function summarizeArgs(raw: unknown): string {
   if (typeof raw !== 'string' || raw.length === 0) return '';
   try {
@@ -435,18 +551,25 @@ function summarizeArgs(raw: unknown): string {
 
 /** 宿主的文件编辑工具名（DSH `dsh-tool-str-replace-editor`）。 */
 const EDITOR_TOOL_NAME = 'str_replace_editor'
+/** 宿主的字符串替换工具（`file_path` / `old_string` / `new_string` / `replace_all`），实际会话里最常用。 */
+const EDIT_TOOL_NAME = 'edit'
+/** 宿主的整文件写入工具（`file_path` / `content`）。 */
+const WRITE_TOOL_NAME = 'write'
 /** 改动正文单侧上限（UTF-8 字节）；超出则两侧都不发，只标 truncated。 */
 export const MAX_TOOL_EDIT_TEXT_BYTES = 16 * 1024
 
 /**
  * 把编辑类工具调用的原始参数归一化成 `ToolEditProjection`。
  *
- * 只认 `str_replace_editor` 的 `str_replace` / `create` / `insert`（`view` 不改文件），
- * 其他工具或无法解析的参数返回 undefined，工具行保持原样。与 iOS `ToolEditDiff.parse`
- * 的解析口径一致：`new_str` 缺失视为删除（空串）。
+ * 认三种宿主工具，其他工具或无法解析的参数返回 undefined，工具行保持原样：
+ * - `edit`：`old_string` → `new_string` 为 `replace`；`old_string` 为空串视为新建（`create`）。
+ * - `write`：`content` 为写入后的文件全文，记作 `create`（宿主覆盖已有文件时也一样，原文拿不到）。
+ * - `str_replace_editor`：`str_replace` / `create` / `insert`（`view` 不改文件）。
+ * 与 iOS `ToolEditDiff.parse` 的解析口径一致：新文本缺失视为删除（空串）。
  */
 export function toolEditOf(name: unknown, raw: unknown): ToolEditProjection | undefined {
-  if (name !== EDITOR_TOOL_NAME || typeof raw !== 'string' || raw.length === 0) return undefined
+  if (name !== EDITOR_TOOL_NAME && name !== EDIT_TOOL_NAME && name !== WRITE_TOOL_NAME) return undefined
+  if (typeof raw !== 'string' || raw.length === 0) return undefined
   let args: Record<string, unknown>
   try {
     const parsed = JSON.parse(raw) as unknown
@@ -454,6 +577,10 @@ export function toolEditOf(name: unknown, raw: unknown): ToolEditProjection | un
     args = parsed as Record<string, unknown>
   } catch {
     return undefined
+  }
+  if (name === EDIT_TOOL_NAME || name === WRITE_TOOL_NAME) {
+    const edit = plainEditOf(name, args)
+    return edit ? boundedEdit(edit) : undefined
   }
   const path = args.path
   if (typeof path !== 'string' || path.length === 0) return undefined
@@ -477,6 +604,25 @@ export function toolEditOf(name: unknown, raw: unknown): ToolEditProjection | un
     default:
       return undefined
   }
+  return boundedEdit(edit)
+}
+
+/** `edit` / `write` 的参数（路径键为 `file_path`）。 */
+function plainEditOf(name: string, args: Record<string, unknown>): ToolEditProjection | undefined {
+  const path = args.file_path
+  if (typeof path !== 'string' || path.length === 0) return undefined
+  if (name === WRITE_TOOL_NAME) {
+    return typeof args.content === 'string' ? { path, operation: 'create', newText: args.content } : undefined
+  }
+  if (typeof args.old_string !== 'string') return undefined
+  const newText = typeof args.new_string === 'string' ? args.new_string : ''
+  return args.old_string.length === 0
+    ? { path, operation: 'create', newText }
+    : { path, operation: 'replace', oldText: args.old_string, newText }
+}
+
+/** 任一侧正文超过上限时两侧都不发，只留路径、操作与 truncated。 */
+function boundedEdit(edit: ToolEditProjection): ToolEditProjection {
   const oversized = [edit.oldText, edit.newText]
     .some((text) => text !== undefined && Buffer.byteLength(text, 'utf8') > MAX_TOOL_EDIT_TEXT_BYTES)
   return oversized ? withoutEditBodies(edit) : edit
@@ -544,6 +690,7 @@ export function projectHistory(
             state: 'running',
             summary: summarizeArgs(data?.arguments),
             ...editField(data?.name, data?.arguments),
+            ...targetField(data?.name, data?.arguments),
           },
         };
         messages.push(row);

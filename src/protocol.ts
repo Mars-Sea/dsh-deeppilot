@@ -394,6 +394,8 @@ export type WidgetPushRegisterPayload = Omit<PushRegisterPayload, 'categories'>
 export interface WelcomeCapabilities {
   /** 会话命令目录、执行、权限与原生日志导出入口。缺省不支持。 */
   commands?: boolean
+  /** 输入框 `@` 引用候选：c2s.session.references 可用（文件或会话引用至少一类）。缺省不支持。 */
+  references?: boolean
   historyPaging: boolean
   replay: boolean
   approvals: boolean
@@ -595,8 +597,8 @@ export type ToolState = 'running' | 'ok' | 'error'
 
 /**
  * 文件编辑类工具调用的改动内容（v2 追加式扩展，见 PROTOCOL.md「工具改动对比」）。
- * Bridge 把宿主 `str_replace_editor` 的参数名（old_str/new_str/file_text/insert_line）
- * 归一化成这里的字段，手机端不依赖宿主工具参数命名。`oldText` / `newText` 各自超过
+ * Bridge 把宿主 `edit`（old_string/new_string）、`write`（content）与 `str_replace_editor`
+ * （old_str/new_str/file_text/insert_line）的参数名归一化成这里的字段，手机端不依赖宿主工具参数命名。`oldText` / `newText` 各自超过
  * 16 KiB（UTF-8）时都不发，只带 `truncated: true`。
  */
 export interface ToolEditProjection {
@@ -607,6 +609,23 @@ export interface ToolEditProjection {
   /** `insert` 专用：在该行之后插入，0 表示文件开头。 */
   insertLine?: number
   truncated?: boolean
+}
+
+/**
+ * 工具调用的操作对象（v2 追加式扩展，见 PROTOCOL.md「Message 投影 · tool.target」）。
+ * Bridge 从宿主工具参数里挑出「对什么做」：文件路径、命令、搜索式、网址或其他对象名，
+ * 参数名不外泄。工具结果合并回调用行后 `summary` 会被结果摘要替换，`target` 保留，
+ * 客户端据此在调用完成后仍能显示「读取 A.swift」而不是文件正文片段。
+ * `kind` 是开放词表：客户端遇到未知值按 `text` 处理。
+ */
+export interface ToolTargetProjection {
+  kind: 'path' | 'command' | 'pattern' | 'url' | 'text'
+  /** 主值；UTF-8 上限 1 KiB。路径超长时砍开头（保留文件名），其余砍结尾加「…」。 */
+  value: string
+  /** 范围：搜索所在目录（`pattern` 专用）；UTF-8 上限 1 KiB，规则同路径。 */
+  scope?: string
+  /** 宿主给的人类可读说明（如 bash 的 description）；UTF-8 上限 256 B。 */
+  label?: string
 }
 
 /** Provenance of host-injected context; present only on `role: "system"` rows.
@@ -640,7 +659,7 @@ export interface MessageProjection {
   /** Reasoning ("thinking") text accompanying the answer, when present. */
   thinking?: string
   streaming?: boolean
-  tool?: { name: string; state: ToolState; summary: string; edit?: ToolEditProjection }
+  tool?: { name: string; state: ToolState; summary: string; edit?: ToolEditProjection; target?: ToolTargetProjection }
   attachments?: MessageAttachment[]
   /** Present only on system rows: provenance of the injected context.
    * The DSH host logs synthetic agent.inject() content (runtime-context
@@ -863,6 +882,11 @@ export interface SessionQueueUpdateAck { sessionId: string; itemId: string }
 export type { DeliveryReceipt } from "./dispatch-journal.ts"
 
 export type { CommandSummary, CommandCatalog, CommandAttachment, CommandExecution, PermissionCatalog, PermissionOption } from './command-api.ts'
+export type { FileReferenceItem, SessionReferenceItem, ReferenceSource, ReferenceCandidates } from './reference-api.ts'
+/** c2s.session.references 请求：`query` 是 `@` 之后已键入的文字（可为空，最长 1024 字符）。 */
+export interface SessionReferencesRequest { sessionId: string; query: string }
+/** s2c.session.references 响应：原样回带 `query`，客户端据此丢弃过期结果。 */
+export type SessionReferencesPayload = import('./reference-api.ts').ReferenceCandidates & { sessionId: string; query: string }
 
 /** 模型选择变化只投影公开路由字段；缺少 current 时重新读取当前会话。 */
 export interface ModelsChangedPayload { sessionId: string; current?: { provider: string; model: string; reasoningEffort?: string } }

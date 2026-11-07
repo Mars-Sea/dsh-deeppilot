@@ -15,6 +15,7 @@ import {
 } from './dsh-remote-interactions.ts'
 import { historyWindow, normalizePageLimit } from './host-event-projection.ts'
 import { DshCommandApi } from './command-api.ts'
+import { DshReferenceApi } from './reference-api.ts'
 import type { CommandsApiLike } from './host-api.ts'
 import type {
   ApiProxyLike,
@@ -202,6 +203,14 @@ export class DshApiProxy implements ApiProxyLike {
       export: (request, signal) => this.commandApi.export(request.payload!.sessionId, signal, request.payload!.format),
     }
   }
+  private readonly referenceApi: DshReferenceApi
+  /** 引用服务可能晚于桥接层挂载：每次读取都按当前服务判定，不缓存缺席。 */
+  get references(): import('./host-api.ts').ReferencesApiLike | undefined {
+    if (!this.referenceApi.available) return undefined
+    return {
+      list: (request, signal) => this.call(() => this.referenceApi.list(request.payload!.sessionId, request.payload!.query, signal)),
+    }
+  }
   private readonly session: SessionControllerLike
   private readonly workspaceController: WorkspaceControllerLike | undefined
   private scheduleController: ScheduleControllerLike | undefined
@@ -212,6 +221,7 @@ export class DshApiProxy implements ApiProxyLike {
 
   constructor(private readonly ctx: Context, options: DshApiProxyOptions = {}) {
     this.commandApi = new DshCommandApi(ctx)
+    this.referenceApi = new DshReferenceApi(ctx)
     const session = ctx.get('sessionController') as SessionControllerLike | undefined
     if (session === undefined) throw new Error('DSH sessionController is unavailable')
     this.session = session

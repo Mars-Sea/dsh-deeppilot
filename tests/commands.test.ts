@@ -190,6 +190,24 @@ test('桥接命令 RPC 使用独立 request id，缺能力主机返回不支持'
   bridge.dispose()
 })
 
+test('权限档位投影变化推送该会话的命令/权限目录失效', async () => {
+  const proxy = {
+    sessions: { list: async () => ({ result: { ok: true, value: { items: [] } } }) },
+    events: { host: async function* () {}, mux: async function* () {
+      yield { type: 'session/projection', sessionId: 's', key: 'permissions', value: { currentValue: 'auto' } }
+      yield { type: 'session/projection', sessionId: 's', key: 'title', value: 'x' }
+    } },
+  }
+  const bridge = new HostBridge(proxy as never, 100)
+  const values: unknown[] = []
+  bridge.addSink({ push: (type, payload) => { if (type === 's2c.commands.changed') values.push(payload) }, canReceive: () => true, lastCursor: () => 0, replay: () => {}, replayDone: () => {}, resync: () => {} })
+  bridge.start()
+  await new Promise(resolve => setImmediate(resolve))
+  // 只推会话 id，不带档位值：客户端以重拉的 c2s.session.permissions 为准。
+  assert.deepEqual(values, [{ sessionId: 's' }])
+  bridge.dispose()
+})
+
 test('模型实时投影只推公开选择字段，并遵循会话读取权限', async () => {
   const proxy = {
     sessions: { list: async () => ({ result: { ok: true, value: { items: [] } } }) },

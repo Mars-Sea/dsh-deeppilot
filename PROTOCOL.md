@@ -227,7 +227,7 @@ scope 与操作映射：
 
 | scope | 允许的操作 |
 |---|---|
-| `sessions.read` | 会话/工作区/目录读取、会话打开与历史、模型目录读取、`c2s.session.skills` 技能目录，以及 `c2s.session.commands`、`c2s.session.permissions`、`c2s.session.export`、`c2s.plugin.update.check` |
+| `sessions.read` | 会话/工作区/目录读取、会话打开与历史、模型目录读取、`c2s.session.skills` 技能目录，以及 `c2s.session.commands`、`c2s.session.permissions`、`c2s.session.references`、`c2s.session.export`、`c2s.plugin.update.check` |
 | `prompt.send` | `c2s.session.sendPrompt`、`c2s.session.command`、`c2s.session.feedback`、`c2s.session.queue.update` |
 | `sessions.manage` | 创建/重命名/归档/取消会话，创建工作区，切换模型，`c2s.plugin.update.apply` 安装更新 |
 | `interactions.respond` | pending 快照、回答 approval 与 question |
@@ -422,8 +422,10 @@ Message 投影：
 
 - `role`：user | assistant | tool | system | error；`tool` 仅 tool 行存在，state 为 running | ok | error。
 - `tool.edit`：文件编辑类工具调用的改动内容（v2 追加式扩展，不设能力位，旧客户端忽略）。
-  只在宿主工具为 `str_replace_editor` 且命令为 `str_replace` / `create` / `insert` 时出现，
-  `view` 与其他工具不带。Bridge 把宿主参数名归一化，客户端不得依赖宿主工具参数命名：
+  只在以下宿主工具调用上出现，其他工具与 `str_replace_editor` 的 `view` 不带：`edit`
+  （`old_string` → `new_string` 为 `replace`，`old_string` 为空串时为 `create`）、`write`
+  （写入内容为 `create`）、`str_replace_editor` 的 `str_replace` / `create` / `insert`。
+  Bridge 把宿主参数名归一化，客户端不得依赖宿主工具参数命名：
 
   ```json
   "tool": { "name": "str_replace_editor", "state": "ok", "summary": "path=src/a.ts …",
@@ -431,10 +433,31 @@ Message 投影：
   ```
 
   `operation` 为 `replace`（`oldText` → `newText`，`newText` 为空串表示删除）、`create`
-  （只有 `newText`，即新文件全文）或 `insert`（`newText` 插到 `insertLine` 行之后，0 为文件开头，
+  （只有 `newText`，即写入后的文件全文；`write` 覆盖已有文件时原文拿不到，客户端只能显示为全部新增）或 `insert`（`newText` 插到 `insertLine` 行之后，0 为文件开头，
   可缺省）。`oldText` 或 `newText` 任一超过 16 KiB（UTF-8）时两者都不发，只带 `path`、
   `operation` 与 `truncated:true`；整条消息超过 256 KB 时同样先去掉正文。改动只是工具调用的参数，
   客户端拿不到文件全文，因此只能展示片段内的差异；工具结果为失败时改动可能没有写入。
+- `tool.target`：工具调用的操作对象（v2 追加式扩展，不设能力位，旧客户端忽略）。
+  `summary` 在结果回来后会换成结果摘要（读取类就是文件正文片段），target 只在调用时生成、
+  结果合并时保持不变，客户端据此始终能显示「对什么做了什么」。Bridge 把宿主参数名归一化：
+
+  ```json
+  "tool": { "name": "bash", "state": "ok", "summary": "…",
+    "target": { "kind": "command", "value": "npm test", "label": "Run tests" } }
+  ```
+
+  | 宿主工具 | `kind` | `value` | 其他字段 |
+  | --- | --- | --- | --- |
+  | `read` / `write` / `edit` / `str_replace_editor` | `path` | 文件路径 | — |
+  | `bash` | `command` | 命令（空白折叠为单行） | `label`：宿主给的说明 |
+  | `grep` / `glob` | `pattern` | 搜索式 | `scope`：搜索目录 |
+  | `web_fetch` / `web_search` | `url` 或 `text` | 网址；没有网址时为查询词 | — |
+  | `send_message` / `spawn_teammate` / `subagent` / `job_output` | `text` | 对象名（智能体、任务） | — |
+
+  规则表外的工具、参数无法解析或缺少对应参数时不带 target，客户端退回 `summary`。`kind`
+  是开放词表，客户端遇到未知值按 `text` 处理。`value`、`scope` 上限各 1 KiB，`label` 上限
+  256 B（均按 UTF-8）；路径超限时砍开头、保留结尾（如 `…/Views/A.swift`），其余砍结尾加 `…`。
+  只出现在工具调用行上，Host 未见调用、单独投影的结果行不带。
 - `role: system` 表示宿主注入的模型侧上下文（运行时快照、后台任务通知、工作区指令、技能内容等），
   不是真人发言。DSH Host 会把这类 `agent.inject()` 内容与真人 prompt 同样记为 user-role 消息，
   但其消息 `source.kind` 不是 `'user'`；Bridge 参照 Host 轨迹视图的分类规则，把这类行投影为
@@ -532,7 +555,7 @@ tool.end / turn.start / turn.end；其余 kind 为兼容 Host 后续事件投影
 
 - message.delta/message.final 共用同一会话内 seq；data.text 为增量/全文。极端超大增量同样会被限制在 256KB 内，并在 data 附 `truncated:true`。
 - thinking.delta 的 data.text 为推理增量，seq 与同会话其他事件一致；客户端应把连续增量折叠进同一条"思考"行（role=assistant、thinking 累积、streaming=true），final 到达后由带 `thinking` 字段的正式行替换。
-- tool.start 的 `data.tool` 为 `{name, state:"running", summary}`；Host 事件携带调用 id 时额外附带 `tool.callId`；文件编辑类调用另附 `tool.edit`（结构与限制见 Message 投影的 `tool.edit`），客户端在结果合并后保留它。tool.end 的 data 附带 ok 布尔与该结果事件自身的 seq，并在 Host 事件携带调用 id 时附带 `callId`——`seq` 标识的是 result 事件本身，客户端必须用 `callId`（缺失时按"最旧的未完成工具行"兜底）把结果合并回对应的 tool.start 行，不得按 seq 匹配。 `tool.end.data` 可选附带 `summary` 和 `attachments`（与 MessageProjection 相同的有界摘要与持久附件元数据，不含图片字节）；客户端合并到对应工具行，未见起始行时可按结果自身 seq 创建独立结果行。这是 v2 向后兼容扩展，旧客户端忽略新增字段。
+- tool.start 的 `data.tool` 为 `{name, state:"running", summary}`；Host 事件携带调用 id 时额外附带 `tool.callId`；文件编辑类调用另附 `tool.edit`、规则表内的工具另附 `tool.target`（结构与限制见 Message 投影的对应字段），客户端在结果合并后保留它们。tool.end 的 data 附带 ok 布尔与该结果事件自身的 seq，并在 Host 事件携带调用 id 时附带 `callId`——`seq` 标识的是 result 事件本身，客户端必须用 `callId`（缺失时按"最旧的未完成工具行"兜底）把结果合并回对应的 tool.start 行，不得按 seq 匹配。 `tool.end.data` 可选附带 `summary` 和 `attachments`（与 MessageProjection 相同的有界摘要与持久附件元数据，不含图片字节）；客户端合并到对应工具行，未见起始行时可按结果自身 seq 创建独立结果行。这是 v2 向后兼容扩展，旧客户端忽略新增字段。
 - turn.end 的 data 附带 ok 布尔；projection 的 data 为 key/value（如 todos）。
 
 ## 4b. 项目选择与新建会话
@@ -1577,7 +1600,7 @@ Bridge 必须返回 `restart-required` 而不是假装完成。
 
 ### c2s.session.commands
 
-权限 `sessions.read`。请求 `{sessionId}`，响应 `s2c.session.commands {sessionId,commands:[{name,description,definitionId?,input?:{hint,attachments?}}],permissions:boolean,export:boolean}`。名称按主机 Agent 作用域覆盖后的结果读取。`s2c.commands.changed {sessionId}` 表示该会话的命令或权限目录失效，负载恒带 `sessionId`：权限目录与命令目录共用这一条推送，客户端不区分来源，收到后重拉两个目录。连接、会话预设变化同样撤销旧结果。
+权限 `sessions.read`。请求 `{sessionId}`，响应 `s2c.session.commands {sessionId,commands:[{name,description,definitionId?,input?:{hint,attachments?}}],permissions:boolean,export:boolean}`。名称按主机 Agent 作用域覆盖后的结果读取。`s2c.commands.changed {sessionId?}` 表示命令或权限目录失效：带 `sessionId` 时只针对该会话，主机级目录变化（`commands/change`、`permission-presets/catalog-changed`）不带，表示所有会话。会话的 `permissions` 投影变化（当前档位被任一客户端修改）也推送带 `sessionId` 的这一帧，负载不含档位值。权限与命令共用这一条推送，客户端不区分来源，收到后重拉两个目录（含当前档位）。连接、会话预设变化同样撤销旧结果。
 
 ### c2s.session.command
 
@@ -1606,3 +1629,15 @@ Bridge 必须返回 `restart-required` 而不是假装完成。
 需要 `sessions.read`。主机 `modelSelection` 会话投影变化时推送 `{sessionId,current?:{provider,model,reasoningEffort?}}`；字段只投影公开模型选择，不包含其他上游数据。缺少 `current` 表示重新读取权威选择。它使对应会话的模型目录缓存失效；当前选择与可选模型列表分别更新，防止旧目录覆盖另一端的实时切换。旧客户端可忽略未知帧，旧桥接由短有效期与手动刷新兜底。
 
 原生权限操作可在 `c2s.session.command` 携带 `expectedDefinitionId`；插件重新读取目录并精确核对来源后才执行。定义变化时拒绝执行，不把缓存中的界面操作错误转给新的同名命令。此字段可选，最长 512 字符，不影响已有调用。
+
+## 输入框引用扩展（v2 可选扩展）
+
+`welcome.capabilities.references?: boolean` 缺省为不支持。true 表示主机挂载了文件引用（`fileReferences`）或会话引用（`sessionReferenceResolver`）服务中的至少一类，手机输入框可以在 `@` 后补全文件路径与其他会话。拒绝 widget。
+
+### c2s.session.references
+
+权限 `sessions.read`。请求 `{sessionId, query}`：`query` 是 `@` 之后已键入的文字（可为空，最长 1024 字符，不含换行；带引号的 `@"…"` 去掉开头引号后发送）。响应 `s2c.session.references {sessionId, query, files:{available, items:[{path, kind:"file"|"directory"}]}, sessions:{available, items:[{sessionId, label, mention, sameWorkspace}]}}`，`query` 原样回带，客户端据此丢弃过期结果。
+
+- `files` 来自官方 `fileReferences/list`，在该会话工作目录里由主机提供方排序，最多 30 项。`path` 为普通提示词与文件工具都接受的用户可见路径：相对路径从工作区根解析，绝对路径保留主机路径。选中只把 `@path`（含空白时为 `@"path"`，目录以 `/` 结尾）作为普通文字写进提示词，绝不读取或附带文件内容，模型需自行调用文件工具查看。
+- `sessions` 来自官方 `sessionReferenceResolver/candidates`，排除当前会话、同工作目录优先，最多 10 项。`label` 为最新标题（子代理优先用创建标签），`mention` 为规范 `@[label](dsh-session:<base64url id>)`，客户端发送时原样放进提示词；主机把它改写为可读的 `@label` 并为模型注入只读快照，每条消息最多引用 3 个会话（主机配置）。`sameWorkspace` 表示与当前会话同一工作目录；工作目录本身不下发。
+- `available:false` 表示主机没有挂载该类服务，`items` 为空。单类查询失败（超时 5 秒、旧主机缺少对应 Remote）只让该类 `items` 为空，不影响另一类；两类都不可用时回 `E_UNSUPPORTED`。

@@ -624,6 +624,11 @@ export class HostBridge {
         if (p.key === 'workingDirectory' || p.key === 'agentPreset') {
           this.record('s2c.skills.changed', { sessionId: p.sessionId });
         }
+        // 当前权限档位只在 `permissions` 投影里；其他客户端（Web、另一台手机）改了档位，
+        // 手机输入框的权限胶囊要重拉 `c2s.session.permissions`，复用命令/权限目录的失效推送。
+        if (p.key === 'permissions') {
+          this.record('s2c.commands.changed', { sessionId: p.sessionId });
+        }
         if (p.key === 'modelSelection') {
           const next = (p.value as { next?: { provider?: unknown; model?: unknown; reasoningEffort?: unknown } } | undefined)?.next
           const current = next && typeof next.provider === 'string' && typeof next.model === 'string'
@@ -1190,6 +1195,22 @@ export class HostBridge {
       return wireErrorOf('command', response.result?.error ?? { code: 'command/invalid-response' })
     } catch (error) {
       return wireErrorOf('command', hostFailureOf(error, 'command/invalid-response'))
+    }
+  }
+
+  /**
+   * 输入框 `@` 引用候选。两类候选的单类失败已在 reference-api 内吸收为空列表，
+   * 这里只处理「两类都不可用」与代理层意外异常。
+   */
+  async referenceCandidates(sessionId: string, query: string, signal?: AbortSignal): Promise<SessionManagementResult<import('./reference-api.ts').ReferenceCandidates>> {
+    const api = this.apiProxy.references
+    if (!api) return { ok: false, code: 'E_UNSUPPORTED', message: '当前主机不支持引用文件或会话' }
+    try {
+      const response = await api.list({ rpcId: randomUUID(), payload: { sessionId, query } }, signal)
+      if (response.result?.ok && response.result.value) return { ok: true, value: response.result.value }
+      return { ok: false, code: 'E_INTERNAL', message: '无法读取引用候选' }
+    } catch {
+      return { ok: false, code: 'E_INTERNAL', message: '无法读取引用候选' }
     }
   }
 

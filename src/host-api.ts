@@ -9,6 +9,7 @@ import type { DeviceScope } from './device-auth.ts'
 import type { PushNotification } from './protocol.ts'
 import type { WireErrorCode } from './wire-errors.ts'
 import type { CommandAttachment, CommandCatalog, CommandExecution, PermissionCatalog } from './command-api.ts'
+import type { ReferenceCandidates } from './reference-api.ts'
 
 export interface CommandsApiLike {
   list(req: RpcRequestLike<{ sessionId: string }>): Promise<RpcResponseLike<CommandCatalog>>
@@ -17,6 +18,11 @@ export interface CommandsApiLike {
   feedback(req: RpcRequestLike<{ sessionId: string; text: string; category?: string }>): Promise<RpcResponseLike<void>>
   readonly markdownAvailable?: boolean
   export(req: RpcRequestLike<{ sessionId: string; format?: SessionExportFormat }>, signal: AbortSignal): Promise<Response>
+}
+
+/** 输入框 `@` 引用候选（文件 + 会话），见 reference-api.ts。 */
+export interface ReferencesApiLike {
+  list(req: RpcRequestLike<{ sessionId: string; query: string }>, signal?: AbortSignal): Promise<RpcResponseLike<ReferenceCandidates>>
 }
 
 /* Stable bridge-facing structural types mapped to rc.2 controllers by
@@ -388,6 +394,8 @@ export interface ApiProxyLike {
   /** 真实宿主反射声明了助手流帧时才为 true；旧代理缺省关闭。 */
   readonly assistantStreamAvailable?: boolean
   commands?: CommandsApiLike
+  /** 主机挂载了文件引用或会话引用服务之一时存在；两者都缺席为 undefined。 */
+  references?: ReferencesApiLike
   sessions: SessionsApiLike
   workspace?: WorkspaceApiLike
   schedule?: ScheduleApiLike

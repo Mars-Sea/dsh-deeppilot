@@ -43,6 +43,22 @@ export const commandRows: readonly WireFrameRow[] = [
     },
   })),
   {
+    // 输入框 `@` 引用候选：只读目录查询，与命令目录同属 sessions.read。
+    type: 'c2s.session.references', stage: 'authenticated', scopes: ['sessions.read'], capability: 'references',
+    doc: 'PROTOCOL.md c2s.session.references',
+    validate: value => {
+      const result = sessionPayload(value)
+      if (!result.ok) return result
+      if (typeof result.value.query !== 'string' || result.value.query.length > 1024 || /[\r\n]/.test(result.value.query)) return reject('E_PROTOCOL', '引用查询无效')
+      return result
+    },
+    handle: async (ctx, payload) => {
+      const result = await ctx.bridge.referenceCandidates(payload.sessionId as string, payload.query as string, ctx.signal)
+      if (!result.ok) return ctx.fail(result.code, result.message)
+      ctx.send('s2c.session.references', { sessionId: payload.sessionId, query: payload.query, ...result.value })
+    },
+  },
+  {
     type: 'c2s.session.export', stage: 'authenticated', scopes: ['sessions.read'], capability: 'commands',
     conditionalCapabilities: ['sessionMarkdown'],
     doc: 'PROTOCOL.md c2s.session.export',

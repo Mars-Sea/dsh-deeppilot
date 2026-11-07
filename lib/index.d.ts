@@ -1,5 +1,35 @@
 import z from "@deepseek-ai/schemastery";
 import { Context } from "@deepseek-ai/cordis";
+/**
+ * 输入框 `@` 引用候选（PROTOCOL.md「输入框引用扩展」）。
+ *
+ * 数据来源都是 DSH 官方 Remote，经 `typertGateway` 以 owner 身份调用，与 Web 端同一条发现链路：
+ * - 文件：`fileReferences/list {agentId, query}` → `[{path, kind}]`，由主机挂载的提供方
+ *   （如 `dsh-file-reference-local`）在该会话工作目录里排序给出。只给路径，不读文件内容。
+ * - 会话：`sessionReferenceResolver/candidates {agentId, query}` → 带规范 mention
+ *   `@[label](dsh-session:…)` 的候选；手机发送时原样放进提示词，主机负责改写与注入快照。
+ *
+ * 两类服务都是可选挂载（兼容下限 0.2.1-rc.5 没有保证），所以每次按当前服务是否存在判定，
+ * 一类缺席不影响另一类。会话候选不下发工作目录，只给 `sameWorkspace`，避免把本机路径带到手机。
+ */
+interface FileReferenceItem {
+  path: string;
+  kind: 'file' | 'directory';
+}
+interface SessionReferenceItem {
+  sessionId: string;
+  label: string;
+  mention: string;
+  sameWorkspace: boolean;
+}
+interface ReferenceSource<T> {
+  available: boolean;
+  items: T[];
+}
+interface ReferenceCandidates {
+  files: ReferenceSource<FileReferenceItem>;
+  sessions: ReferenceSource<SessionReferenceItem>;
+}
 declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage'];
 type DeviceScope = (typeof DEVICE_SCOPES)[number];
 /**
@@ -352,6 +382,8 @@ interface HostSchedulePatch {
 interface WelcomeCapabilities {
   /** 会话命令目录、执行、权限与原生日志导出入口。缺省不支持。 */
   commands?: boolean;
+  /** 输入框 `@` 引用候选：c2s.session.references 可用（文件或会话引用至少一类）。缺省不支持。 */
+  references?: boolean;
   historyPaging: boolean;
   replay: boolean;
   approvals: boolean;
@@ -500,8 +532,8 @@ type MessageRole = 'user' | 'assistant' | 'tool' | 'system' | 'error';
 type ToolState = 'running' | 'ok' | 'error';
 /**
  * 文件编辑类工具调用的改动内容（v2 追加式扩展，见 PROTOCOL.md「工具改动对比」）。
- * Bridge 把宿主 `str_replace_editor` 的参数名（old_str/new_str/file_text/insert_line）
- * 归一化成这里的字段，手机端不依赖宿主工具参数命名。`oldText` / `newText` 各自超过
+ * Bridge 把宿主 `edit`（old_string/new_string）、`write`（content）与 `str_replace_editor`
+ * （old_str/new_str/file_text/insert_line）的参数名归一化成这里的字段，手机端不依赖宿主工具参数命名。`oldText` / `newText` 各自超过
  * 16 KiB（UTF-8）时都不发，只带 `truncated: true`。
  */
 interface ToolEditProjection {
@@ -512,6 +544,22 @@ interface ToolEditProjection {
   /** `insert` 专用：在该行之后插入，0 表示文件开头。 */
   insertLine?: number;
   truncated?: boolean;
+}
+/**
+ * 工具调用的操作对象（v2 追加式扩展，见 PROTOCOL.md「Message 投影 · tool.target」）。
+ * Bridge 从宿主工具参数里挑出「对什么做」：文件路径、命令、搜索式、网址或其他对象名，
+ * 参数名不外泄。工具结果合并回调用行后 `summary` 会被结果摘要替换，`target` 保留，
+ * 客户端据此在调用完成后仍能显示「读取 A.swift」而不是文件正文片段。
+ * `kind` 是开放词表：客户端遇到未知值按 `text` 处理。
+ */
+interface ToolTargetProjection {
+  kind: 'path' | 'command' | 'pattern' | 'url' | 'text';
+  /** 主值；UTF-8 上限 1 KiB。路径超长时砍开头（保留文件名），其余砍结尾加「…」。 */
+  value: string;
+  /** 范围：搜索所在目录（`pattern` 专用）；UTF-8 上限 1 KiB，规则同路径。 */
+  scope?: string;
+  /** 宿主给的人类可读说明（如 bash 的 description）；UTF-8 上限 256 B。 */
+  label?: string;
 }
 /** Provenance of host-injected context; present only on `role: "system"` rows.
  * Mirrors the durable DSH message source (`dsh-llm` MessageSource): `label`
@@ -547,6 +595,7 @@ interface MessageProjection {
     state: ToolState;
     summary: string;
     edit?: ToolEditProjection;
+    target?: ToolTargetProjection;
   };
   attachments?: MessageAttachment[];
   /** Present only on system rows: provenance of the injected context.
@@ -641,6 +690,13 @@ interface CommandsApiLike {
     sessionId: string;
     format?: SessionExportFormat;
   }>, signal: AbortSignal): Promise<Response>;
+}
+/** 输入框 `@` 引用候选（文件 + 会话），见 reference-api.ts。 */
+interface ReferencesApiLike {
+  list(req: RpcRequestLike<{
+    sessionId: string;
+    query: string;
+  }>, signal?: AbortSignal): Promise<RpcResponseLike<ReferenceCandidates>>;
 }
 interface RpcOk<T> {
   ok: true;
@@ -1113,6 +1169,8 @@ interface ApiProxyLike {
   /** 真实宿主反射声明了助手流帧时才为 true；旧代理缺省关闭。 */
   readonly assistantStreamAvailable?: boolean;
   commands?: CommandsApiLike;
+  /** 主机挂载了文件引用或会话引用服务之一时存在；两者都缺席为 undefined。 */
+  references?: ReferencesApiLike;
   sessions: SessionsApiLike;
   workspace?: WorkspaceApiLike;
   schedule?: ScheduleApiLike;
@@ -1452,6 +1510,11 @@ export declare class HostBridge {
   /** 图片引用回查用的原始历史页：只取事件，不投影、不推给手机。 */
   private readHistoryEvents;
   commandOperation(operation: 'list' | 'execute' | 'permissions' | 'feedback', payload: Record<string, unknown>): Promise<SessionManagementResult<unknown>>;
+  /**
+   * 输入框 `@` 引用候选。两类候选的单类失败已在 reference-api 内吸收为空列表，
+   * 这里只处理「两类都不可用」与代理层意外异常。
+   */
+  referenceCandidates(sessionId: string, query: string, signal?: AbortSignal): Promise<SessionManagementResult<ReferenceCandidates>>;
   exportSession(sessionId: string, signal: AbortSignal, format?: SessionExportFormat): Promise<Response>;
   /** 由会话目录决定技能可见性；不读取正文，也不把本机路径发给移动端。 */
   sessionSkills(sessionId: string): Promise<SessionManagementResult<{

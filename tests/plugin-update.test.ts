@@ -322,8 +322,10 @@ test('host applied without observed reload remains restart-required', async () =
   assert.equal((await updater.check('device-a')).journal?.phase, 'restart-required')
 })
 
-test('automatic rollback distinguishes applied, pending restart and failed restoration', async () => {
-  for (const [application, phase] of [['applied', 'rolled-back'], ['restart-required', 'restart-required'], ['failed', 'failed']] as const) {
+test('automatic rollback distinguishes applied, pending restart and reported-failed restoration', async () => {
+  // 宿主把回滚整体报成 application:'failed' 也可能已经把旧版装回（HMR 组合树里
+  // 另有行激活失败时就是这种返回）；终态以实际安装版本为准，而不是上报状态。
+  for (const [application, phase] of [['applied', 'rolled-back'], ['restart-required', 'restart-required'], ['failed', 'rolled-back']] as const) {
     const f = fixture()
     f.manager.updateBundle = async () => ({ from: FROM, to: TO, step: 'install',
       result: { ...applied(TO), application: 'failed', stage: 'enable' },
@@ -335,6 +337,19 @@ test('automatic rollback distinguishes applied, pending restart and failed resto
     dropMemory(f.journalPath)
     assert.equal((await f.make().check('device-a')).journal?.phase, application === 'restart-required' ? 'rolled-back' : phase)
   }
+})
+
+test('rollback that leaves a different installed version stays failed', async () => {
+  const f = fixture()
+  f.manager.updateBundle = async () => ({ from: FROM, to: TO, step: 'install',
+    result: { ...applied(TO), application: 'failed', stage: 'enable' },
+    restore: { ...applied(FROM), application: 'failed' } })
+  // 宿主报告装回旧版，但 profile 实际仍是目标版本：不能宣称已回滚。
+  f.manager.listBundles = async () => [{ name: 'dsh-deeppilot', version: TO }]
+  const updater = f.make()
+  await updater.apply('device-a', TO, 'restore-2')
+  await updater.settled()
+  assert.equal((await updater.check('device-a')).journal?.phase, 'failed')
 })
 
 test('interrupted journal is retained with request correlation and never automatically retried', async () => {

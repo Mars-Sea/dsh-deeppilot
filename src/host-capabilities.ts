@@ -22,6 +22,7 @@ export type ProbedCapability =
   | 'models'
   | 'skills'
   | 'commands'
+  | 'references'
   | 'sessionManagement'
   | 'sessionFork'
   | 'sessionRestore'
@@ -48,6 +49,9 @@ export const HOST_CAPABILITY_PROBES: Record<ProbedCapability, (proxy: ApiProxyLi
   models: (proxy) => typeof proxy.sessions.models === 'function',
   skills: (proxy) => typeof proxy.sessions.skills === 'function',
   commands: (proxy) => typeof proxy.commands?.list === 'function' && typeof proxy.commands?.execute === 'function',
+  // 文件引用（fileReferences）或会话引用（sessionReferenceResolver）任一挂载即为真；
+  // 哪一类可用由 s2c.session.references 的 available 字段逐类说明。
+  references: (proxy) => typeof proxy.references?.list === 'function',
   sessionManagement: (proxy) =>
     typeof proxy.sessions.rename === 'function' &&
     typeof proxy.workspace?.archiveSession === 'function',
@@ -142,6 +146,7 @@ export function capabilityBits(
     models: HOST_CAPABILITY_PROBES.models(proxy),
     skills: HOST_CAPABILITY_PROBES.skills(proxy),
     commands: HOST_CAPABILITY_PROBES.commands(proxy),
+    references: HOST_CAPABILITY_PROBES.references(proxy),
     sessionManagement: HOST_CAPABILITY_PROBES.sessionManagement(proxy),
     sessionFork: HOST_CAPABILITY_PROBES.sessionFork(proxy),
     sessionRestore: HOST_CAPABILITY_PROBES.sessionRestore(proxy),
