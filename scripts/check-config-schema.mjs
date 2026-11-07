@@ -109,7 +109,8 @@ try {
     throw new Error('deeppilot config schema exposes no object properties to verify')
   }
   const isVolatile = (key) => props[key]?.['x-cordis']?.volatile === true
-  for (const key of ['enabled', 'local', 'remote', 'diagnostics']) {
+  // preview 于 0.9.18 加入：同样是设置页开关直接写、要求热生效的字段。
+  for (const key of ['enabled', 'local', 'remote', 'diagnostics', 'preview']) {
     if (!isVolatile(key)) {
       throw new Error(`${key} must be declared volatile so 0.1.7 settings writes are accepted`)
     }

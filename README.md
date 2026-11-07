@@ -32,6 +32,9 @@ Host on your own computer and does not replace or modify the DSH Web UI.
 - Connect over the LAN (TLS with a Host-issued certificate pinned during
   pairing) or the optional embedded Tailscale Funnel.
 - Receive live notifications and optional APNs notifications while offline.
+- Local web preview: open a `http://127.0.0.1:<port>` or `localhost:<port>`
+  link from the conversation (a design canvas or dev server the agent started)
+  inside the app, with its live reload intact.
 - Quiet scheduled runs (DSH 0.2.2+): write a rule into a scheduled task's
   prompt, such as "if everything is normal, don't notify me". The agent can
   then skip that run's "task completed" notification with the
@@ -132,6 +135,13 @@ self-signed certificate whose fingerprint the app receives during pairing, and
 Funnel mode uses Tailscale-issued certificates. The app refuses plain `ws://`.
 Both the LAN listener and optional Funnel mode expose only the DeepPilot
 connection, one-time pairing, and health endpoints, not the complete DSH Web UI.
+
+Local web preview forwards raw bytes over a separate authenticated connection
+to a loopback port on this computer. A port is reachable only after it has
+appeared in that session's messages; the plugin's own ports and the DSH Web
+default port `3080` are always refused, and only `http` loopback links with an
+explicit port qualify. The settings page's **Local web preview** switch (on by
+default) turns it off for every paired phone; open streams close at once.
 
 The DeepPilot settings page exposes **Connections per public source**. It
 defaults to `8`, accepts `1`–`16`, and briefly restarts the Funnel helper when

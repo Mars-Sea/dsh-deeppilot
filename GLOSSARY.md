@@ -43,3 +43,4 @@ Host 控制器错误码、Bridge 结果、wire `E_*` 码三种词之间的一一
 | journal | 持久 at-most-once 投递/变更记录 | `src/dispatch-journal.ts`（prompt 投递与 schedule/fork 变更共用） |
 | report Remote | 设置页读取的 Bridge 事实快照 | `src/report-wire.ts`、`src/report-service.ts` |
 | Funnel / Relay | 两条对外传输：Tailscale Funnel 与自建中继 | `src/remote-supervisor.ts`、`src/relay-client.ts` |
+| 本机预览（local preview） | 预览连接（`clientRole: "preview"`）上的回环端口转发；准入规则与转发分模块 | `src/preview-policy.ts`、`src/preview-tunnel.ts`、`src/wire-preview.ts` |

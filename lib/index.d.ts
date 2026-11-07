@@ -30,7 +30,7 @@ interface ReferenceCandidates {
   files: ReferenceSource<FileReferenceItem>;
   sessions: ReferenceSource<SessionReferenceItem>;
 }
-declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage'];
+declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage', 'preview.open'];
 type DeviceScope = (typeof DEVICE_SCOPES)[number];
 /**
  * 错误词表（error vocabulary）的唯一属主。
@@ -458,6 +458,12 @@ interface WelcomeCapabilities {
    * prefer the LAN on the same network and fall back to Funnel elsewhere.
    * Plugin-level. */
   routeHints?: boolean;
+  /** Bridge accepts a `clientRole: "preview"` connection and the c2s.preview.*
+   * frames that tunnel the phone's loopback TCP connections to the computer's
+   * loopback address (PROTOCOL.md「本机预览扩展」). Plugin-level; stays true
+   * when the settings switch is off (requests then fail with reason
+   * "disabled"). */
+  localPreview?: boolean;
 }
 type SessionStatus = "running" | "idle" | "error" | "unknown";
 /**
@@ -1494,6 +1500,16 @@ export declare class HostBridge {
     hasMore: boolean;
   } | null>;
   /**
+   * 本机预览准入（PROTOCOL.md「本机预览扩展」）：会话最近 `maxMessages` 条消息里是否
+   * 出现过 `needle`（形如 `127.0.0.1:4720`）。
+   *
+   * 直接在宿主原始事件的 JSON 上找子串，而不是在手机投影上找：链接可能出现在助手正文、
+   * 工具输出或命令参数里，投影会裁剪其中一部分。`needle` 只含数字、点、冒号、方括号与
+   * 字母，JSON 序列化不会转义它们。读取失败或会话不存在时返回 null（对应 reason
+   * `session-not-found`），由调用方决定文案。
+   */
+  sessionMentions(sessionId: string, needle: string, maxMessages?: number): Promise<boolean | null>;
+  /**
    * Result of one attachment read-back for the phone.
    *
    * 宿主读图参数有两代：DSH ≤ 0.2.1 收 `{sessionId, attachmentId}` 并自己在会话日志里
@@ -1658,6 +1674,13 @@ export interface Config {
     enabled?: boolean;
     port?: number;
   };
+  /**
+   * 本机预览（能力 localPreview）：允许已配对手机经预览连接查看电脑回环地址上、
+   * 且在会话消息里出现过的网页。默认开启；关闭后新请求回 reason "disabled"。
+   */
+  preview?: {
+    enabled?: boolean;
+  };
   /** Optional embedded remote transport. Reconciled when settings change. */
   remote?: {
     enabled?: boolean;
@@ -1710,6 +1733,11 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     port: z<number, number, "defined">;
   }>>>, "volatile-defined">;
+  preview: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+  }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+  }>>>, "volatile-defined">;
   remote: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     provider: z<"tailscale-funnel", "tailscale-funnel", "defined">;
@@ -1761,6 +1789,11 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
   }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     port: z<number, number, "defined">;
+  }>>>, "volatile-defined">;
+  preview: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
+  }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+    enabled: z<boolean, boolean, "defined">;
   }>>>, "volatile-defined">;
   remote: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;

@@ -1130,6 +1130,46 @@ export class HostBridge {
   }
 
   /**
+   * 本机预览准入（PROTOCOL.md「本机预览扩展」）：会话最近 `maxMessages` 条消息里是否
+   * 出现过 `needle`（形如 `127.0.0.1:4720`）。
+   *
+   * 直接在宿主原始事件的 JSON 上找子串，而不是在手机投影上找：链接可能出现在助手正文、
+   * 工具输出或命令参数里，投影会裁剪其中一部分。`needle` 只含数字、点、冒号、方括号与
+   * 字母，JSON 序列化不会转义它们。读取失败或会话不存在时返回 null（对应 reason
+   * `session-not-found`），由调用方决定文案。
+   */
+  async sessionMentions(sessionId: string, needle: string, maxMessages = 2000): Promise<boolean | null> {
+    let beforeSeq: number | undefined
+    let scanned = 0
+    try {
+      while (scanned < maxMessages) {
+        const response = await this.apiProxy.sessions.history({
+          rpcId: randomUUID(),
+          payload: {
+            sessionId,
+            ...(beforeSeq !== undefined ? { beforeSeq } : {}),
+            maxMessages: clampTail(Math.min(MAX_HISTORY_PAGE_MESSAGES, maxMessages - scanned)),
+          },
+        });
+        if (!response.result || !response.result.ok) return scanned === 0 ? null : false;
+        const events = response.result.value.events ?? [];
+        if (events.length === 0) return false;
+        if (JSON.stringify(events).includes(needle)) return true;
+        scanned += events.length;
+        // 下一页从本页最早的 seq 往前取；seq 不前进（宿主边界异常）时停止，防止死循环。
+        const oldest = Math.min(...events.map((row) => row.event.seq));
+        if (!response.result.value.hasMore || !Number.isFinite(oldest) || (beforeSeq !== undefined && oldest >= beforeSeq)) {
+          return false;
+        }
+        beforeSeq = oldest;
+      }
+      return false;
+    } catch {
+      return scanned === 0 ? null : false;
+    }
+  }
+
+  /**
    * Result of one attachment read-back for the phone.
    *
    * 宿主读图参数有两代：DSH ≤ 0.2.1 收 `{sessionId, attachmentId}` 并自己在会话日志里

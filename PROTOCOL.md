@@ -26,10 +26,12 @@ v2 不接受 v1 Bearer Token、`c2s.hello.auth` 或任何降级握手；升级�
 `[格式 u8 = 1][头部长度 u32 大端][头部 JSON（UTF-8）][原始字节]`
 
 - 头部就是上面的信封，`id` 与请求关联的规则不变；原本放在 `payload.data` 里的 base64 去掉，改为帧尾的原始字节。
-- 目前只用于 `c2s.session.export` 与 `c2s.session.attachment` 的分块响应（见各自章节），这些块都不进入重放环。
+- 目前用于 `c2s.session.export` 与 `c2s.session.attachment` 的分块响应（见各自章节），以及「本机预览扩展」
+  的数据帧；这些帧都不进入重放环。
 - 客户端遇到未知格式字节、头部长度越界或头部不是合法 JSON 时丢弃该帧。
 - `welcome.capabilities.binaryFrames` 缺失或 false 时客户端不得带 `binary: true`；旧服务端会忽略该字段，照常回文本帧。
-- 客户端发往服务端的帧仍然只能是文本帧。
+- 客户端发往服务端的帧仍然只能是文本帧；唯一例外是预览连接（`clientRole: "preview"`）上的
+  `c2s.preview.data`，见「本机预览扩展」。
 
 ### 1.2 压缩帧（可选，能力位 `compressedFrames`）
 
@@ -42,8 +44,8 @@ v2 不接受 v1 Bearer Token、`c2s.hello.auth` 或任何降级握手；升级�
   包括 welcome、补发帧和请求响应。8 KB 及以下的帧照旧发文本帧。
 - 认证完成之前（challenge 等）一律是文本帧。
 - 客户端须对解压后的大小设上限（建议与单帧上限相同），超限或解压失败时丢弃该帧。
-- 未声明 `acceptEncoding` 的客户端永远收不到格式 2。格式 1（§1.1）不压缩，仍只用于请求了
-  `binary: true` 的分块响应。
+- 未声明 `acceptEncoding` 的客户端永远收不到格式 2。格式 1（§1.1）本身不压缩，用于请求了
+  `binary: true` 的分块响应与预览数据帧（预览数据帧的压缩由其头部 `z` 字段单独表示）。
 
 ## 2. 连接与鉴权
 
@@ -193,6 +195,11 @@ LAN Host 回显自己的证书指纹，App 若持有二维码指纹则必须比�
   广播 sink、不参与 seq 重放（`resumeCursor` 被忽略）、不更新设备
   lastSeen，也**不**抑制离线 APNs 告警推送（小组件连接不算"设备在线"）。
   签名输入不含 `clientRole`，v2 签名规范不变。
+- `"preview"`（能力 `localPreview`）声明这是一条本机预览专用连接：只允许 `c2s.ping`
+  与 `c2s.preview.*`（见「本机预览扩展」），其余请求一律回 `E_FORBIDDEN`；与 widget
+  一样不注册为广播 sink、不参与重放、不更新 lastSeen、不抑制离线推送，welcome 不带 `routes`。
+  旧服务端不认识该取值，会把它当普通连接，所以客户端必须先在主连接的 welcome 里看到
+  `localPreview=true` 再建预览连接。
 - `watchSessions` 可选（能力 `sessionInterest`）：客户端本机有缓存、需要保持最新的
   会话 ID，最多 16 个。带上这个字段（空数组也算）后，该连接只收到已打开或在这个集合里的
   会话的 `s2c.session.event` 与 `s2c.session.queue`，实时推送和断线补发都按这个范围；
@@ -221,6 +228,8 @@ resume-cursor:<resumeCursor or ->
 
 4. 服务端仅接受注册、未撤销且签名有效的设备。失败以 **4401** 关闭；超时以
    **4402** 关闭；版本不匹配以 **4500** 关闭。welcome 前客户端只允许发送 proof 与 ping。
+   客户端只把 4401 与 4500 当作终态；4402 只说明认证没在时限内完成（链路慢、认证途中
+   App 被挂起），设备身份未被否定，应按普通断线退避重连，不得提示重新配对。
 5. scope 在每次认证时载入内存；scope 变更或撤销会立即断开该设备，重连后重新判定。
 
 scope 与操作映射：
@@ -232,13 +241,18 @@ scope 与操作映射：
 | `sessions.manage` | 创建/重命名/归档/取消会话，创建工作区，切换模型，`c2s.plugin.update.apply` 安装更新 |
 | `interactions.respond` | pending 快照、回答 approval 与 question |
 | `notifications.register` | 注册 APNs token 与通知偏好 |
+| `preview.open` | 本机预览：`c2s.preview.authorize`、`c2s.preview.open`、`c2s.preview.credit`、`c2s.preview.close` 与预览数据帧 |
 | `schedule.manage` | 定时任务/提醒：`c2s.schedule.list`、`c2s.schedule.history`、`c2s.schedule.create`、`c2s.schedule.update`、`c2s.schedule.delete`，以及宿主级扩展的 `c2s.schedule.host.list`、`c2s.schedule.host.view`、`c2s.schedule.host.create`、`c2s.schedule.host.edit`、`c2s.schedule.host.run`、`c2s.schedule.host.deleteEnded`、`c2s.schedule.host.limits`；同时需要 `sessions.read` 才能读取任务内容 |
 
 缺少所需 scope 时服务端回 `E_FORBIDDEN`，连接保持打开。当前产品默认配对授予
 全部 scope，普通设置页不提供逐项权限控制，只提供全局连接开关和逐设备删除。
-插件载入设备注册表时，若某台未撤销设备的 scope 恰好是 `schedule.manage` 出现前的
+插件载入设备注册表、以及旧版 App 新配对登记设备时，若某台未撤销设备的 scope 恰好是 `schedule.manage` 出现前的
 五项全量（`sessions.read`、`prompt.send`、`sessions.manage`、`interactions.respond`、
-`notifications.register`），会一次性补上 `schedule.manage` 并写回；其他组合原样保留。
+`notifications.register`），或恰好是 `preview.open` 出现前的六项全量（前五项加 `schedule.manage`），
+会补齐为当前全部 scope 并写回；其他组合原样保留。
+`preview.open` 只在预览连接（`clientRole: "preview"`）的 `s2c.welcome.scopes` 里列出，主连接与小组件连接
+不列出（早期 App 严格解码该列表，见到未知值会判 welcome 无效），但权限判定照常生效。客户端应忽略
+`scopes` 中不认识的值。
 `c2s.ping` 与 `c2s.resume` 是已认证连接的控制帧，不额外要求业务 scope。
 
 #### 下行（S→C）广播权限
@@ -1029,6 +1043,9 @@ Bridge 侧 Host code 到 wire 码的映射是 `src/wire-errors.ts` 的单一属�
   缺失/false 时客户端不得发送 `sinceSeq`（旧服务端会忽略它，照旧回全量，但客户端不应依赖）。
 - `compressedFrames` 是插件自身能力：true 表示接受 `acceptEncoding` 并按 §1.2 压缩大帧。客户端可以
   无条件在 prove 里声明 `acceptEncoding`（旧服务端忽略），但必须能处理格式 2 的二进制帧。
+- `localPreview` 是插件自身能力：true 表示接受 `clientRole: "preview"` 的预览连接与 `c2s.preview.*`
+  帧（见「本机预览扩展」）。设置页关闭本机预览时该位仍为 true，请求改回带 `reason: "disabled"` 的
+  `E_FORBIDDEN`。缺失/false 时客户端不得建预览连接，本机链接按普通链接处理并提示需要更新插件。
 - v2 同版本新增可选字段时双方必须忽略未知字段。
 - 旧 Host 不认识 `deeppilot/setDeviceName` 时，设置页应显示“不支持设备重命名”的降级提示，
   不得把失败伪装成保存成功；新客户端仍须正常显示和删除设备。
@@ -1641,3 +1658,66 @@ Bridge 必须返回 `restart-required` 而不是假装完成。
 - `files` 来自官方 `fileReferences/list`，在该会话工作目录里由主机提供方排序，最多 30 项。`path` 为普通提示词与文件工具都接受的用户可见路径：相对路径从工作区根解析，绝对路径保留主机路径。选中只把 `@path`（含空白时为 `@"path"`，目录以 `/` 结尾）作为普通文字写进提示词，绝不读取或附带文件内容，模型需自行调用文件工具查看。
 - `sessions` 来自官方 `sessionReferenceResolver/candidates`，排除当前会话、同工作目录优先，最多 10 项。`label` 为最新标题（子代理优先用创建标签），`mention` 为规范 `@[label](dsh-session:<base64url id>)`，客户端发送时原样放进提示词；主机把它改写为可读的 `@label` 并为模型注入只读快照，每条消息最多引用 3 个会话（主机配置）。`sameWorkspace` 表示与当前会话同一工作目录；工作目录本身不下发。
 - `available:false` 表示主机没有挂载该类服务，`items` 为空。单类查询失败（超时 5 秒、旧主机缺少对应 Remote）只让该类 `items` 为空，不影响另一类；两类都不可用时回 `E_UNSUPPORTED`。
+
+## 本机预览扩展（v2 可选扩展）
+
+`welcome.capabilities.localPreview?: boolean` 缺省为不支持。true 表示手机可以经一条独立的预览连接，
+把手机回环地址上的 TCP 连接逐条转发到电脑的回环地址，用于在 App 内查看 Agent 起的本机网页
+（如 `http://127.0.0.1:4720/…`）。Bridge 只转发原始字节，不解析 HTTP；HTTP、WebSocket 与
+服务器推送事件因此全部透明。所有帧都要求 scope `preview.open`，拒绝 widget。
+
+### 预览连接
+
+客户端另开一条 `wss://host/phone` 连接，按 §2.2 完成挑战签名，`clientRole` 为 `"preview"`。
+该连接只允许 `c2s.ping` 与本节的帧；主连接或 widget 连接发送 `c2s.preview.*` 回 `E_FORBIDDEN`。
+连接关闭时，其上的全部通道与授权随之作废。客户端应只在查看页打开期间保持该连接，并按 §8 发心跳。
+
+### 错误原因
+
+本节的 `s2c.error` 额外带 `reason`，供客户端选择本地化文案（`message` 仍只用于诊断）：
+
+| code | reason | 含义 |
+|---|---|---|
+| `E_PROTOCOL` | `bad-url` | `url` 不是带显式端口的 `http://127.0.0.1`、`http://localhost` 或 `http://[::1]` |
+| `E_FORBIDDEN` | `disabled` | 电脑端设置页关闭了本机预览 |
+| `E_FORBIDDEN` | `reserved-port` | 端口是插件自身端口（局域网监听、Funnel 源站）或 DSH Web 默认端口 3080 |
+| `E_FORBIDDEN` | `not-mentioned` | 会话最近 2000 条消息里没有出现过 `<主机名>:<端口>` |
+| `E_FORBIDDEN` | `not-authorized` | `open` 的端口未经本连接的 `authorize` |
+| `E_NOT_FOUND` | `session-not-found` | 会话不存在或历史读取失败 |
+| `E_NOT_FOUND` | `connect-refused` | 电脑上该端口没有服务在监听（含 5 秒连接超时） |
+| `E_BUSY` | `too-many-streams` | 本连接已有 32 条通道 |
+| `E_PROTOCOL` | `duplicate-stream` | `streamId` 正在使用 |
+
+### c2s.preview.authorize → s2c.preview.authorized
+
+请求 `{sessionId, url}`。Bridge 依次检查：设置开关、URL 形状、保留端口、会话消息里是否出现过
+`url` 的 `<主机名>:<端口>`（按 URL 原文的主机名比对，`localhost` 与 `127.0.0.1` 不互认）。
+通过后把该端口记为本连接已授权，回 `{port, origin}`，`origin` 为规范化后的
+`http://<主机名>:<端口>`。重复授权同一端口是幂等的。
+
+### c2s.preview.open → s2c.preview.opened
+
+请求 `{streamId, port}`：`streamId` 为 1 至 2^31−1 的整数，由客户端分配，本连接内不得与仍打开的
+通道重复。Bridge 连接电脑上的回环地址（主机名 `127.0.0.1` 连 IPv4；`[::1]` 连 IPv6；
+`localhost` 先 IPv4 后 IPv6），成功回 `{streamId}`。
+
+### 数据帧
+
+双向使用 §1.1 的格式 1 二进制帧，头部信封的 `type` 为 `c2s.preview.data` 或 `s2c.preview.data`，
+不带 `id`，payload 为 `{streamId}`；下行可另带 `z: true`，表示帧尾是 deflate-raw 压缩后的字节。
+帧尾解压后的原始字节为 1 至 65536 字节。Bridge 只在压缩后不超过原大小 90% 时才压缩。
+收到未知或已关闭通道的数据帧时直接丢弃（关闭与在途数据的竞态）。
+
+### 流量控制：c2s.preview.credit / s2c.preview.credit
+
+`{streamId, bytes}`。每条通道每个方向的初始窗口为 256 KiB，按**解压后**的原始字节计。发送方
+在途未确认的字节不得超过窗口；接收方把数据交给本端 socket 写完后，用 credit 归还相应字节数。
+窗口在发送端由接收方自己发放，不依赖任何一方的 socket 缓冲（经 Funnel 时 Bridge 看不到手机侧的
+积压）。超窗发送的一方，其通道被对端以 `flow-control` 关闭。
+
+### c2s.preview.close / s2c.preview.closed
+
+客户端关闭：`c2s.preview.close {streamId}`，Bridge 立即销毁对应 socket，不回帧。
+Bridge 关闭：`s2c.preview.closed {streamId, reason}`，`reason` 为 `eof`（电脑上的服务关闭了连接）、
+`error`、`flow-control` 或 `disabled`（设置页关闭了本机预览）。不支持 TCP 半关闭：任一端结束
+即整条通道关闭。

@@ -3,7 +3,7 @@ import { PROTOCOL_VERSION } from './protocol.ts'
 import type { Envelope, WelcomeRoutes } from './protocol.ts'
 import type { BridgeSink, HostBridge } from './host-bridge.ts'
 import type { DeviceStore } from './token.ts'
-import type { DeviceScope } from './device-auth.ts'
+import { welcomeScopes, type DeviceScope } from './device-auth.ts'
 import { MAX_OUTBOUND_BUFFER_BYTES } from './connection-policy.ts'
 import { COMPRESS_MIN_BYTES, encodeBinaryFrame, encodeCompressedFrame } from './binary-frame.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
@@ -11,6 +11,7 @@ import type { WireErrorCode } from './wire-errors.ts'
 import type { DiagnosticsRecorder } from './diagnostics.ts'
 import { ConnectionGate, type AuthenticatedIdentity, type GateHost } from './connection-gate.ts'
 import type { OpenEventBuffer, S2CType } from './wire-registry.ts'
+import { PreviewTunnel } from './preview-tunnel.ts'
 
 export {
   AUTH_TIMEOUT_MS,
@@ -38,6 +39,14 @@ export interface ConnectionStateDeps {
   attemptId?: string
   /** 当前可用线路（能力 `routeHints`），每次 welcome 现取：地址或 Funnel 状态可能已变。 */
   routes?: () => WelcomeRoutes | undefined
+  /**
+   * 本机预览（能力 `localPreview`）的环境：设置页开关与插件自身端口，均为现取。
+   * 缺省（测试替身）时视为开启、无保留端口（DSH Web 默认端口仍由策略固定拒绝）。
+   */
+  preview?: {
+    isEnabled(): boolean
+    reservedPorts(): Iterable<number>
+  }
   /** Called once when the socket closes (cleanly or not). */
   onClosed?: (connection: BridgeConnection) => void
   /**
@@ -94,6 +103,8 @@ export class BridgeConnection implements BridgeSink {
   private watchedSessions: Set<string> | undefined
   /** 客户端认证时声明接受 deflate-raw（能力 `compressedFrames`）；认证前一律文本帧。 */
   private compressDownlink = false
+  /** 预览连接（clientRole: "preview"）认证成功后创建；连接关闭时 dispose。 */
+  private previewTunnel: PreviewTunnel | undefined
   private liveActivityRegistrationGeneration = 0
   private pendingLiveActivityId?: string
   private lastActivity = Date.now()
@@ -143,6 +154,7 @@ export class BridgeConnection implements BridgeSink {
       },
       get bridge() { return connection.deps.bridge },
       get devices() { return connection.deps.devices },
+      get preview() { return connection.previewTunnel },
       get debug() { return deps.debug === true },
       log: (message) => deps.log(message),
       send: (type: S2CType, payload, id) => connection.send(type, payload, id),
@@ -177,8 +189,19 @@ export class BridgeConnection implements BridgeSink {
     }
     this.gate = gate
 
-    ws.on('message', (data) => {
+    ws.on('message', (data, isBinary) => {
       this.lastActivity = Date.now()
+      // 预览连接的上行数据帧（PROTOCOL.md「本机预览扩展」）是二进制帧，直接交给门；
+      // 其余连接上的二进制帧仍按旧路径当文本解析（得到 E_PROTOCOL），行为不变。
+      if (isBinary && this.identity?.previewClient === true) {
+        try {
+          gate.handleBinaryFrame(toBuffer(data))
+        } catch (error) {
+          if (this.deps.debug === true) this.deps.log('preview frame failed: ' + String(error))
+          if (!this.closed) this.terminate()
+        }
+        return
+      }
       void gate.handleFrame(String(data)).catch((error) => {
         // A frame must never take down the host process: fail only this
         // socket. Protocol-shape mistakes are handled inside the gate; this
@@ -241,8 +264,9 @@ export class BridgeConnection implements BridgeSink {
     return this.identity?.deviceId
   }
 
+  /** 小组件与预览连接都不算「设备在线」，不压下离线告警推送。 */
   get suppressesAlertPush(): boolean {
-    return this.identity?.widgetClient !== true
+    return this.identity?.widgetClient !== true && this.identity?.previewClient !== true
   }
 
   // ---------- BridgeSink ----------
@@ -318,20 +342,22 @@ export class BridgeConnection implements BridgeSink {
     const cursor = identity.resumeCursor
     // Each replayed business frame is authorized separately by HostBridge.
     const canResume = cursor !== undefined && this.deps.bridge.canResumeFrom(cursor)
-    // 小组件连接只读概览，不需要选路信息。
-    const routes = identity.widgetClient ? undefined : this.deps.routes?.()
+    // 小组件与预览连接都是附属连接，选路以主连接为准。
+    const auxiliary = identity.widgetClient || identity.previewClient
+    const routes = auxiliary ? undefined : this.deps.routes?.()
+    if (identity.previewClient) this.previewTunnel = this.createPreviewTunnel()
     // Welcome strictly precedes any replayed pushes.
     this.send('s2c.welcome', {
       protocolVersion: PROTOCOL_VERSION,
       serverVersion: this.deps.serverVersion,
       deviceId: identity.deviceId,
-      scopes: [...identity.scopes],
+      scopes: welcomeScopes(identity.scopes, identity.previewClient),
       capabilities: this.deps.bridge.capabilities,
       cursor: this.deps.bridge.currentCursor(),
       resumed: canResume,
       ...(routes !== undefined ? { routes } : {}),
     })
-    if (!identity.widgetClient) this.deps.bridge.addSink(this)
+    if (!auxiliary) this.deps.bridge.addSink(this)
     if (cursor !== undefined) {
       if (canResume) {
         this.deps.bridge.resumeFrom(cursor, this)
@@ -358,6 +384,7 @@ export class BridgeConnection implements BridgeSink {
       })
     }
     this.streamAbort.abort()
+    this.previewTunnel?.dispose()
     // Unsettled sockets (never proven) settle as 'closed' and give back their
     // admission slot; already-settled ones are a no-op inside the gate.
     this.gate.onClose()
@@ -368,6 +395,22 @@ export class BridgeConnection implements BridgeSink {
     this.openingSessionEvents.clear()
     this.deps.bridge.dropSinkSessions(this)
     if (this.identity !== undefined) this.deps.bridge.removeSink(this)
+  }
+
+  /** 预览转发器：出口绑到本连接，环境（开关、保留端口）由接入方现取。 */
+  private createPreviewTunnel(): PreviewTunnel {
+    const preview = this.deps.preview
+    return new PreviewTunnel({
+      send: (type, payload, id) => this.send(type, payload, id),
+      sendBinary: (type, payload, body) => this.send(type, payload, undefined, undefined, body),
+      writable: () => this.ws.bufferedAmount < PREVIEW_WRITABLE_BYTES,
+      isEnabled: () => preview?.isEnabled() ?? true,
+      reservedPorts: () => preview?.reservedPorts() ?? [],
+      sessionMentions: (sessionId, needle) => this.deps.bridge.sessionMentions(sessionId, needle),
+      log: (message) => {
+        if (this.deps.debug === true) this.deps.log(message)
+      },
+    })
   }
 
   private close(code: number, reason: string): void {
@@ -444,3 +487,14 @@ export class BridgeConnection implements BridgeSink {
 
 /** 供接入方引用：帧上下文的类型仍由 wire-registry 属主。 */
 export type { S2CType }
+
+/** 预览数据帧暂缓下发的发送缓冲阈值，远低于 MAX_OUTBOUND_BUFFER_BYTES 的慢客户端断开线。 */
+const PREVIEW_WRITABLE_BYTES = 1024 * 1024
+
+/** ws 的 message 数据可能是 Buffer、ArrayBuffer 或分片数组，统一成一个 Buffer。 */
+function toBuffer(data: unknown): Buffer {
+  if (Buffer.isBuffer(data)) return data
+  if (Array.isArray(data)) return Buffer.concat(data as Buffer[])
+  if (data instanceof ArrayBuffer) return Buffer.from(data)
+  return Buffer.from(String(data))
+}

@@ -579,6 +579,11 @@ export function apply(ctx: Context, options: unknown): void {
               const connection = new BridgeConnection(ws, {
                 bridge,
                 routes: phoneRoutes,
+                // 本机预览：开关与保留端口每次请求现取（设置可热更新，Funnel 源站端口启动后才确定）。
+                preview: {
+                  isEnabled: () => currentConfig().preview?.enabled !== false,
+                  reservedPorts: () => previewReservedPorts(),
+                },
                 devices,
                 serverVersion: SERVER_VERSION,
                 audience,
@@ -710,6 +715,21 @@ export function apply(ctx: Context, options: unknown): void {
     onTransportError: recordTransportError,
   })
   let originURL: string | undefined
+  /**
+   * 本机预览的保留端口：插件自身的局域网监听端口与 Funnel 源站端口。手机经预览连接
+   * 访问它们等于绕开设备认证面，所以无论会话里是否提到都拒绝（DSH Web 默认端口由
+   * preview-policy 固定拒绝）。
+   */
+  const previewReservedPorts = (): number[] => {
+    const ports: number[] = []
+    const localPort = currentConfig().local?.port
+    if (typeof localPort === 'number') ports.push(localPort)
+    if (originURL !== undefined) {
+      const originPort = Number(new URL(originURL).port)
+      if (Number.isInteger(originPort)) ports.push(originPort)
+    }
+    return ports
+  }
   scheduleLocalReconcile = () => localTransport.scheduleReconcile()
   scheduleRemoteReconcile = () => remoteTransport.scheduleReconcile()
 

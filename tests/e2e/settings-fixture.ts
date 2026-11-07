@@ -53,7 +53,8 @@ function Fixture(): any {
   const [localPort, setLocalPort] = useState(3098)
   const [limit, setLimit] = useState(8)
   const [debug, setDebug] = useState(false)
-  const operations = useRef({ grants: 0, renames: 0, revokes: 0, ports: 0, limits: 0, pushes: 0, enabled: 0, remote: 0, debug: 0 })
+  const [preview, setPreview] = useState(true)
+  const operations = useRef({ grants: 0, renames: 0, revokes: 0, ports: 0, limits: 0, pushes: 0, enabled: 0, remote: 0, debug: 0, preview: 0 })
   const [revision, setRevision] = useState(0)
   const record = (key: keyof typeof operations.current): void => {
     operations.current[key] += 1
@@ -68,9 +69,11 @@ function Fixture(): any {
     useDeepPilotLocalPort: (select) => select({ status: 'ready', value: localPort }),
     useDeepPilotRemoteConnectionLimit: (select) => select({ status: 'ready', value: limit }),
     useDeepPilotDebug: (select) => select({ status: 'ready', enabled: debug }),
+    useDeepPilotPreview: (select) => select({ status: 'ready', enabled: preview }),
     setDeepPilotEnabled: (enabled) => { record('enabled'); setReport((r) => ({ ...r, enabled })) },
     setDeepPilotRemoteEnabled: (enabled) => { record('remote'); setReport((r) => ({ ...r, remote: { ...r.remote, phase: enabled ? 'online' : 'disabled' } })) },
     setDeepPilotDebug: (enabled) => { record('debug'); setDebug(enabled) },
+    setDeepPilotPreview: (enabled) => { record('preview'); setPreview(enabled) },
     setDeepPilotLocalPort: (value) => { record('ports'); setLocalPort(value) },
     setDeepPilotRemoteConnectionLimit: (value) => { record('limits'); setLimit(value) },
     beginPairing: async (): Promise<PairingGrantSnapshot> => {
@@ -98,6 +101,7 @@ function Fixture(): any {
     props.useDeepPilotEnabled = (select) => select({ status: 'unavailable', enabled: report.enabled })
     props.useDeepPilotRemoteEnabled = (select) => select({ status: 'unavailable', enabled: true })
     props.useDeepPilotDebug = (select) => select({ status: 'unavailable', enabled: false })
+    props.useDeepPilotPreview = (select) => select({ status: 'unavailable', enabled: true })
   }
   return h('div', null,
     h(DeepPilotSettingsPage, props),

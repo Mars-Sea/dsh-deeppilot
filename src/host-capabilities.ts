@@ -115,6 +115,7 @@ export const BRIDGE_INVARIANT_CAPABILITIES = [
   'compressedFrames',
   'incrementalTail',
   'routeHints',
+  'localPreview',
 ] as const satisfies ReadonlyArray<keyof WelcomeCapabilities>
 
 /**
@@ -138,6 +139,8 @@ export function capabilityBits(
     incrementalTail: true,
     // 插件自身能力：welcome 带当前可用的局域网 / Funnel 地址，供手机自动选路。
     routeHints: true,
+    // 插件自身能力：预览连接可把手机回环 TCP 连接转发到电脑回环地址（设置页关闭时请求回 disabled）。
+    localPreview: true,
     approvals: true,
     questions: true,
     pendingSnapshot: true,

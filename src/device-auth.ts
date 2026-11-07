@@ -22,6 +22,8 @@ export const DEVICE_SCOPES = [
   'interactions.respond',
   'notifications.register',
   'schedule.manage',
+  // 本机预览（能力 localPreview，0.9.18 起）：经预览连接访问电脑回环地址上的网页。
+  'preview.open',
 ] as const
 
 export type DeviceScope = (typeof DEVICE_SCOPES)[number]
@@ -134,29 +136,43 @@ export function normalizeDeviceScopes(value: unknown): DeviceScope[] {
 }
 
 /**
- * 0.8.3 之前的「全部权限」：当时还没有 `schedule.manage`。App 配对时一直申请
- * DeviceScope 的全部取值，设置页也没有收窄权限的入口，所以存量记录恰好等于这五项，
- * 只说明「配对时这项权限还不存在」，不是有意关闭。
+ * 历代「全部权限」。App 配对时一直申请 DeviceScope 的全部取值，设置页也没有收窄权限的
+ * 入口，所以存量记录恰好等于某一代全量，只说明「配对时后来的权限还不存在」，不是有意关闭：
+ * - 0.8.3 之前：五项，还没有 `schedule.manage`；
+ * - 0.9.18 之前：六项，还没有 `preview.open`。
  */
-const LEGACY_FULL_SCOPES: readonly DeviceScope[] = [
-  'sessions.read',
-  'prompt.send',
-  'sessions.manage',
-  'interactions.respond',
-  'notifications.register',
+const LEGACY_FULL_SCOPE_SETS: ReadonlyArray<readonly DeviceScope[]> = [
+  ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register'],
+  ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage'],
 ]
 
 /**
- * 存量设备权限升级：恰好等于旧版全部权限时补上之后新增的默认权限，返回新列表；
+ * 存量设备权限升级：恰好等于某一代全部权限时补齐为当前全部权限，返回新列表；
  * 其余情况（含任何非完整集合）返回 null，原样保留。只放宽「旧版全量」这一种形态，
  * 避免把将来可能出现的、有意收窄过的记录一并放开。
  */
 export function upgradeLegacyFullScopes(value: unknown): DeviceScope[] | null {
   if (!Array.isArray(value)) return null
   const current = new Set(value)
-  if (current.size !== LEGACY_FULL_SCOPES.length) return null
-  if (!LEGACY_FULL_SCOPES.every((scope) => current.has(scope))) return null
-  return [...DEFAULT_DEVICE_SCOPES]
+  const matches = LEGACY_FULL_SCOPE_SETS.some((legacy) =>
+    current.size === legacy.length && legacy.every((scope) => current.has(scope)))
+  return matches ? [...DEFAULT_DEVICE_SCOPES] : null
+}
+
+/**
+ * 只在预览连接的 welcome 里列出的 scope。
+ *
+ * 为什么：0.9.18 之前发布的 App 把 `welcome.scopes` 严格解码成固定枚举，见到未知值
+ * 会判整帧无效、按「插件版本不兼容」停止重连。旧版全量设备载入及配对时会补上 `preview.open`，
+ * 若照常列在主连接（及小组件连接）的 welcome 里，插件先升级、App 未升级的用户就会断连。
+ * 只有新版 App 才会开预览连接，所以只在那里列出；权限判定本身不受影响。
+ */
+const PREVIEW_ONLY_WELCOME_SCOPES: ReadonlySet<DeviceScope> = new Set(['preview.open'])
+
+/** welcome 里下发的 scope 列表：非预览连接去掉旧 App 不认识的 `preview.open`。 */
+export function welcomeScopes(scopes: Iterable<DeviceScope>, previewClient: boolean): DeviceScope[] {
+  const list = [...scopes]
+  return previewClient ? list : list.filter((scope) => !PREVIEW_ONLY_WELCOME_SCOPES.has(scope))
 }
 
 /** One active, single-use pairing grant per plugin runtime. */

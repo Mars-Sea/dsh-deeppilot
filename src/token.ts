@@ -141,8 +141,8 @@ export class DeviceStore {
       let upgraded = 0
       for (const rec of raw.devices ?? []) {
         if (typeof rec.deviceId !== 'string') continue
-        // 0.8.3 之前配对的设备只存了当时的五项全量权限，连接时不会补新权限，
-        // 自动化任务一直 E_FORBIDDEN（scope schedule.manage required）。载入时一次性补齐并落盘。
+        // 旧版配对的设备只存了当时的全量权限，连接时不会补新权限，对应功能一直
+        // E_FORBIDDEN（如 scope schedule.manage / preview.open required）。载入时一次性补齐并落盘。
         const next = rec.revokedAt === undefined ? upgradeLegacyFullScopes(rec.scopes) : null
         if (next !== null) {
           rec.scopes = next
@@ -151,7 +151,7 @@ export class DeviceStore {
         store.devices.set(rec.deviceId, rec)
       }
       if (upgraded > 0) {
-        console.log(formatLogLine('info', `device scopes upgraded for ${upgraded} legacy device(s): schedule.manage added`))
+        console.log(formatLogLine('info', `device scopes upgraded for ${upgraded} legacy device(s): scopes completed`))
         void store.flush()
       }
     } catch (error) {
@@ -185,7 +185,9 @@ export class DeviceStore {
       appVersion: record.appVersion,
       publicKey: record.publicKey,
       fingerprint: fingerprintForPublicKey(record.publicKey),
-      scopes: normalizeDeviceScopes(record.scopes),
+      // 旧版 App 配对时申请的是它那一代的全量权限（不含后来新增的 scope），
+      // 与载入时的存量升级同一口径补齐，否则新配对的旧 App 设备要等插件重启才有新权限。
+      scopes: upgradeLegacyFullScopes(record.scopes) ?? normalizeDeviceScopes(record.scopes),
       firstSeenTs: existing?.firstSeenTs ?? now,
       lastSeenTs: now,
       ...(existing?.apns ? { apns: existing.apns } : {}),

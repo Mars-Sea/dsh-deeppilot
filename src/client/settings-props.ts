@@ -21,6 +21,7 @@ import type {
   EnabledState,
   LocalPortState,
   PageState,
+  PreviewState,
   RemoteConnectionLimitState,
   RemoteEnabledState,
 } from './index.ts'
@@ -38,6 +39,7 @@ export type LocalPortSelector = Selector<LocalPortState>
 export type RemoteEnabledSelector = Selector<RemoteEnabledState>
 export type RemoteLimitSelector = Selector<RemoteConnectionLimitState>
 export type DebugSelector = Selector<DebugState>
+export type PreviewSelector = Selector<PreviewState>
 
 /** 页面真正用到的报告字段（诊断与统计块都只读这些）。 */
 export type SettingsReport = DeepPilotReport
@@ -50,6 +52,7 @@ export interface SettingsPageProps {
   useDeepPilotRemoteEnabled: RemoteEnabledSelector
   useDeepPilotRemoteConnectionLimit: RemoteLimitSelector
   useDeepPilotDebug: DebugSelector
+  useDeepPilotPreview: PreviewSelector
   // ---------- 可选函数：在位情况见 `can` ----------
   refresh?: () => void
   beginPairing?: () => Promise<PairingGrantSnapshot>
@@ -62,6 +65,7 @@ export interface SettingsPageProps {
   setDeepPilotRemoteEnabled?: (enabled: boolean) => unknown
   setDeepPilotRemoteConnectionLimit?: (limit: number) => Promise<unknown> | unknown
   setDeepPilotDebug?: (enabled: boolean) => unknown
+  setDeepPilotPreview?: (enabled: boolean) => unknown
   /** 绑定的翻译函数；页面所有文案都经它。 */
   t: Translate
 }
@@ -79,6 +83,7 @@ export type SettingsCapability =
   | 'setRemoteEnabled'
   | 'setRemoteLimit'
   | 'setDebug'
+  | 'setPreview'
 
 export interface SettingsPageSurface {
   props: SettingsPageProps
@@ -97,6 +102,7 @@ export const MISSING_LOCAL_PORT_HOOK: LocalPortSelector = () => ({ status: 'unav
 export const MISSING_REMOTE_ENABLED_HOOK: RemoteEnabledSelector = () => ({ status: 'unavailable', enabled: false })
 export const MISSING_REMOTE_LIMIT_HOOK: RemoteLimitSelector = () => ({ status: 'unavailable', value: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE })
 export const MISSING_DEBUG_HOOK: DebugSelector = () => ({ status: 'unavailable', enabled: false })
+export const MISSING_PREVIEW_HOOK: PreviewSelector = () => ({ status: 'unavailable', enabled: true })
 
 /** 诊断行的 key，集中在此便于对账（tests/settings-props.test.ts 逐条断言）。 */
 const DIAG_KEY = {
@@ -117,6 +123,8 @@ const DIAG_KEY = {
   setRemote: 'diag.missingSetRemote',
   setRemoteLimit: 'diag.missingSetRemoteLimit',
   setDebug: 'diag.missingSetDebug',
+  previewHook: 'diag.missingPreviewHook',
+  setPreview: 'diag.missingSetPreview',
   settingsUnavailable: 'diag.settingsUnavailable',
 } as const
 
@@ -132,6 +140,7 @@ const CAPABILITY_BY_PROP: ReadonlyArray<[SettingsCapability, keyof SettingsPageP
   ['setRemoteEnabled', 'setDeepPilotRemoteEnabled'],
   ['setRemoteLimit', 'setDeepPilotRemoteConnectionLimit'],
   ['setDebug', 'setDeepPilotDebug'],
+  ['setPreview', 'setDeepPilotPreview'],
 ]
 
 const isFn = (value: unknown): value is (...args: never[]) => unknown => typeof value === 'function'
@@ -155,6 +164,7 @@ export function normalizeSettingsPageProps(raw: unknown): SettingsPageSurface {
   const useRemoteEnabled = isFn(source.useDeepPilotRemoteEnabled) ? (source.useDeepPilotRemoteEnabled as RemoteEnabledSelector) : MISSING_REMOTE_ENABLED_HOOK
   const useRemoteLimit = isFn(source.useDeepPilotRemoteConnectionLimit) ? (source.useDeepPilotRemoteConnectionLimit as RemoteLimitSelector) : MISSING_REMOTE_LIMIT_HOOK
   const useDebug = isFn(source.useDeepPilotDebug) ? (source.useDeepPilotDebug as DebugSelector) : MISSING_DEBUG_HOOK
+  const usePreview = isFn(source.useDeepPilotPreview) ? (source.useDeepPilotPreview as PreviewSelector) : MISSING_PREVIEW_HOOK
 
   // 顺序必须与迁移前页面内的 diag[] 一致，否则宿主过期时用户看到的技术诊断会变样。
   if (!isFn(source.useDeepPilotReport)) diagnostics.push(t(DIAG_KEY.reportHook))
@@ -174,6 +184,9 @@ export function normalizeSettingsPageProps(raw: unknown): SettingsPageSurface {
   if (!isFn(source.setDeepPilotRemoteConnectionLimit)) diagnostics.push(t(DIAG_KEY.setRemoteLimit))
   if (!isFn(source.useDeepPilotDebug)) diagnostics.push(t(DIAG_KEY.debugHook))
   if (!isFn(source.setDeepPilotDebug)) diagnostics.push(t(DIAG_KEY.setDebug))
+  // 新增项追加在末尾，既有诊断行的顺序保持不变。
+  if (!isFn(source.useDeepPilotPreview)) diagnostics.push(t(DIAG_KEY.previewHook))
+  if (!isFn(source.setDeepPilotPreview)) diagnostics.push(t(DIAG_KEY.setPreview))
 
   for (const [capability, prop] of CAPABILITY_BY_PROP) {
     if (isFn(source[prop])) can.add(capability)
@@ -186,6 +199,7 @@ export function normalizeSettingsPageProps(raw: unknown): SettingsPageSurface {
     useDeepPilotRemoteEnabled: useRemoteEnabled,
     useDeepPilotRemoteConnectionLimit: useRemoteLimit,
     useDeepPilotDebug: useDebug,
+    useDeepPilotPreview: usePreview,
     t: t as Translate,
     refresh: isFn(source.refresh) ? (source.refresh as () => void) : undefined,
     beginPairing: isFn(source.beginPairing) ? (source.beginPairing as () => Promise<PairingGrantSnapshot>) : undefined,
@@ -198,6 +212,7 @@ export function normalizeSettingsPageProps(raw: unknown): SettingsPageSurface {
     setDeepPilotRemoteEnabled: isFn(source.setDeepPilotRemoteEnabled) ? (source.setDeepPilotRemoteEnabled as SettingsPageProps['setDeepPilotRemoteEnabled']) : undefined,
     setDeepPilotRemoteConnectionLimit: isFn(source.setDeepPilotRemoteConnectionLimit) ? (source.setDeepPilotRemoteConnectionLimit as SettingsPageProps['setDeepPilotRemoteConnectionLimit']) : undefined,
     setDeepPilotDebug: isFn(source.setDeepPilotDebug) ? (source.setDeepPilotDebug as SettingsPageProps['setDeepPilotDebug']) : undefined,
+    setDeepPilotPreview: isFn(source.setDeepPilotPreview) ? (source.setDeepPilotPreview as SettingsPageProps['setDeepPilotPreview']) : undefined,
   }
 
   return { props, can, diagnostics, reportHookMissing: !isFn(source.useDeepPilotReport) }

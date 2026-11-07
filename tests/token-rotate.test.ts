@@ -112,7 +112,7 @@ test('concurrent registrations never leave a half-written devices-v2.json behind
   }
 })
 
-test('legacy full-scope devices gain schedule.manage on load; others stay as stored', async () => {
+test('legacy full-scope devices gain later default scopes on load; others stay as stored', async () => {
   const dir = await makeTempDir()
   const file = join(dir, 'devices-v2.json')
   const legacy = ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register']
@@ -124,18 +124,36 @@ test('legacy full-scope devices gain schedule.manage on load; others stay as sto
     await writeFile(file, JSON.stringify({ version: 2, devices: [
       row('legacy', legacy),
       row('narrow', ['sessions.read']),
-      row('full', [...legacy, 'schedule.manage']),
+      row('six', [...legacy, 'schedule.manage']),
+      row('full', [...legacy, 'schedule.manage', 'preview.open']),
       row('revoked', legacy, { revokedAt: 3 }),
     ] }))
     const store = await DeviceStore.load(file)
     await store.drain()
     const scopes = Object.fromEntries(store.list().map((r) => [r.deviceId, r.scopes]))
-    assert.deepEqual(scopes.legacy, [...legacy, 'schedule.manage'], 'legacy full set gets the later default')
+    const all = [...legacy, 'schedule.manage', 'preview.open']
+    assert.deepEqual(scopes.legacy, all, 'legacy 5-scope full set gets the later defaults')
+    assert.deepEqual(scopes.six, all, 'legacy 6-scope full set gains preview.open')
     assert.deepEqual(scopes.narrow, ['sessions.read'], 'a narrowed set is never widened')
-    assert.deepEqual(scopes.full, [...legacy, 'schedule.manage'])
+    assert.deepEqual(scopes.full, all)
     assert.deepEqual(scopes.revoked, legacy, 'revoked rows are left alone')
     const persisted = JSON.parse(await readFile(file, 'utf8')) as { devices: Array<{ deviceId: string; scopes: string[] }> }
-    assert.ok(persisted.devices.find((r) => r.deviceId === 'legacy')?.scopes.includes('schedule.manage'), 'upgrade is written back')
+    assert.ok(persisted.devices.find((r) => r.deviceId === 'legacy')?.scopes.includes('preview.open'), 'upgrade is written back')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('pairing from an older app with its full scope set registers the current full set', async () => {
+  const dir = await makeTempDir()
+  const store = await DeviceStore.load(join(dir, 'devices-v2.json'))
+  const six = ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage']
+  try {
+    const old = store.register({ publicKey: createTestIdentity().publicKey, deviceName: 'old', appVersion: '0.2.4', scopes: six }, 1)
+    assert.deepEqual(old.scopes, [...six, 'preview.open'], 'older app full set gains preview.open at pairing time')
+    const narrow = store.register({ publicKey: createTestIdentity().publicKey, deviceName: 'narrow', appVersion: '0.2.4', scopes: ['sessions.read'] }, 2)
+    assert.deepEqual(narrow.scopes, ['sessions.read'], 'a narrowed request is never widened')
+    await store.drain()
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

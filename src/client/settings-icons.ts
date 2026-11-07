@@ -1,6 +1,6 @@
 import { createElement as h } from 'react'
 
-type IconName = 'phone' | 'wifi' | 'globe' | 'refresh' | 'plus' | 'more' | 'activity' | 'info' | 'ready' | 'attention'
+type IconName = 'phone' | 'wifi' | 'globe' | 'window' | 'refresh' | 'plus' | 'more' | 'activity' | 'info' | 'ready' | 'attention'
 
 /** 设置页的小图标共用线宽与 currentColor，随宿主主题变色，不额外引入图标包。 */
 export function settingsIcon(name: IconName, size = 18): any {
@@ -10,6 +10,7 @@ export function settingsIcon(name: IconName, size = 18): any {
     phone: () => [h('rect', { x: 6.5, y: 2.5, width: 11, height: 19, rx: 2.2 }), path('M10 5h4M11 18.5h2')],
     wifi: () => [path('M2 8.8a16 16 0 0 1 20 0M5 12.1a11 11 0 0 1 14 0M8.3 15.5a6 6 0 0 1 7.4 0'), circle(12, 19, .7)],
     globe: () => [circle(12, 12, 9), path('M3 12h18M12 3a17 17 0 0 1 0 18 17 17 0 0 1 0-18')],
+    window: () => [h('rect', { x: 3, y: 4.5, width: 18, height: 15, rx: 2.2 }), path('M3 9h18M6.5 6.8h.01M9 6.8h.01')],
     refresh: () => [path('M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.5-1L20 9M4 15l2.4 3A7 7 0 0 0 18 17')],
     plus: () => [path('M12 5v14M5 12h14')],
     more: () => [circle(5, 12, 1.2), circle(12, 12, 1.2), circle(19, 12, 1.2)],

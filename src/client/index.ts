@@ -74,6 +74,12 @@ export interface DebugState {
   enabled: boolean
 }
 
+/** 本机预览开关（能力 localPreview），读自 `preview.enabled`；缺省开启。 */
+export interface PreviewState {
+  status: 'loading' | 'ready' | 'unavailable'
+  enabled: boolean
+}
+
 export interface LocalPortState {
   status: 'loading' | 'ready' | 'unavailable'
   value: number
@@ -376,6 +382,34 @@ export function apply(ctx: Context): void {
     })
   }
 
+  // 本机预览开关：缺省开启（与 debug 相反），只有显式 false 才算关闭。
+  const previewStore = createSnapshotStore<PreviewState>({ status: 'loading', enabled: true })
+  const adoptPreview = (): void => {
+    if (scope === undefined) return
+    const snap = scope.getSnapshot()
+    if (snap.status === 'ready') {
+      previewStore.set({ status: 'ready', enabled: snap.value?.preview?.enabled !== false })
+    } else if (snap.status === 'unavailable') {
+      previewStore.set({ status: 'unavailable', enabled: true })
+    }
+  }
+  scopeAdoptions.push(adoptPreview)
+  const lastConfirmedPreview = (): boolean => {
+    const snap = scope?.getSnapshot()
+    if (snap?.status === 'ready') return snap.value?.preview?.enabled !== false
+    return previewStore.getSnapshot().enabled
+  }
+  const setDeepPilotPreview = (value: boolean): void => {
+    const previous = lastConfirmedPreview()
+    previewStore.set({ status: 'ready', enabled: value })
+    if (scope === undefined) return
+    const currentPreview = scope.getSnapshot().value?.preview ?? {}
+    void scope.set('preview', { ...currentPreview, enabled: value }).then(() => {}, (error: unknown) => {
+      previewStore.set({ status: 'ready', enabled: previous })
+      console.error('[deeppilot] failed to persist preview.enabled=' + String(value) + ': ' + (error instanceof Error ? error.message : String(error)))
+    })
+  }
+
   const remoteEnabledStore = createSnapshotStore<RemoteEnabledState>({ status: 'loading', enabled: false })
   const remoteConnectionLimitStore = createSnapshotStore<RemoteConnectionLimitState>({
     status: 'loading',
@@ -470,6 +504,7 @@ export function apply(ctx: Context): void {
           deepPilotRemoteEnabled: remoteEnabledStore,
           deepPilotRemoteConnectionLimit: remoteConnectionLimitStore,
           deepPilotDebug: debugStore,
+          deepPilotPreview: previewStore,
         },
         refresh: () => { void controller.refresh() },
         beginPairing,
@@ -482,6 +517,7 @@ export function apply(ctx: Context): void {
         setDeepPilotRemoteEnabled,
         setDeepPilotRemoteConnectionLimit,
         setDeepPilotDebug,
+        setDeepPilotPreview,
         // Bound translation function for the page. The page never imports
         // t() directly so it can be re-supplied if the host swaps the
         // locale face at runtime (a feature today; exercised in tests).

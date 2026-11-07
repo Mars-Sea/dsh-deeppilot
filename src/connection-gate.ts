@@ -49,11 +49,15 @@ import {
   scopeRejection,
   validatePayload,
   widgetPolicyOf,
+  previewPolicyOf,
   type FrameContext,
   type OpenEventBuffer,
   type S2CType,
 } from './wire-registry.ts'
 import type { WireErrorCode } from './wire-errors.ts'
+import type { PreviewTunnel } from './preview-tunnel.ts'
+import { decodeBinaryFrame } from './binary-frame.ts'
+import { MAX_STREAM_ID } from './preview-tunnel.ts'
 
 /** 认证落定的四种结局；与迁移前 index.ts 收到的 reason 一致。 */
 export type SettleReason = 'success' | 'invalid-proof' | 'timeout' | 'closed'
@@ -103,6 +107,8 @@ export interface AuthenticatedIdentity {
   deviceId: string
   scopes: ReadonlySet<DeviceScope>
   widgetClient: boolean
+  /** clientRole: "preview"（能力 localPreview）：本机预览专用连接，只转发、不收推送。 */
+  previewClient: boolean
   resumeCursor: number | undefined
   /** `watchSessions`（能力 `sessionInterest`）：缺省 = 旧客户端，收全部会话事件。 */
   watchSessions: string[] | undefined
@@ -123,6 +129,8 @@ export interface GateHost {
   readonly bridge: HostBridge
   readonly devices: DeviceStore
   readonly debug: boolean
+  /** 预览连接认证成功后由连接创建；其余连接始终 undefined。 */
+  readonly preview?: PreviewTunnel
   log(message: string): void
   send(type: S2CType, payload: unknown, id?: string): void
   /** 二进制帧发送；仅在客户端请求里带 `binary: true` 时由行调用。 */
@@ -188,6 +196,7 @@ export class ConnectionGate {
   private deviceId: string | undefined
   private scopes = new Set<DeviceScope>()
   private widgetClient = false
+  private previewClient = false
   private readonly challenge: AuthChallenge
   private helloTimer: NodeJS.Timeout | undefined
   private attachTimer: NodeJS.Timeout | undefined
@@ -326,6 +335,10 @@ export class ConnectionGate {
     if (this.widgetClient && (row === undefined || widgetPolicyOf(row) === 'deny')) {
       return host.fail(env.id, 'E_FORBIDDEN', 'widget connection is read-only')
     }
+    // 预览连接同理：只准 ping 与 c2s.preview.*，未知类型也一并拒绝，不泄露帧清单。
+    if (this.previewClient && (row === undefined || previewPolicyOf(row) === 'deny')) {
+      return host.fail(env.id, 'E_FORBIDDEN', 'preview connection only carries preview frames')
+    }
     // 未知类型直接 E_PROTOCOL（G6）。先查 scope 会让没有 sessions.read 的
     // 设备听到关于一个不存在帧的「权限不足」。
     if (row === undefined) {
@@ -341,6 +354,39 @@ export class ConnectionGate {
     if (capability !== undefined) return host.fail(env.id, capability.code, capability.message)
 
     await dispatchFrame(row, this.context(env), validated.value)
+  }
+
+  /**
+   * 处理一条二进制帧。只有已认证、具备 `preview.open` 的预览连接可以上行二进制帧
+   * （c2s.preview.data，PROTOCOL.md「本机预览扩展」）；其余连接沿用「客户端只发文本帧」
+   * 的旧规则，回 E_PROTOCOL 且不断连。
+   */
+  handleBinaryFrame(data: Buffer): void {
+    const host = this.host
+    if (this.dead || host === undefined || this.revoked) return
+    if (!this.authenticated) {
+      host.close(1003, 'binary frame before authentication')
+      return
+    }
+    if (!this.previewClient || host.preview === undefined) {
+      host.fail(undefined, 'E_PROTOCOL', 'binary frames are only accepted on preview connections')
+      return
+    }
+    if (!this.scopes.has('preview.open')) {
+      host.fail(undefined, 'E_FORBIDDEN', 'scope preview.open required')
+      return
+    }
+    const decoded = decodeBinaryFrame(data)
+    const header = decoded?.header as { v?: unknown; type?: unknown; payload?: { streamId?: unknown } } | undefined
+    const streamId = header?.payload?.streamId
+    if (
+      decoded === undefined || header?.v !== PROTOCOL_VERSION || header.type !== 'c2s.preview.data' ||
+      typeof streamId !== 'number' || !Number.isInteger(streamId) || streamId < 1 || streamId > MAX_STREAM_ID
+    ) {
+      host.fail(undefined, 'E_PROTOCOL', 'malformed preview data frame')
+      return
+    }
+    host.preview.data(streamId, decoded.body)
   }
 
   /** 门持有的撤销标记由 device.revoke 行置位。 */
@@ -408,9 +454,11 @@ export class ConnectionGate {
     this.authenticated = true
     this.deviceId = deviceId
     this.widgetClient = p.clientRole === 'widget'
+    this.previewClient = p.clientRole === 'preview'
     this.scopes = new Set(record.scopes ?? [])
     if (this.helloTimer !== undefined) clearTimeout(this.helloTimer)
-    if (!this.widgetClient) {
+    // 小组件与预览连接都是附属连接：不刷新 lastSeen，「设备上次在线」只看主连接。
+    if (!this.widgetClient && !this.previewClient) {
       this.options.devices.markAuthenticated(deviceId, deviceName, appVersion, Date.now())
     }
     host.deviceAuthenticated(deviceId)
@@ -419,9 +467,10 @@ export class ConnectionGate {
       deviceId,
       scopes: this.scopes,
       widgetClient: this.widgetClient,
-      resumeCursor: this.widgetClient ? undefined : resumeCursor,
+      previewClient: this.previewClient,
+      resumeCursor: this.widgetClient || this.previewClient ? undefined : resumeCursor,
       // 不在签名原文里：它只会收窄本设备已有权限的下行内容，不扩大任何权限。
-      watchSessions: this.widgetClient ? undefined : parseWatchSessions(p.watchSessions),
+      watchSessions: this.widgetClient || this.previewClient ? undefined : parseWatchSessions(p.watchSessions),
       // 同样不进签名原文：只改变下行编码，不改变内容与权限。
       acceptsDeflate: Array.isArray(p.acceptEncoding) && p.acceptEncoding.includes('deflate-raw'),
       deviceName,
@@ -474,6 +523,7 @@ export class ConnectionGate {
       waitForWritable: host.waitForWritable?.bind(host),
       deviceId: this.deviceId,
       widgetClient: this.widgetClient,
+      ...(host.preview !== undefined ? { preview: host.preview } : {}),
       bridge: host.bridge,
       devices: host.devices,
       debug: host.debug,

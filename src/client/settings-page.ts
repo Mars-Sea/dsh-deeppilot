@@ -274,6 +274,9 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     const debugState = props.useDeepPilotDebug((s) => s)
     hooks.debugEnabled = debugState.enabled
     hooks.debugSwitchReady = debugState.status === 'ready'
+    const previewState = props.useDeepPilotPreview((s) => s)
+    hooks.previewEnabled = previewState.enabled
+    hooks.previewSwitchReady = previewState.status === 'ready'
   }
   const hooks: {
     report: DeepPilotReport | null
@@ -287,12 +290,15 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     remoteConnectionLimitReady: boolean
     debugEnabled: boolean
     debugSwitchReady: boolean
+    previewEnabled: boolean
+    previewSwitchReady: boolean
   } = {
     report: null, enabled: true, switchReady: false,
     localPort: DEFAULT_LOCAL_PORT, localPortReady: false,
     remoteEnabled: false, remoteSwitchReady: false,
     remoteConnectionLimit: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, remoteConnectionLimitReady: false,
     debugEnabled: false, debugSwitchReady: false,
+    previewEnabled: true, previewSwitchReady: false,
   }
   try {
     readHooks()
@@ -311,6 +317,8 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
   const remoteConnectionLimitReady = hooks.remoteConnectionLimitReady
   const debugEnabled = hooks.debugEnabled
   const debugSwitchReady = hooks.debugSwitchReady
+  const previewEnabled = hooks.previewEnabled
+  const previewSwitchReady = hooks.previewSwitchReady
 
   useEffect(() => {
     dispatchRemoteLimitDraft({ type: 'sync', value: remoteConnectionLimit })
@@ -1058,6 +1066,23 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
               ),
             )),
           )),
+        ),
+        // 本机预览开关（能力 localPreview）：与两条连接通道并列，作用于所有已配对手机。
+        h('div', { className: 'pbb-channel' },
+          h('div', { className: 'pbb-row pbb-channelRow' },
+            settingsIcon('window'),
+            h('div', { className: 'pbb-controlText' },
+              h('span', { className: 'pbb-controlTitle' }, t(props.t, 'preview.title')),
+              h('span', { className: 'pbb-controlDescription' }, t(props.t, 'preview.description'))),
+            h(Switch, {
+              checked: previewEnabled,
+              label: t(props.t, 'preview.title'),
+              disabled: !previewSwitchReady,
+              onChange: (next: boolean) => {
+                if (can('setPreview')) props.setDeepPilotPreview!(next)
+              },
+            }),
+          ),
         ),
       ),
     ),

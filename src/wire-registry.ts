@@ -24,6 +24,7 @@ import type { DeviceStore } from './token.ts'
 import type { DeviceScope } from './device-auth.ts'
 import type { CapabilityGate } from './host-capabilities.ts'
 import type { WireErrorCode } from './wire-errors.ts'
+import type { PreviewTunnel } from './preview-tunnel.ts'
 
 /** 出站帧字面量：与入站共用一份词汇，record() 随后只接受这个子集。 */
 export type S2CType =
@@ -76,6 +77,11 @@ export type S2CType =
   | 's2c.welcome'
   | 's2c.workspace.created'
   | 's2c.workspaces.snapshot'
+  | 's2c.preview.authorized'
+  | 's2c.preview.opened'
+  | 's2c.preview.data'
+  | 's2c.preview.credit'
+  | 's2c.preview.closed'
 
 /**
  * 入站帧字面量 = 本 Bridge 实现的全部客户端帧。
@@ -138,6 +144,10 @@ export type C2SType =
   | 'c2s.liveActivity.unregister'
   | 'c2s.push.register'
   | 'c2s.widget.push.register'
+  | 'c2s.preview.authorize'
+  | 'c2s.preview.open'
+  | 'c2s.preview.credit'
+  | 'c2s.preview.close'
 
 /** 帧在连接生命周期里允许出现的阶段。 */
 export type FrameStage = 'pre-auth' | 'authenticated'
@@ -154,6 +164,13 @@ export type FrameStage = 'pre-auth' | 'authenticated'
 export type WidgetPolicy = 'allowed' | 'deny' | 'handler'
 
 export const DEFAULT_WIDGET_POLICY: WidgetPolicy = 'deny'
+
+/**
+ * 预览连接（clientRole: "preview"，能力 `localPreview`）的帧策略：只有显式标为
+ * `allowed` 的行（c2s.ping 与 c2s.preview.*）可以在预览连接上出现，其余一律
+ * E_FORBIDDEN。缺省 `deny`，新增的行不会意外对预览连接开放。
+ */
+export type PreviewPolicy = 'allowed' | 'deny'
 
 /** 拒绝：wire 错误码 + 可读信息。undefined 表示通过。 */
 export interface WireRejection {
@@ -186,6 +203,8 @@ export interface FrameContext extends BridgeSink {
   readonly frame: Envelope
   readonly deviceId: string | undefined
   readonly widgetClient: boolean
+  /** 预览连接的转发器；只有 clientRole: "preview" 的连接才有，其余连接为 undefined。 */
+  readonly preview?: PreviewTunnel
   readonly bridge: HostBridge
   readonly devices: DeviceStore
   readonly debug: boolean
@@ -222,6 +241,8 @@ export interface WireFrameRow {
   /** 全部满足才放行；空数组表示控制帧，不要求业务 scope。 */
   readonly scopes: readonly DeviceScope[]
   readonly widgetPolicy?: WidgetPolicy
+  /** 预览连接上是否允许；缺省 deny（见 PreviewPolicy）。 */
+  readonly previewPolicy?: PreviewPolicy
   readonly capability?: CapabilityGate
   /** 只约束某种载荷，门留在 handler（例如同一导出帧的可选 Markdown 格式）。 */
   readonly conditionalCapabilities?: readonly CapabilityGate[]
@@ -256,6 +277,10 @@ export function capabilityRejection(
 
 export function widgetPolicyOf(row: WireFrameRow): WidgetPolicy {
   return row.widgetPolicy ?? DEFAULT_WIDGET_POLICY
+}
+
+export function previewPolicyOf(row: WireFrameRow): PreviewPolicy {
+  return row.previewPolicy ?? 'deny'
 }
 
 /** 校验一帧载荷；未登记 validate 的行原样通过。 */
@@ -325,6 +350,7 @@ import { scheduleRows } from './wire-schedule.ts'
 import { sessionRows } from './wire-session.ts'
 import { commandRows } from './wire-command.ts'
 import { pluginUpdateRows } from './wire-plugin-update.ts'
+import { previewRows } from './wire-preview.ts'
 
 /** 全部入站行。装配是静态的：新增特性 module 必须在这里显式出现。 */
 export const WIRE_FRAME_ROWS: readonly WireFrameRow[] = [
@@ -335,6 +361,7 @@ export const WIRE_FRAME_ROWS: readonly WireFrameRow[] = [
   ...interactionRows,
   ...pushRows,
   ...deviceRows,
+  ...previewRows,
 ]
 
 const ROWS_BY_TYPE = new Map<C2SType, WireFrameRow>(WIRE_FRAME_ROWS.map((row) => [row.type, row]))

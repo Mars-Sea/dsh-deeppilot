@@ -55,6 +55,8 @@ export const sessionRows: readonly WireFrameRow[] = [
     stage: 'pre-auth',
     scopes: [],
     widgetPolicy: 'allowed',
+    // 预览连接同样靠心跳保活（PROTOCOL.md §8）。
+    previewPolicy: 'allowed',
     doc: 'PROTOCOL.md 连接与鉴权',
     handle: (ctx) => {
       ctx.send('s2c.pong', { serverTime: Date.now() })

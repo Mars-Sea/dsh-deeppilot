@@ -69,6 +69,8 @@ const TABLES: LocaleTables = {
     // 紧凑设置页：默认仅展示连接、设备与两个工具折叠行。
     'local.options': '局域网连接选项',
     'remote.options': '远程连接选项',
+    'preview.title': '本机网页预览',
+    'preview.description': '手机可在 App 内打开会话里出现过的本机网页',
     'local.errorDetails': '局域网连接异常，请检查连接选项（{message}）。',
     'remote.errorDetails': '远程连接异常，请检查授权与连接选项（{message}）。',
     'pair.add': '添加手机',
@@ -368,6 +370,8 @@ const TABLES: LocaleTables = {
     'diag.missingSetRemote': 'setDeepPilotRemoteEnabled 回调缺失',
     'diag.missingSetRemoteLimit': 'setDeepPilotRemoteConnectionLimit 回调缺失',
     'diag.missingSetDebug': 'setDeepPilotDebug 回调缺失',
+    'diag.missingPreviewHook': 'useDeepPilotPreview hook 缺失',
+    'diag.missingSetPreview': 'setDeepPilotPreview 回调缺失',
     'diag.renderError': '渲染异常: ',
     'diag.prefix': 'diag: ',
 
@@ -389,6 +393,8 @@ const TABLES: LocaleTables = {
     // Compact settings surface.
     'local.options': 'LAN connection options',
     'remote.options': 'Remote connection options',
+    'preview.title': 'Local web preview',
+    'preview.description': 'Phones can open local pages linked in the conversation',
     'local.errorDetails': 'LAN connection failed. Check the connection options ({message}).',
     'remote.errorDetails': 'Remote connection failed. Check authorization and connection options ({message}).',
     'pair.add': 'Add phone',
@@ -686,6 +692,8 @@ const TABLES: LocaleTables = {
     'diag.missingSetRemote': 'setDeepPilotRemoteEnabled callback missing',
     'diag.missingSetRemoteLimit': 'setDeepPilotRemoteConnectionLimit callback missing',
     'diag.missingSetDebug': 'setDeepPilotDebug callback missing',
+    'diag.missingPreviewHook': 'useDeepPilotPreview hook missing',
+    'diag.missingSetPreview': 'setDeepPilotPreview callback missing',
     'diag.renderError': 'Render error: ',
     'diag.prefix': 'diag: ',
 

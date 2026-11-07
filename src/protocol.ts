@@ -31,8 +31,12 @@ export interface AuthChallengePayload {
 }
 
 export interface AuthProofPayload extends AuthChallengePayload {
-  /** Optional short-lived read-only client, excluded from alert suppression. */
-  clientRole?: 'widget'
+  /**
+   * Optional connection role. `widget`: short-lived read-only client, excluded
+   * from alert suppression. `preview`: local-preview tunnel connection (能力
+   * `localPreview`), allowed only c2s.ping and c2s.preview.*. 不进签名原文。
+   */
+  clientRole?: 'widget' | 'preview'
   deviceId: string
   deviceName: string
   appVersion: string
@@ -470,6 +474,12 @@ export interface WelcomeCapabilities {
    * prefer the LAN on the same network and fall back to Funnel elsewhere.
    * Plugin-level. */
   routeHints?: boolean
+  /** Bridge accepts a `clientRole: "preview"` connection and the c2s.preview.*
+   * frames that tunnel the phone's loopback TCP connections to the computer's
+   * loopback address (PROTOCOL.md「本机预览扩展」). Plugin-level; stays true
+   * when the settings switch is off (requests then fail with reason
+   * "disabled"). */
+  localPreview?: boolean
 }
 
 export interface WelcomePayload {
@@ -890,3 +900,30 @@ export type SessionReferencesPayload = import('./reference-api.ts').ReferenceCan
 
 /** 模型选择变化只投影公开路由字段；缺少 current 时重新读取当前会话。 */
 export interface ModelsChangedPayload { sessionId: string; current?: { provider: string; model: string; reasoningEffort?: string } }
+
+// ---------- 本机预览扩展（能力 localPreview，PROTOCOL.md「本机预览扩展」） ----------
+
+/** 本节 s2c.error 额外携带的 `reason`；客户端据此选本地化文案。 */
+export type PreviewErrorReason =
+  | 'bad-url'
+  | 'disabled'
+  | 'reserved-port'
+  | 'not-mentioned'
+  | 'not-authorized'
+  | 'session-not-found'
+  | 'connect-refused'
+  | 'too-many-streams'
+  | 'duplicate-stream'
+
+/** s2c.preview.closed 的原因。 */
+export type PreviewCloseReason = 'eof' | 'error' | 'flow-control' | 'disabled'
+
+export interface PreviewAuthorizePayload { sessionId: string; url: string }
+export interface PreviewAuthorizedPayload { port: number; origin: string }
+export interface PreviewOpenPayload { streamId: number; port: number }
+export interface PreviewOpenedPayload { streamId: number }
+/** 数据帧（格式 1 二进制帧）的头部 payload；`z` 只出现在下行。 */
+export interface PreviewDataHeader { streamId: number; z?: true }
+export interface PreviewCreditPayload { streamId: number; bytes: number }
+export interface PreviewClosePayload { streamId: number }
+export interface PreviewClosedPayload { streamId: number; reason: PreviewCloseReason }

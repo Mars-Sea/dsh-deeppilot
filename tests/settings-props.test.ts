@@ -27,6 +27,7 @@ function fullProps(overrides: Record<string, unknown> = {}): Record<string, unkn
     useDeepPilotRemoteEnabled: () => ({ status: 'ready', enabled: false }),
     useDeepPilotRemoteConnectionLimit: () => ({ status: 'ready', value: 8 }),
     useDeepPilotDebug: () => ({ status: 'ready', enabled: false }),
+    useDeepPilotPreview: () => ({ status: 'ready', enabled: true }),
     refresh: () => {},
     beginPairing: async () => ({ code: 'c', expiresAt: 0, audience: 'a' }),
     revokeDevice: async () => true,
@@ -38,19 +39,20 @@ function fullProps(overrides: Record<string, unknown> = {}): Record<string, unkn
     setDeepPilotRemoteEnabled: () => {},
     setDeepPilotRemoteConnectionLimit: async () => {},
     setDeepPilotDebug: () => {},
+    setDeepPilotPreview: () => {},
     t,
     ...overrides,
   }
 }
 
-test('宿主给全时没有诊断，十一个能力全部在位', () => {
+test('宿主给全时没有诊断，十二个能力全部在位', () => {
   const surface = normalizeSettingsPageProps(fullProps())
   assert.deepEqual(surface.diagnostics, [])
   assert.equal(surface.reportHookMissing, false)
   assert.deepEqual([...surface.can].sort(), [
     'beginPairing', 'refresh', 'revokeDevice', 'setDebug', 'setDeviceName',
     'setEnabled', 'setLocalPort', 'setRemoteEnabled',
-    'setRemoteLimit', 'testPush', 'testRelay',
+    'setPreview', 'setRemoteLimit', 'testPush', 'testRelay',
   ].sort())
 })
 
@@ -74,6 +76,8 @@ test('一个 prop 都不给时，诊断逐条对上且顺序与迁移前一致',
     'diag.missingSetRemoteLimit',
     'diag.missingDebugHook',
     'diag.missingSetDebug',
+    'diag.missingPreviewHook',
+    'diag.missingSetPreview',
   ])
   assert.equal(surface.reportHookMissing, true, '报告 hook 缺失时统计/配对/系统区块整段跳过')
   assert.equal(surface.can.size, 0)
@@ -120,7 +124,7 @@ test('可选函数在位时才进 props 与 can', () => {
 test('props 不是对象时不会炸', () => {
   for (const raw of [undefined, null, 42, 'nope']) {
     const surface = normalizeSettingsPageProps(raw)
-    assert.equal(surface.diagnostics.length, 17)
+    assert.equal(surface.diagnostics.length, 19)
     assert.equal(typeof surface.props.useDeepPilotReport, 'function')
   }
 })
@@ -131,9 +135,9 @@ test('t 缺失时退化为回显 key，页面仍能渲染', () => {
 })
 
 test('SettingsPageProps 的 hook 数量与注入面一致', () => {
-  // 注入面给 6 个 hook；这里防止将来加了 hook 却忘了进归一化。
+  // 注入面给 7 个 hook；这里防止将来加了 hook 却忘了进归一化。
   const hooks = Object.keys(fullProps()).filter((key) => key.startsWith('useDeepPilot'))
-  assert.equal(hooks.length, 6)
+  assert.equal(hooks.length, 7)
   const surface = normalizeSettingsPageProps(fullProps())
   for (const hook of hooks) {
     assert.equal(typeof (surface.props as unknown as Record<string, unknown>)[hook], 'function', hook)
