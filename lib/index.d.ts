@@ -1335,6 +1335,10 @@ export declare class HostBridge {
   private readonly summaryPushed;
   private readonly summaryStatsTimers;
   private activeTools;
+  /** 会话在 llm/retry 退避等待期间的重试描述；新一轮、重试启动或新消息/工具到达时清除。 */
+  private retryActivities;
+  /** 最近一轮以非 completed 异常结束的会话；保持 status='error' 直到下一轮开始，防止随后的 running=false 覆盖回 idle。 */
+  private failedSessionIds;
   private approvals;
   private questions;
   private archivedSessionIds;

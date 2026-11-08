@@ -44,11 +44,14 @@ import {
   MAX_HISTORY_PAGE_MESSAGES,
   MIN_TAIL_MESSAGES,
   canonicalSessionMessages,
+  formatLlmFailure,
   limitMessageProjection,
   limitSessionPageMessages,
   messageText,
   projectEvent,
   projectHistory,
+  retryActivityText,
+  turnEndFailureText,
   userMessageSourceKind,
 } from './host-event-projection.ts'
 import { QuietCompletionTracker } from './quiet-completion.ts'
@@ -66,10 +69,13 @@ export {
   MAX_MESSAGE_PROJECTION_BYTES,
   MAX_SESSION_PAGE_MESSAGES_BYTES,
   canonicalSessionMessages,
+  formatLlmFailure,
   limitMessageProjection,
   limitSessionPageMessages,
   projectEvent,
   projectHistory,
+  retryActivityText,
+  turnEndFailureText,
 } from './host-event-projection.ts'
 
 interface PendingApproval {
@@ -132,6 +138,10 @@ export class HostBridge {
   private readonly summaryPushed = new Map<string, { full: string; withoutStats: string; at: number }>()
   private readonly summaryStatsTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private activeTools = new Map<string, Map<string, string>>()
+  /** 会话在 llm/retry 退避等待期间的重试描述；新一轮、重试启动或新消息/工具到达时清除。 */
+  private retryActivities = new Map<string, string>()
+  /** 最近一轮以非 completed 异常结束的会话；保持 status='error' 直到下一轮开始，防止随后的 running=false 覆盖回 idle。 */
+  private failedSessionIds = new Set<string>()
   private approvals = new Map<string, PendingApproval>()
   private questions = new Map<string, PendingQuestion>()
   private archivedSessionIds = new Set<string>()
@@ -339,16 +349,20 @@ export class HostBridge {
   }
 
   /** F-9: when a turn completes, notify every device not viewing the session. */
-  private emitTurnCompletedNotify(sessionId: string, ok: boolean): void {
+  private emitTurnCompletedNotify(sessionId: string, ok: boolean, errorText?: string): void {
     if (this.subagentSessionIds.has(sessionId)) return;
 
     const row = this.summaries.get(sessionId);
     const title = ok ? '任务完成' : '任务异常结束';
+    // 异常结束时优先携带本轮错误原因，避免拿上一轮旧回复或空串充数。
+    const body = (!ok && errorText)
+      ? errorText
+      : (this.lastAssistantText.get(sessionId) ?? '');
     this.emitNotify({
       sessionId,
       category: ok ? 'turn.completed' : 'session.error',
       title,
-      body: this.lastAssistantText.get(sessionId) ?? '',
+      body,
       fallbackBody: row?.title ?? '',
       notificationId: 'n-' + (this.cursor + 1),
     });
@@ -547,9 +561,11 @@ export class HostBridge {
         break
       case 'host/session-status': {
         const p = frame as { sessionId?: string; running?: boolean };
-        const row = this.summaries.get(String(p.sessionId));
+        const id = String(p.sessionId);
+        if (p?.running === true) this.failedSessionIds.delete(id);
+        const row = this.summaries.get(id);
         if (row && typeof p?.running === 'boolean') {
-          row.status = p.running ? 'running' : 'idle';
+          row.status = p.running ? 'running' : (this.failedSessionIds.has(id) ? 'error' : 'idle');
           this.pushSummary(row);
         }
         break;
@@ -594,13 +610,31 @@ export class HostBridge {
         if (event.type === 'agent-preset/selected') {
           this.record('s2c.skills.changed', { sessionId });
         }
+        if (event.type === 'turn/start') {
+          // 新一轮开始时清除上一轮残留的回复文本与异常标记，防止本轮未生成新回复就报错时误引旧文本。
+          this.lastAssistantText.delete(sessionId);
+          this.failedSessionIds.delete(sessionId);
+          const row = this.summaries.get(sessionId);
+          if (row && row.status === 'error') row.status = 'running';
+        }
+        const projection = projectEvent(sessionId, event);
+        if (projection?.kind === 'turn.end') {
+          const ok = projection.data.ok === true;
+          const row = this.summaries.get(sessionId);
+          if (ok) {
+            this.failedSessionIds.delete(sessionId);
+            if (row && row.status === 'error') row.status = 'idle';
+          } else {
+            this.failedSessionIds.add(sessionId);
+            if (row) row.status = 'error';
+          }
+        }
         this.noteActivity(sessionId, event);
         if (event.type === 'user/message') {
           this.quietCompletion.noteUserMessage(sessionId, userMessageSourceKind(event.data), event.seq);
         }
         this.captureAssistantText(sessionId, event);
         this.imageRefs.remember(sessionId, [event]);
-        const projection = projectEvent(sessionId, event);
         this.captureActivity(sessionId, event, projection?.data.tool as { name?: string; summary?: string } | undefined);
         if (projection) {
           this.record('s2c.session.event', { sessionId, kind: projection.kind, seq: event.seq,
@@ -608,12 +642,13 @@ export class HostBridge {
         }
         if (projection?.kind === 'turn.end') {
           const ok = projection.data.ok === true;
+          const errorText = typeof projection.data.text === 'string' ? projection.data.text : undefined;
           // 计划任务轮次中 Agent 请求了静默：turn.end 本身照常记录，只跳过完成通知。
           const turn = (event.data as { turn?: unknown } | undefined)?.turn;
           if (this.quietCompletion.consumeTurnEnd(sessionId, ok, typeof turn === 'number' ? turn : undefined, event.seq)) {
             this.log?.(`completion notice skipped by scheduled run session=${sessionId}`);
           } else {
-            this.emitTurnCompletedNotify(sessionId, ok);
+            this.emitTurnCompletedNotify(sessionId, ok, errorText);
           }
         }
         break;
@@ -753,7 +788,11 @@ export class HostBridge {
       for (const row of response.result.value.items ?? []) {
         if (isSubagentRow(row)) this.subagentSessionIds.add(row.sessionId);
         if (this.subagentSessionIds.has(row.sessionId)) continue
+        if (row.running) this.failedSessionIds.delete(row.sessionId);
         const summary = toSummary(row, this.approvals, this.questions, workspaceBySession.get(row.sessionId));
+        if (!row.running && this.failedSessionIds.has(row.sessionId)) {
+          summary.status = 'error';
+        }
         if (this.archivedSessionIds.has(row.sessionId)) {
           nextArchived.set(row.sessionId, { ...summary, archived: true });
           continue
@@ -765,6 +804,11 @@ export class HostBridge {
         if (!row || (row.status !== 'running' && !row.pendingApproval && !row.pendingQuestion)) this.activeTools.delete(id);
         else row.activity = [...calls.values()].at(-1) ?? null;
       }
+      for (const [id, retryText] of this.retryActivities) {
+        const row = next.get(id);
+        if (!row || (row.status !== 'running' && !row.pendingApproval && !row.pendingQuestion)) this.retryActivities.delete(id);
+        else row.activity = retryText;
+      }
       // Worker identity is immutable for this bridge lifetime. A stale list or
       // a removed worker must not erase identity learned from the event stream.
       this.summaries = next;
@@ -774,6 +818,10 @@ export class HostBridge {
       // captured for child/subagent event streams that never enter summaries.
       for (const id of this.lastAssistantText.keys()) {
         if (!next.has(id)) this.lastAssistantText.delete(id)
+      }
+      for (const id of removedIds) {
+        this.failedSessionIds.delete(id)
+        this.retryActivities.delete(id)
       }
       // 全量列表推送同样记账，之后的单行推送才能按它去重、节流。
       for (const id of removedIds) this.forgetSummaryPush(id)
@@ -798,7 +846,19 @@ export class HostBridge {
     const row = this.summaries.get(sessionId);
     if (!row) return;
     const data = event.data as { callId?: string } | undefined;
-    if (event.type === 'tool/call' && data?.callId) {
+    if (event.type === 'llm/retry') {
+      const retryText = retryActivityText(event.data);
+      if (!retryText) return;
+      this.retryActivities.set(sessionId, retryText);
+    } else if (
+      event.type === 'llm/retry-started' ||
+      event.type === 'assistant/chunk' ||
+      event.type === 'assistant/message' ||
+      event.type === 'step/end'
+    ) {
+      if (!this.retryActivities.delete(sessionId)) return;
+    } else if (event.type === 'tool/call' && data?.callId) {
+      this.retryActivities.delete(sessionId);
       const calls = this.activeTools.get(sessionId) ?? new Map<string, string>();
       const detail = [tool?.name, tool?.summary].filter(Boolean).join(': ');
       calls.set(data.callId, Array.from(detail).slice(0, 160).join(''));
@@ -807,9 +867,12 @@ export class HostBridge {
     } else if (event.type === 'tool/result' && data?.callId) {
       this.activeTools.get(sessionId)?.delete(data.callId);
     } else if (event.type === 'turn/start' || event.type === 'turn/end') {
+      this.retryActivities.delete(sessionId);
       this.activeTools.delete(sessionId);
     } else return;
-    const activity = [...(this.activeTools.get(sessionId)?.values() ?? [])].at(-1) ?? null;
+    const activity = this.retryActivities.get(sessionId)
+      ?? [...(this.activeTools.get(sessionId)?.values() ?? [])].at(-1)
+      ?? null;
     if (row.activity === activity) return;
     row.activity = activity;
     // Tool progress must not reorder the session list or trigger Widget pushes.

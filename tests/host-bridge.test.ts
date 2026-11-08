@@ -1998,3 +1998,89 @@ test('realtime tool results retain the same bounded image metadata as history', 
   const failed = projectEvent('s', { ...result, data: { ...result.data, error: 'failed' } })
   assert.equal(failed?.data.attachments, undefined)
 })
+
+test('model error turn/end quotes failure reason in notification, sets error status across host idle status, and surfaces llm/retry activity', async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
+    { sessionId: 'session-relay-err', updatedAt: 100, running: true, blank: false, projections: { values: { title: 'Relay Task' } } },
+  ] } } })
+  const bridge = new HostBridge(proxy, 100)
+  const collected: Array<{ type: string; payload: any }> = []
+  const pushed: Array<{ category: string; body: string }> = []
+  bridge.addSink(makeSink(collected))
+  bridge.setPushOutlet({ fanOut: value => pushed.push(value), isAvailable: () => true })
+  bridge.start()
+  try {
+    await bridge.refreshSummaries()
+
+    // 第一轮成功结束，留下上一轮的 assistant 回复
+    getPush()({
+      type: 'session/event', rpcId: 'r-t1-a', sessionId: 'session-relay-err',
+      event: { type: 'assistant/message', seq: 1, data: { message: { role: 'assistant', content: [{ type: 'text', text: '第一轮旧回复' }] } } },
+    })
+    getPush()({
+      type: 'session/event', rpcId: 'r-t1-e', sessionId: 'session-relay-err',
+      event: { type: 'turn/end', seq: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+    })
+
+    // 第二轮开始，中途遇到中转站报错重试，最后重试耗尽报错结束（本轮没有新的 assistant/message）
+    getPush()({
+      type: 'session/event', rpcId: 'r-t2-s', sessionId: 'session-relay-err',
+      event: { type: 'turn/start', seq: 3, data: { turn: 2 } },
+    })
+    getPush()({
+      type: 'session/event', rpcId: 'r-t2-retry', sessionId: 'session-relay-err',
+      event: {
+        type: 'llm/retry',
+        seq: 4,
+        data: {
+          retry: 1,
+          maxRetries: 5,
+          mode: 'normal',
+          delayMs: 1000,
+          failure: { code: 'SERVER', message: '502 Bad Gateway' },
+        },
+      },
+    })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(
+      bridge.listSessions()[0]!.activity,
+      '正在重试模型请求（1/5）：上游模型服务异常：502 Bad Gateway（SERVER）',
+    )
+
+    getPush()({
+      type: 'session/event', rpcId: 'r-t2-end', sessionId: 'session-relay-err',
+      event: {
+        type: 'turn/end',
+        seq: 5,
+        data: {
+          turn: 2,
+          reason: { kind: 'error', error: { code: 'SERVER', message: '502 Bad Gateway' } },
+        },
+      },
+    })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    // 宿主在 turn/end 之后紧接着推送 running=false，不得把 error 状态覆盖回 idle
+    ;(bridge as any).onHostFrame({ type: 'host/session-status', sessionId: 'session-relay-err', running: false })
+
+    const summary = bridge.listSessions()[0]!
+    assert.equal(summary.status, 'error', 'failed turn must keep status=error after host running=false arrives')
+    assert.equal(summary.activity, null, 'turn/end clears retry activity')
+
+    const errorNotify = collected.filter(f => f.type === 's2c.notify').at(-1)!
+    assert.equal(errorNotify.payload.category, 'session.error')
+    assert.equal(errorNotify.payload.body, '上游模型服务异常：502 Bad Gateway（SERVER）')
+    assert.equal(pushed.at(-1)?.category, 'session.error')
+    assert.equal(pushed.at(-1)?.body, '上游模型服务异常：502 Bad Gateway（SERVER）')
+
+    // 下一轮开始时恢复 running
+    getPush()({
+      type: 'session/event', rpcId: 'r-t3-s', sessionId: 'session-relay-err',
+      event: { type: 'turn/start', seq: 6, data: { turn: 3 } },
+    })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(bridge.listSessions()[0]!.status, 'running')
+  } finally {
+    bridge.dispose()
+  }
+})

@@ -39,7 +39,15 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
       return { kind: 'turn.start', data: {} };
     case 'turn/end': {
       const data = event.data as { reason?: { kind?: string } } | undefined;
-      return { kind: 'turn.end', data: { ok: data?.reason?.kind === 'completed' } };
+      const ok = data?.reason?.kind === 'completed';
+      const errorText = ok ? undefined : turnEndFailureText(event.data);
+      return {
+        kind: 'turn.end',
+        data: {
+          ok,
+          ...(errorText ? limitRealtimeText({ text: errorText, ts: tsOf(event) }) : {}),
+        },
+      };
     }
     case 'system/message': {
       // DSH 0.1.5 (session format V3) records the system prompt in message
@@ -126,6 +134,118 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
 
 function tsOf(event: SessionEventLike): number {
   return typeof event.time === 'number' ? event.time : Date.now();
+}
+
+// ---------- 模型错误与重试状态归一化 ----------
+//
+// 职责：将 DSH 宿主的 LlmFailure（来自 turn/end reason.error 或 llm/retry failure）
+// 与非正常 turn/end 原因转成面向用户的中文说明，保留原始错误码在括号内便于排查。
+// 数据来源：@deepseek-ai/dsh-agent-loop（turn/end）与 @deepseek-ai/dsh-llm-retry（llm/retry）。
+
+const LLM_ERROR_CODE_LABELS: Readonly<Record<string, string>> = {
+  AUTH: 'API 密钥无效或鉴权失败',
+  INVALID_CREDENTIAL: 'API 密钥格式无效',
+  MISSING_CREDENTIAL: '未配置 API 密钥',
+  QUOTA: '当前请求的额度已用尽',
+  ACCOUNT_QUOTA: '当前请求的额度已用尽',
+  RATE_LIMIT: '请求频率超限或并发受限',
+  SERVER: '上游模型服务异常',
+  TIMEOUT: '模型请求超时',
+  TRANSPORT: '模型网络连接中断',
+  CONTEXT_WINDOW_EXCEEDED: '请求内容超出模型上下文窗口上限',
+  EMPTY_RESPONSE: '模型返回了空响应',
+  MALFORMED_RESPONSE: '模型响应格式异常',
+  STREAM_CLOSED: '模型输出流意外中断',
+  NO_ADAPTER: '未找到匹配的模型提供方适配器',
+  UNKNOWN_MODEL: '未配置该模型',
+  INVALID_CONFIG: '模型或提供方配置无效',
+  PI_AI_ERROR: '模型请求失败',
+  TOOL_ACTIVATION_FAILED: '工具激活失败',
+  UNKNOWN: '模型请求异常',
+}
+
+/** 将宿主 LlmFailure 对象格式化为中文报错文案，原错误码置于末尾括号内。 */
+export function formatLlmFailure(failure: unknown): string | undefined {
+  if (!failure || typeof failure !== 'object') return undefined
+  const record = failure as { code?: unknown; message?: unknown }
+  const code = typeof record.code === 'string' && record.code.trim().length > 0
+    ? record.code.trim()
+    : undefined
+  const message = typeof record.message === 'string'
+    ? record.message.replace(/\s+/g, ' ').trim()
+    : ''
+  if (!code && !message) return undefined
+  const label = code ? (LLM_ERROR_CODE_LABELS[code] ?? '模型请求失败') : '模型请求失败'
+  const codeSuffix = code && !message.endsWith(`（${code}）`) && !message.endsWith(`(${code})`)
+    ? `（${code}）`
+    : ''
+  if (!message) return `${label}${codeSuffix}`
+  if (/^[\u4e00-\u9fff]/.test(message) || message.includes(label)) {
+    return `${message}${codeSuffix}`
+  }
+  return `${label}：${message}${codeSuffix}`
+}
+
+/**
+ * 从 turn/end 事件载荷提取异常结束原因（用于时间线 `role: "error"` 消息行、
+ * `s2c.session.event(turn.end)` 的 `data.text` 以及 `session.error` 通知正文）。
+ *
+ * - `completed` 或缺失 `reason` 时返回 undefined；
+ * - 用户主动取消（`aborted.reason.kind === 'user'`）不在聊天时间线插入错误卡片，
+ *   返回 undefined（通知侧仍按 `ok: false` 发送 `session.error`）。
+ */
+export function turnEndFailureText(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object') return undefined
+  const reason = (data as { reason?: unknown }).reason
+  if (!reason || typeof reason !== 'object') return undefined
+  const r = reason as { kind?: unknown; error?: unknown; reason?: unknown }
+  if (typeof r.kind !== 'string' || r.kind === 'completed') return undefined
+  switch (r.kind) {
+    case 'error':
+      return formatLlmFailure(r.error) ?? '本轮运行失败（ERROR）'
+    case 'interrupted':
+      return 'DSH 进程在本轮完成前退出，本轮已中止（INTERRUPTED）'
+    case 'max-tokens':
+      return '已达到输出 Token 上限，回答被截断（MAX_TOKENS）'
+    case 'blocked':
+      return '本轮运行受阻（BLOCKED）'
+    case 'aborted': {
+      const cause = r.reason as { kind?: unknown; reason?: unknown } | undefined
+      if (cause?.kind === 'hook') {
+        if (cause.reason === 'deepseek-account/signed-out') {
+          return '任务已因退出登录而停止（ACCOUNT_SIGNED_OUT）'
+        }
+        const hookReason = typeof cause.reason === 'string' ? cause.reason.trim() : ''
+        return hookReason
+          ? `任务已被钩子中止：${hookReason}（ABORTED）`
+          : '任务已被钩子中止（ABORTED）'
+      }
+      return undefined
+    }
+    default:
+      return `本轮异常结束（${r.kind.toUpperCase()}）`
+  }
+}
+
+/**
+ * 从 `llm/retry` 事件载荷提取单行重试活动描述（上限 160 个 Unicode 码点，供
+ * `SessionSummary.activity` 在会话列表、详情页与锁屏实时活动中展示）。
+ */
+export function retryActivityText(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object') return undefined
+  const record = data as { retry?: unknown; maxRetries?: unknown; mode?: unknown; failure?: unknown }
+  const retry = typeof record.retry === 'number' && Number.isFinite(record.retry) && record.retry > 0
+    ? Math.trunc(record.retry)
+    : undefined
+  const maxRetries = typeof record.maxRetries === 'number' && Number.isFinite(record.maxRetries) && record.maxRetries > 0
+    ? Math.trunc(record.maxRetries)
+    : undefined
+  const progress = retry !== undefined
+    ? (record.mode === 'normal' && maxRetries !== undefined ? `（${retry}/${maxRetries}）` : `（第 ${retry} 次）`)
+    : ''
+  const failure = formatLlmFailure(record.failure)
+  const text = `正在重试模型请求${progress}${failure ? '：' + failure : ''}`
+  return Array.from(text).slice(0, 160).join('')
 }
 
 // ---------- user-role source classification ----------
@@ -722,6 +842,16 @@ export function projectHistory(
             ...attachments,
           });
         }
+        break;
+      }
+      case 'turn/end': {
+        const errorText = turnEndFailureText(event.data);
+        if (!errorText) break;
+        messages.push({
+          ...base,
+          role: 'error',
+          text: errorText,
+        });
         break;
       }
       default:

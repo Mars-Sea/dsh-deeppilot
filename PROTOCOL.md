@@ -315,7 +315,7 @@ APNs 必须同时具备 notifications.register 和对应通知类别的内容权
 
 SessionSummary：
 
-可选字段 `activity` 为当前工具操作的简短描述（最多 160 个 Unicode code points）。按工具 callId 跟踪，工具结束或新一轮开始时清除，不携带思考原文；此字段为协议 v2 向后兼容扩展，旧客户端忽略，新客户端在缺失时回退任务清单或状态提示。
+可选字段 `activity` 为当前工具操作或模型请求重试状态的简短描述（最多 160 个 Unicode code points）。按工具 callId 或 `llm/retry` 状态跟踪，工具/重试结束或新一轮开始时清除，不携带思考原文；此字段为协议 v2 向后兼容扩展，旧客户端忽略，新客户端在缺失时回退任务清单或状态提示。
 
 ```json
 {
@@ -343,8 +343,8 @@ SessionSummary：
 }
 ```
 
-`status` 取值：running | idle | error | unknown；当前 v2 Bridge 的会话镜像稳定产生
-running/idle，error/unknown 为 Host 状态扩展保留；`todos` 无则为 null。
+`status` 取值：running | idle | error | unknown；会话执行中为 `running`，最近一轮以非 `completed`
+异常结束时置为 `error`（保持至下一轮开始），其余空闲态为 `idle`，`unknown` 保留作未知状态容错；`todos` 无则为 null。
 `todoItems` 为完整清单条目（`content` 非空字符串；`status` 取值 pending | in_progress |
 completed），供会话详情页渲染任务进度；无任务时为 null 或缺省。该字段为可选字段，
 客户端必须容忍缺失。
@@ -479,6 +479,8 @@ Message 投影：
 - `context`：仅 system 行可选携带的来源信息。`label` 为生产者名（插件名 / 技能名 / 指令路径等），
   `form` 为语义类别（instructions | catalog | snapshot | notice | relay | recall）。两者皆可缺省，
   出现未知取值时客户端按不透明文本处理，不得丢弃该行。
+- `role: error` 表示回合异常结束提示行（来自模型调用失败、进程中断、输出达上限等非正常 `turn/end`），
+  `text` 为 Bridge 归一化后的中文错误说明（括号内附原始错误码），`seq` 与该 `turn/end` 事件一致。
 - `thinking`：assistant 行可选，携带模型的推理（reasoning）文本；正文与推理均为空的 assistant 行不下发。
 - `streaming: true` 只出现在推送中间态，final/tail/history 中恒为 false。
 - `truncated: true` 表示该条 Message 的 UTF-8 JSON 序列化投影原本超过 256KB，
@@ -570,7 +572,7 @@ tool.end / turn.start / turn.end；其余 kind 为兼容 Host 后续事件投影
 - message.delta/message.final 共用同一会话内 seq；data.text 为增量/全文。极端超大增量同样会被限制在 256KB 内，并在 data 附 `truncated:true`。
 - thinking.delta 的 data.text 为推理增量，seq 与同会话其他事件一致；客户端应把连续增量折叠进同一条"思考"行（role=assistant、thinking 累积、streaming=true），final 到达后由带 `thinking` 字段的正式行替换。
 - tool.start 的 `data.tool` 为 `{name, state:"running", summary}`；Host 事件携带调用 id 时额外附带 `tool.callId`；文件编辑类调用另附 `tool.edit`、规则表内的工具另附 `tool.target`（结构与限制见 Message 投影的对应字段），客户端在结果合并后保留它们。tool.end 的 data 附带 ok 布尔与该结果事件自身的 seq，并在 Host 事件携带调用 id 时附带 `callId`——`seq` 标识的是 result 事件本身，客户端必须用 `callId`（缺失时按"最旧的未完成工具行"兜底）把结果合并回对应的 tool.start 行，不得按 seq 匹配。 `tool.end.data` 可选附带 `summary` 和 `attachments`（与 MessageProjection 相同的有界摘要与持久附件元数据，不含图片字节）；客户端合并到对应工具行，未见起始行时可按结果自身 seq 创建独立结果行。这是 v2 向后兼容扩展，旧客户端忽略新增字段。
-- turn.end 的 data 附带 ok 布尔；projection 的 data 为 key/value（如 todos）。
+- turn.end 的 data 附带 ok 布尔；异常结束时可选附带 `text`（归一化后的中文错误说明）与 `ts`，客户端据此在时间线追加同 `seq` 的 `role=error` 行并用作通知正文；projection 的 data 为 key/value（如 todos）。
 
 ## 4b. 项目选择与新建会话
 

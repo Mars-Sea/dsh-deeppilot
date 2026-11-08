@@ -11,7 +11,10 @@ import assert from 'node:assert/strict'
 import {
   historyWindow,
   normalizePageLimit,
+  projectEvent,
   projectHistory,
+  retryActivityText,
+  turnEndFailureText,
 } from '../src/host-event-projection.ts'
 import { incrementalTail } from '../src/host-bridge.ts'
 
@@ -151,4 +154,55 @@ test('incremental tail falls back to a full tail when completeness cannot be pro
   assert.equal(deltaFor(0), undefined, 'window starts after sinceSeq: events in between may be missing')
   assert.equal(deltaFor(7), undefined, 'client claims a seq the host never produced')
   assert.equal(incrementalTail([], [], new Map(), 3), undefined)
+})
+
+test('turn/end error projects Chinese failure text with original code into both live event and history', () => {
+  const errEvent = {
+    type: 'turn/end',
+    seq: 9,
+    time: 1234,
+    data: {
+      turn: 1,
+      reason: {
+        kind: 'error',
+        error: { code: 'SERVER', message: '502 Bad Gateway' },
+      },
+    },
+  }
+  const live = projectEvent('s1', errEvent)
+  assert.deepEqual(live, {
+    kind: 'turn.end',
+    data: {
+      ok: false,
+      text: '上游模型服务异常：502 Bad Gateway（SERVER）',
+      ts: 1234,
+    },
+  })
+  const history = projectHistory([{ event: errEvent }])
+  assert.deepEqual(history, [{
+    seq: 9,
+    ts: 1234,
+    role: 'error',
+    text: '上游模型服务异常：502 Bad Gateway（SERVER）',
+  }])
+
+  // 用户主动停止不生成聊天时间线错误行
+  const userAborted = {
+    type: 'turn/end',
+    seq: 10,
+    time: 1235,
+    data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } },
+  }
+  assert.equal(turnEndFailureText(userAborted.data), undefined)
+  assert.deepEqual(projectHistory([{ event: userAborted }]), [])
+})
+
+test('retryActivityText formats llm/retry progress and failure reason within 160 code points', () => {
+  const text = retryActivityText({
+    retry: 2,
+    maxRetries: 5,
+    mode: 'normal',
+    failure: { code: 'RATE_LIMIT', message: '429 Too Many Requests' },
+  })
+  assert.equal(text, '正在重试模型请求（2/5）：请求频率超限或并发受限：429 Too Many Requests（RATE_LIMIT）')
 })
