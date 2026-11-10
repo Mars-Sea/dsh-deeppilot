@@ -18,6 +18,7 @@ import { HostBridge, type ApiProxyLike } from '../src/host-bridge.ts'
 import { DeviceStore } from '../src/token.ts'
 import { decodeBinaryFrame, encodeBinaryFrame } from '../src/binary-frame.ts'
 import type { DeviceScope } from '../src/device-auth.ts'
+import type { HostWebEntry } from '../src/host-web.ts'
 import { authenticateTestSocket, createTestIdentity, registerTestIdentity } from './auth-fixture.ts'
 
 /** 只实现 BridgeConnection 用到的 ws 面；二进制下行解成 {header..., body}。 */
@@ -84,7 +85,13 @@ function makeProxy(mentioned: string): ApiProxyLike {
   } as unknown as ApiProxyLike
 }
 
-async function makeConnection(opts: { mentioned?: string; scopes?: DeviceScope[]; enabled?: () => boolean } = {}) {
+async function makeConnection(opts: {
+  mentioned?: string
+  scopes?: DeviceScope[]
+  enabled?: () => boolean
+  /** 电脑端网页相关的预览依赖（开关与登录地址），缺省不提供。 */
+  hostWeb?: { isHostWebEnabled?: () => boolean; hostWeb?: () => HostWebEntry | undefined }
+} = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pbb-preview-'))
   const store = await DeviceStore.load(join(dir, 'devices.json'))
   const identity = createTestIdentity()
@@ -99,7 +106,7 @@ async function makeConnection(opts: { mentioned?: string; scopes?: DeviceScope[]
     serverVersion: 'test',
     audience: 'deeppilot:test-audience',
     log: () => {},
-    preview: { isEnabled: opts.enabled ?? (() => true), reservedPorts: () => [3098] },
+    preview: { isEnabled: opts.enabled ?? (() => true), reservedPorts: () => [3098], ...opts.hostWeb },
     onClosed: () => {
       void store.drain().then(() => rm(dir, { recursive: true, force: true })).catch(() => {}).finally(resolveClosed)
     },
@@ -131,6 +138,8 @@ test('主连接 welcome 声明 localPreview 但不列出 preview.open；预览�
   const welcome = main.ws.sent.find((f) => f.type === 's2c.welcome')
   assert.equal(welcome.payload.capabilities.localPreview, true)
   assert.equal(welcome.payload.scopes.includes('preview.open'), false)
+  assert.equal(welcome.payload.capabilities.hostWeb, true)
+  assert.equal(welcome.payload.scopes.includes('hostweb.open'), false)
   assert.ok(welcome.payload.scopes.includes('sessions.read'))
   main.ws.close()
   await main.closed
@@ -138,6 +147,7 @@ test('主连接 welcome 声明 localPreview 但不列出 preview.open；预览�
   const preview = await makeConnection()
   preview.authenticate('preview')
   assert.ok(preview.last().payload.scopes.includes('preview.open'))
+  assert.ok(preview.last().payload.scopes.includes('hostweb.open'))
   preview.ws.close()
   await preview.closed
 })
@@ -235,6 +245,53 @@ test('设置页关闭本机预览后授权回 disabled', async () => {
   assert.equal(h.last().payload.reason, 'disabled')
   h.ws.close()
   await h.closed
+})
+
+const HOST_WEB_ENTRY: HostWebEntry = {
+  target: { hostname: '127.0.0.1', port: 3080, origin: 'http://127.0.0.1:3080', mention: '127.0.0.1:3080', connectHosts: ['127.0.0.1'] },
+  url: 'http://127.0.0.1:3080/?token=secret',
+}
+
+test('c2s.preview.hostWeb 经预览连接下发登录地址；缺 hostweb.open 的设备回 hostweb-forbidden', async () => {
+  const h = await makeConnection({ hostWeb: { isHostWebEnabled: () => true, hostWeb: () => HOST_WEB_ENTRY } })
+  h.authenticate('preview')
+  h.ws.receive({ v: 2, type: 'c2s.preview.hostWeb', id: 'w', payload: {} })
+  await h.settle()
+  assert.equal(h.last().type, 's2c.preview.hostWeb')
+  assert.equal(h.last().id, 'w')
+  assert.deepEqual(h.last().payload, { port: 3080, origin: 'http://127.0.0.1:3080', url: 'http://127.0.0.1:3080/?token=secret' })
+  h.ws.close()
+  await h.closed
+
+  const narrow = await makeConnection({
+    scopes: ['sessions.read', 'preview.open'],
+    hostWeb: { isHostWebEnabled: () => true, hostWeb: () => HOST_WEB_ENTRY },
+  })
+  narrow.authenticate('preview')
+  narrow.ws.receive({ v: 2, type: 'c2s.preview.hostWeb', id: 'w', payload: {} })
+  await narrow.settle()
+  assert.equal(narrow.last().payload.reason, 'hostweb-forbidden')
+  narrow.ws.close()
+  await narrow.closed
+})
+
+test('电脑端网页开关缺省关闭：hostWeb 回 hostweb-disabled，主连接上的 hostWeb 帧被拒', async () => {
+  const h = await makeConnection({ hostWeb: { hostWeb: () => HOST_WEB_ENTRY } })
+  h.authenticate('preview')
+  h.ws.receive({ v: 2, type: 'c2s.preview.hostWeb', id: 'w', payload: {} })
+  await h.settle()
+  assert.equal(h.last().payload.reason, 'hostweb-disabled')
+  h.ws.close()
+  await h.closed
+
+  const main = await makeConnection({ hostWeb: { isHostWebEnabled: () => true, hostWeb: () => HOST_WEB_ENTRY } })
+  main.authenticate()
+  main.ws.receive({ v: 2, type: 'c2s.preview.hostWeb', id: 'w', payload: {} })
+  await main.settle()
+  assert.equal(main.last().type, 's2c.error')
+  assert.equal(main.ws.sent.some((f) => f.type === 's2c.preview.hostWeb'), false)
+  main.ws.close()
+  await main.closed
 })
 
 test('sessionMentions 向前翻页查找，读取失败返回 null，翻到头返回 false', async () => {

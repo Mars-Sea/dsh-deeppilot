@@ -35,6 +35,8 @@ Host on your own computer and does not replace or modify the DSH Web UI.
 - Local web preview: open a `http://127.0.0.1:<port>` or `localhost:<port>`
   link from the conversation (a design canvas or dev server the agent started)
   inside the app, with its live reload intact.
+- Desktop web UI (off by default): open this computer's DSH Web UI, including
+  third-party plugin pages, inside the app.
 - Quiet scheduled runs (DSH 0.2.2+): write a rule into a scheduled task's
   prompt, such as "if everything is normal, don't notify me". The agent can
   then skip that run's "task completed" notification with the
@@ -134,14 +136,25 @@ is always encrypted: the LAN listener on port `3098` serves TLS with a
 self-signed certificate whose fingerprint the app receives during pairing, and
 Funnel mode uses Tailscale-issued certificates. The app refuses plain `ws://`.
 Both the LAN listener and optional Funnel mode expose only the DeepPilot
-connection, one-time pairing, and health endpoints, not the complete DSH Web UI.
+connection, one-time pairing, and health endpoints, not the complete DSH Web UI
+(the desktop web UI below is reached only through an authenticated preview
+connection).
 
 Local web preview forwards raw bytes over a separate authenticated connection
 to a loopback port on this computer. A port is reachable only after it has
-appeared in that session's messages; the plugin's own ports and the DSH Web
-default port `3080` are always refused, and only `http` loopback links with an
+appeared in that session's messages; the plugin's own ports, the port DSH Web
+listens on, and the default port `3080` are always refused, and only `http` loopback links with an
 explicit port qualify. The settings page's **Local web preview** switch (on by
 default) turns it off for every paired phone; open streams close at once.
+
+**Allow phones to open the desktop web UI** (off by default, needs local web
+preview) lets a paired phone open the DSH Web UI over that same preview
+connection, signed in with the Host's launch token. The phone then has the same
+owner access as this computer's browser, including settings and plugin
+management, and may also open any non-reserved loopback port without the
+session-mention check (for pages the web UI opens in a new window). It needs
+DSH Web on plain HTTP at a loopback address; turning the switch off refuses new
+requests and closes those streams.
 
 The DeepPilot settings page exposes **Connections per public source**. It
 defaults to `8`, accepts `1`–`16`, and briefly restarts the Funnel helper when

@@ -1682,19 +1682,23 @@ Bridge 必须返回 `restart-required` 而不是假装完成。
 |---|---|---|
 | `E_PROTOCOL` | `bad-url` | `url` 不是带显式端口的 `http://127.0.0.1`、`http://localhost` 或 `http://[::1]` |
 | `E_FORBIDDEN` | `disabled` | 电脑端设置页关闭了本机预览 |
-| `E_FORBIDDEN` | `reserved-port` | 端口是插件自身端口（局域网监听、Funnel 源站）或 DSH Web 默认端口 3080 |
+| `E_FORBIDDEN` | `reserved-port` | 端口是插件自身端口（局域网监听、Funnel 源站）、DSH Web 实际监听端口或默认端口 3080 |
 | `E_FORBIDDEN` | `not-mentioned` | 会话最近 2000 条消息里没有出现过 `<主机名>:<端口>` |
 | `E_FORBIDDEN` | `not-authorized` | `open` 的端口未经本连接的 `authorize` |
 | `E_NOT_FOUND` | `session-not-found` | 会话不存在或历史读取失败 |
 | `E_NOT_FOUND` | `connect-refused` | 电脑上该端口没有服务在监听（含 5 秒连接超时） |
 | `E_BUSY` | `too-many-streams` | 本连接已有 32 条通道 |
 | `E_PROTOCOL` | `duplicate-stream` | `streamId` 正在使用 |
+| `E_FORBIDDEN` | `hostweb-disabled` | 电脑端设置页关闭了「允许手机打开电脑端网页」（见「电脑端网页」） |
+| `E_FORBIDDEN` | `hostweb-forbidden` | 设备没有 scope `hostweb.open` |
+| `E_UNSUPPORTED` | `hostweb-unavailable` | DSH Web 不在回环地址的明文 HTTP 上监听，或宿主不提供登录地址 |
 
 ### c2s.preview.authorize → s2c.preview.authorized
 
-请求 `{sessionId, url}`。Bridge 依次检查：设置开关、URL 形状、保留端口、会话消息里是否出现过
+请求 `{sessionId?, url}`。Bridge 依次检查：设置开关、URL 形状、保留端口、会话消息里是否出现过
 `url` 的 `<主机名>:<端口>`（按 URL 原文的主机名比对，`localhost` 与 `127.0.0.1` 不互认）。
-通过后把该端口记为本连接已授权，回 `{port, origin}`，`origin` 为规范化后的
+满足「电脑端网页」的放宽条件时，会话里没出现过的端口也放行；`sessionId` 只在该条件下可以省略，
+否则回 `hostweb-disabled` 或 `hostweb-forbidden`。通过后把该端口记为本连接已授权，回 `{port, origin}`，`origin` 为规范化后的
 `http://<主机名>:<端口>`。重复授权同一端口是幂等的。
 
 ### c2s.preview.open → s2c.preview.opened
@@ -1721,5 +1725,34 @@ Bridge 必须返回 `restart-required` 而不是假装完成。
 
 客户端关闭：`c2s.preview.close {streamId}`，Bridge 立即销毁对应 socket，不回帧。
 Bridge 关闭：`s2c.preview.closed {streamId, reason}`，`reason` 为 `eof`（电脑上的服务关闭了连接）、
-`error`、`flow-control` 或 `disabled`（设置页关闭了本机预览）。不支持 TCP 半关闭：任一端结束
+`error`、`flow-control` 或 `disabled`（设置页关闭了本机预览；经「电脑端网页」授权的通道，
+关闭该开关或失去 `hostweb.open` 也会以此关闭）。不支持 TCP 半关闭：任一端结束
 即整条通道关闭。
+
+## 电脑端网页（v2 可选扩展）
+
+`welcome.capabilities.hostWeb?: boolean` 缺省为不支持；true 表示插件认识本节的帧。手机经预览连接
+在 App 内打开电脑上的 DSH 网页端（含第三方插件页面），拿到与电脑本机浏览器相同的所有者权限。
+能力位只说明插件支持，实际能否使用以请求结果为准：本节的帧都在预览连接上，需要本机预览开关打开、
+设置页开关「允许手机打开电脑端网页」打开（**默认关闭**），且设备具备 scope `hostweb.open`。
+新 scope 只在预览连接的 welcome 里列出，主连接与 widget 连接不列。
+
+为什么可行：DSH 网页端只信任回环 Host，并凭进程启动令牌（`?token=`）换一个按 `主机:端口` 隔离的
+Cookie。手机在自己的回环地址上监听同一个端口，Host / Origin 与电脑本机访问一致；令牌由插件在进程内
+生成，用户不必手动复制。DSH 网页端以 `--host` 或 TLS 监听时不可用（`hostweb-unavailable`）。
+
+### c2s.preview.hostWeb → s2c.preview.hostWeb
+
+请求 payload 为空对象。Bridge 依次检查：本机预览开关（`disabled`）、电脑端网页开关
+（`hostweb-disabled`）、scope（`hostweb-forbidden`）、宿主网页端（`hostweb-unavailable`）。
+通过后把 DSH 网页端端口记为本连接已授权（该端口在保留名单里，只能经这条路径授权），回
+`{port, origin, url}`：`origin` 为 `http://<主机名>:<端口>`，`url` 为带登录令牌的根地址。
+`url` 是凭据：客户端只能在网页视图里打开，不得写日志或诊断；Bridge 日志只记端口。
+客户端遇到 401 时重新请求即可拿到新地址。
+
+### 放宽的端口授权
+
+开关打开且设备具备 `hostweb.open` 时，`c2s.preview.authorize` 不再要求端口在会话里出现过，
+`sessionId` 可以省略；URL 形状与保留端口检查照旧。用途是网页端用新窗口打开的其他本机端口
+（如作品编辑器）。会话里出现过的端口仍按原规则授权，不随本节开关失效；经本节授权的端口在开关关闭
+或失去 scope 后不能再 `open`，已打开的通道在下一批数据时以 `disabled` 关闭。

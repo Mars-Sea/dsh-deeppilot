@@ -116,6 +116,7 @@ export const BRIDGE_INVARIANT_CAPABILITIES = [
   'incrementalTail',
   'routeHints',
   'localPreview',
+  'hostWeb',
 ] as const satisfies ReadonlyArray<keyof WelcomeCapabilities>
 
 /**
@@ -141,6 +142,8 @@ export function capabilityBits(
     routeHints: true,
     // 插件自身能力：预览连接可把手机回环 TCP 连接转发到电脑回环地址（设置页关闭时请求回 disabled）。
     localPreview: true,
+    // 插件自身能力：预览连接可申请电脑端网页登录地址（设置页关闭或宿主不支持时请求回 hostweb-*）。
+    hostWeb: true,
     approvals: true,
     questions: true,
     pendingSnapshot: true,

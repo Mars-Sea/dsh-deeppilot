@@ -36,6 +36,7 @@ import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
 import { localEndpointURLs } from './local-policy.ts'
+import { resolveHostWeb, type HostWebConnectionLike, type HostWebServerLike } from './host-web.ts'
 import { welcomeRoutes } from './welcome-routes.ts'
 import { closeServer, createPhoneServer, listen, type PhoneServerTransportError } from './phone-server.ts'
 import { loadOrCreateLanTlsIdentity, type LanTlsIdentity } from './lan-tls.ts'
@@ -406,6 +407,22 @@ export function apply(ctx: Context, options: unknown): void {
       }, 'deeppilot: optional plugin updater')
     },
   )
+  // 电脑端网页（能力 hostWeb）用到的两个宿主服务：webServer（网页端实际监听地址）与
+  // connection（生成带进程令牌的登录地址）。可选注入，旧宿主或缺服务时为 undefined，
+  // 请求回 reason "hostweb-unavailable"。
+  const hostWebServices: { webServer?: HostWebServerLike; connection?: HostWebConnectionLike } = {}
+  ;(ctx as unknown as { inject: (deps: string[], fn: (sub: unknown) => void) => void }).inject(
+    ['webServer', 'connection'],
+    (sub) => {
+      const services = sub as { webServer?: HostWebServerLike; connection?: HostWebConnectionLike }
+      hostWebServices.webServer = services.webServer
+      hostWebServices.connection = services.connection
+      ;(sub as SubContext).effect(() => () => {
+        if (hostWebServices.webServer === services.webServer) hostWebServices.webServer = undefined
+        if (hostWebServices.connection === services.connection) hostWebServices.connection = undefined
+      }, 'deeppilot: host web services')
+    },
+  )
   let pendingUpgrades = 0
   const authRateLimiter = new AuthRateLimiter()
 
@@ -583,6 +600,9 @@ export function apply(ctx: Context, options: unknown): void {
                 preview: {
                   isEnabled: () => currentConfig().preview?.enabled !== false,
                   reservedPorts: () => previewReservedPorts(),
+                  // 电脑端网页：开关默认关闭，只有显式 true 才放行；登录地址每次现算（令牌随宿主进程变）。
+                  isHostWebEnabled: () => currentConfig().preview?.hostWeb === true,
+                  hostWeb: () => resolveHostWeb(hostWebServices.webServer, hostWebServices.connection),
                 },
                 devices,
                 serverVersion: SERVER_VERSION,
@@ -716,12 +736,14 @@ export function apply(ctx: Context, options: unknown): void {
   })
   let originURL: string | undefined
   /**
-   * 本机预览的保留端口：插件自身的局域网监听端口与 Funnel 源站端口。手机经预览连接
-   * 访问它们等于绕开设备认证面，所以无论会话里是否提到都拒绝（DSH Web 默认端口由
-   * preview-policy 固定拒绝）。
+   * 本机预览的保留端口：插件自身的局域网监听端口、Funnel 源站端口与 DSH 网页端实际端口。
+   * 手机经预览连接访问它们等于绕开设备认证面，所以无论会话里是否提到都拒绝（DSH Web
+   * 默认端口另由 preview-policy 固定拒绝）。网页端端口只能经 c2s.preview.hostWeb 授权。
    */
   const previewReservedPorts = (): number[] => {
     const ports: number[] = []
+    const webPort = hostWebServices.webServer?.port
+    if (typeof webPort === 'number') ports.push(webPort)
     const localPort = currentConfig().local?.port
     if (typeof localPort === 'number') ports.push(localPort)
     if (originURL !== undefined) {

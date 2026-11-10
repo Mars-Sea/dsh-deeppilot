@@ -480,6 +480,13 @@ export interface WelcomeCapabilities {
    * when the settings switch is off (requests then fail with reason
    * "disabled"). */
   localPreview?: boolean
+  /** Bridge accepts c2s.preview.hostWeb on a preview connection: it returns a
+   * one-time login URL for the DSH Web UI on the computer's loopback address,
+   * so the phone can open the whole Web UI (third-party plugin pages
+   * included) through the preview tunnel (PROTOCOL.md「电脑端网页」).
+   * Plugin-level; stays true when the settings switch is off (requests then
+   * fail with reason "hostweb-disabled"). */
+  hostWeb?: boolean
 }
 
 export interface WelcomePayload {
@@ -914,11 +921,20 @@ export type PreviewErrorReason =
   | 'connect-refused'
   | 'too-many-streams'
   | 'duplicate-stream'
+  // 电脑端网页（能力 hostWeb）：设置页开关关闭 / 设备缺 scope `hostweb.open` /
+  // DSH Web 不在回环明文 HTTP 上监听或宿主缺少登录地址接口。
+  | 'hostweb-disabled'
+  | 'hostweb-forbidden'
+  | 'hostweb-unavailable'
 
 /** s2c.preview.closed 的原因。 */
 export type PreviewCloseReason = 'eof' | 'error' | 'flow-control' | 'disabled'
 
-export interface PreviewAuthorizePayload { sessionId: string; url: string }
+/**
+ * `sessionId` 缺省只对电脑端网页（能力 hostWeb）放宽的设备有效：网页里打开的其他本机
+ * 端口没有会话上下文，按 hostweb.open 授权，不核对会话消息。
+ */
+export interface PreviewAuthorizePayload { sessionId?: string; url: string }
 export interface PreviewAuthorizedPayload { port: number; origin: string }
 export interface PreviewOpenPayload { streamId: number; port: number }
 export interface PreviewOpenedPayload { streamId: number }
@@ -927,3 +943,11 @@ export interface PreviewDataHeader { streamId: number; z?: true }
 export interface PreviewCreditPayload { streamId: number; bytes: number }
 export interface PreviewClosePayload { streamId: number }
 export interface PreviewClosedPayload { streamId: number; reason: PreviewCloseReason }
+
+/** c2s.preview.hostWeb 的请求体为空对象。 */
+export type PreviewHostWebPayload = Record<string, never>
+/**
+ * s2c.preview.hostWeb：`url` 带 DSH 进程登录令牌，属于凭据——只经已认证的预览连接下发，
+ * 插件与 App 都不得写日志。`port` 已记为本连接已授权，可直接 c2s.preview.open。
+ */
+export interface PreviewHostWebResultPayload { port: number; origin: string; url: string }

@@ -157,6 +157,142 @@ test('未授权端口不能打开；授权后连不上回 connect-refused', asyn
   assert.equal(h.tunnel.streamCount, 0)
 })
 
+// ---------- 电脑端网页 ----------
+
+/** 电脑端网页放宽所需的状态：开关、scope 与宿主网页端入口均可在用例里改。 */
+function makeHostWebTunnel(entryPort = 3080) {
+  const web = { enabled: true, scope: true, available: true }
+  const h = makeTunnel({
+    isHostWebEnabled: () => web.enabled,
+    hasHostWebScope: () => web.scope,
+    hostWeb: () => (web.available
+      ? {
+          target: { hostname: '127.0.0.1' as const, port: entryPort, origin: `http://127.0.0.1:${entryPort}`, mention: `127.0.0.1:${entryPort}`, connectHosts: ['127.0.0.1'] },
+          url: `http://127.0.0.1:${entryPort}/?token=secret`,
+        }
+      : undefined),
+  })
+  h.state.reserved = [3098, entryPort]
+  return { h, web }
+}
+
+const lastReason = (h: Harness) => h.errors().at(-1)?.payload.reason
+
+test('hostWeb 入口按顺序检查：本机预览开关、电脑端网页开关、scope、宿主支持', () => {
+  const { h, web } = makeHostWebTunnel()
+  h.state.enabled = false
+  h.tunnel.hostWeb('a')
+  assert.equal(lastReason(h), 'disabled')
+  h.state.enabled = true
+  web.enabled = false
+  web.scope = false
+  h.tunnel.hostWeb('b')
+  assert.equal(lastReason(h), 'hostweb-disabled', '开关关闭优先于缺 scope')
+  web.enabled = true
+  h.tunnel.hostWeb('c')
+  assert.equal(lastReason(h), 'hostweb-forbidden')
+  web.scope = true
+  web.available = false
+  h.tunnel.hostWeb('d')
+  const unavailable = h.errors().at(-1)!
+  assert.equal(unavailable.payload.reason, 'hostweb-unavailable')
+  assert.equal(unavailable.payload.code, 'E_UNSUPPORTED')
+  web.available = true
+  h.tunnel.hostWeb('e')
+  const ok = h.sent.at(-1)!
+  assert.equal(ok.type, 's2c.preview.hostWeb')
+  assert.equal(ok.id, 'e')
+  assert.deepEqual(ok.payload, { port: 3080, origin: 'http://127.0.0.1:3080', url: 'http://127.0.0.1:3080/?token=secret' })
+})
+
+test('hostWeb 授权网页端端口（保留端口只能经此入口），日志不带登录令牌', async () => {
+  const http = await listen(createHttpServer((_req, res) => res.end('dsh')))
+  const logs: string[] = []
+  const web = { enabled: true }
+  const h = makeTunnel({
+    isHostWebEnabled: () => web.enabled,
+    hasHostWebScope: () => true,
+    hostWeb: () => ({
+      target: { hostname: '127.0.0.1' as const, port: http.port, origin: `http://127.0.0.1:${http.port}`, mention: `127.0.0.1:${http.port}`, connectHosts: ['127.0.0.1'] },
+      url: `http://127.0.0.1:${http.port}/?token=secret`,
+    }),
+    log: (message) => void logs.push(message),
+  })
+  h.state.reserved = [3098, http.port]
+  try {
+    await h.tunnel.authorize('a', 's', `http://127.0.0.1:${http.port}/`)
+    assert.equal(lastReason(h), 'reserved-port', 'authorize 不能授权网页端端口')
+    h.tunnel.hostWeb('w')
+    await h.tunnel.open('o1', 1, http.port)
+    assert.equal(h.sent.find((f) => f.type === 's2c.preview.opened')?.payload.streamId, 1)
+    assert.ok(logs.length > 0)
+    assert.ok(logs.every((line) => !line.includes('secret')), '登录令牌不得进日志')
+
+    web.enabled = false
+    await h.tunnel.open('o2', 2, http.port)
+    assert.equal(lastReason(h), 'hostweb-disabled', '开关关闭后不能再开新通道')
+    h.tunnel.data(1, Buffer.from('GET / HTTP/1.1\r\nHost: x\r\n\r\n'))
+    assert.deepEqual(closedFrame(h, 1)!.payload, { streamId: 1, reason: 'disabled' }, '已开通道在下一批数据时断开')
+  } finally {
+    h.tunnel.dispose()
+    await http.close()
+  }
+})
+
+test('电脑端网页放宽：不带 sessionId 或会话没提及也放行；条件不满足时退回原有判定', async () => {
+  const { h, web } = makeHostWebTunnel()
+  h.state.mentioned = false
+  await h.tunnel.authorize('a', undefined, 'http://127.0.0.1:4720/')
+  assert.deepEqual(h.sent.at(-1)!.payload, { port: 4720, origin: 'http://127.0.0.1:4720' })
+  await h.tunnel.authorize('b', 's', 'http://127.0.0.1:4721/')
+  assert.equal(h.sent.at(-1)!.type, 's2c.preview.authorized', '会话没提及的端口也放行')
+  await h.tunnel.authorize('c', undefined, 'http://127.0.0.1:3080/')
+  assert.equal(lastReason(h), 'reserved-port', '放宽不越过保留端口')
+
+  web.scope = false
+  await h.tunnel.authorize('d', undefined, 'http://127.0.0.1:4722/')
+  assert.equal(lastReason(h), 'hostweb-forbidden')
+  await h.tunnel.authorize('e', 's', 'http://127.0.0.1:4722/')
+  assert.equal(lastReason(h), 'not-mentioned', '带 sessionId 时退回会话核对的原因')
+  web.scope = true
+  web.enabled = false
+  await h.tunnel.authorize('f', undefined, 'http://127.0.0.1:4722/')
+  assert.equal(lastReason(h), 'hostweb-disabled')
+  h.state.mentioned = null
+  await h.tunnel.authorize('g', 's', 'http://127.0.0.1:4722/')
+  assert.equal(lastReason(h), 'session-not-found')
+})
+
+test('会话来路的授权不被放宽来路覆盖，关闭电脑端网页开关后仍可用', async () => {
+  const tcp = await listen(createNetServer(() => {}))
+  const web = { enabled: true }
+  const mentions = { value: true }
+  const h = makeTunnel({
+    isHostWebEnabled: () => web.enabled,
+    hasHostWebScope: () => true,
+    sessionMentions: async () => mentions.value,
+  })
+  try {
+    await h.tunnel.authorize('a', 's', `http://127.0.0.1:${tcp.port}/`)
+    await h.tunnel.authorize('b', undefined, `http://127.0.0.1:${tcp.port}/`)
+    web.enabled = false
+    await h.tunnel.open('o1', 1, tcp.port)
+    assert.equal(h.sent.at(-1)!.type, 's2c.preview.opened', 'mention 授权保留，不随开关失效')
+    h.tunnel.data(1, Buffer.from('x'))
+    assert.equal(closedFrame(h, 1), undefined)
+  } finally {
+    h.tunnel.dispose()
+    await tcp.close()
+  }
+})
+
+test('dispose 后 hostWeb 静默', () => {
+  const { h } = makeHostWebTunnel()
+  h.tunnel.dispose()
+  h.tunnel.hostWeb('a')
+  assert.equal(h.sent.length, 0)
+})
+
 // ---------- 数据 ----------
 
 test('HTTP 往返：上行写入后归还额度，下行按窗口发放、压缩、结束发 eof', async () => {

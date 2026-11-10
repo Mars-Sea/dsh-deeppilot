@@ -125,20 +125,23 @@ test('legacy full-scope devices gain later default scopes on load; others stay a
       row('legacy', legacy),
       row('narrow', ['sessions.read']),
       row('six', [...legacy, 'schedule.manage']),
-      row('full', [...legacy, 'schedule.manage', 'preview.open']),
+      row('seven', [...legacy, 'schedule.manage', 'preview.open']),
+      row('full', [...legacy, 'schedule.manage', 'preview.open', 'hostweb.open']),
       row('revoked', legacy, { revokedAt: 3 }),
     ] }))
     const store = await DeviceStore.load(file)
     await store.drain()
     const scopes = Object.fromEntries(store.list().map((r) => [r.deviceId, r.scopes]))
-    const all = [...legacy, 'schedule.manage', 'preview.open']
+    const all = [...legacy, 'schedule.manage', 'preview.open', 'hostweb.open']
     assert.deepEqual(scopes.legacy, all, 'legacy 5-scope full set gets the later defaults')
-    assert.deepEqual(scopes.six, all, 'legacy 6-scope full set gains preview.open')
+    assert.deepEqual(scopes.six, all, 'legacy 6-scope full set gains preview.open and hostweb.open')
+    assert.deepEqual(scopes.seven, all, 'legacy 7-scope full set gains hostweb.open')
     assert.deepEqual(scopes.narrow, ['sessions.read'], 'a narrowed set is never widened')
     assert.deepEqual(scopes.full, all)
     assert.deepEqual(scopes.revoked, legacy, 'revoked rows are left alone')
     const persisted = JSON.parse(await readFile(file, 'utf8')) as { devices: Array<{ deviceId: string; scopes: string[] }> }
     assert.ok(persisted.devices.find((r) => r.deviceId === 'legacy')?.scopes.includes('preview.open'), 'upgrade is written back')
+    assert.ok(persisted.devices.find((r) => r.deviceId === 'seven')?.scopes.includes('hostweb.open'), 'hostweb.open upgrade is written back')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -150,7 +153,9 @@ test('pairing from an older app with its full scope set registers the current fu
   const six = ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage']
   try {
     const old = store.register({ publicKey: createTestIdentity().publicKey, deviceName: 'old', appVersion: '0.2.4', scopes: six }, 1)
-    assert.deepEqual(old.scopes, [...six, 'preview.open'], 'older app full set gains preview.open at pairing time')
+    assert.deepEqual(old.scopes, [...six, 'preview.open', 'hostweb.open'], 'older app full set gains preview.open at pairing time')
+    const seven = store.register({ publicKey: createTestIdentity().publicKey, deviceName: 'seven', appVersion: '0.3.0', scopes: [...six, 'preview.open'] }, 3)
+    assert.deepEqual(seven.scopes, [...six, 'preview.open', 'hostweb.open'], '0.9.18-era full set gains hostweb.open at pairing time')
     const narrow = store.register({ publicKey: createTestIdentity().publicKey, deviceName: 'narrow', appVersion: '0.2.4', scopes: ['sessions.read'] }, 2)
     assert.deepEqual(narrow.scopes, ['sessions.read'], 'a narrowed request is never widened')
     await store.drain()

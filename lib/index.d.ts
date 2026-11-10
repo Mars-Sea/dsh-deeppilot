@@ -30,7 +30,7 @@ interface ReferenceCandidates {
   files: ReferenceSource<FileReferenceItem>;
   sessions: ReferenceSource<SessionReferenceItem>;
 }
-declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage', 'preview.open'];
+declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage', 'preview.open', 'hostweb.open'];
 type DeviceScope = (typeof DEVICE_SCOPES)[number];
 /**
  * 错误词表（error vocabulary）的唯一属主。
@@ -464,6 +464,13 @@ interface WelcomeCapabilities {
    * when the settings switch is off (requests then fail with reason
    * "disabled"). */
   localPreview?: boolean;
+  /** Bridge accepts c2s.preview.hostWeb on a preview connection: it returns a
+   * one-time login URL for the DSH Web UI on the computer's loopback address,
+   * so the phone can open the whole Web UI (third-party plugin pages
+   * included) through the preview tunnel (PROTOCOL.md「电脑端网页」).
+   * Plugin-level; stays true when the settings switch is off (requests then
+   * fail with reason "hostweb-disabled"). */
+  hostWeb?: boolean;
 }
 type SessionStatus = "running" | "idle" | "error" | "unknown";
 /**
@@ -1684,6 +1691,12 @@ export interface Config {
    */
   preview?: {
     enabled?: boolean;
+    /**
+     * 电脑端网页（能力 hostWeb）：允许已配对手机经预览连接打开电脑上的 DSH 网页端
+     * （所有者权限，含第三方插件页面），并打开网页里出现的其他本机端口。默认关闭；
+     * 还要求 `enabled` 为 true。关闭后请求回 reason "hostweb-disabled"，已开通道随即断开。
+     */
+    hostWeb?: boolean;
   };
   /** Optional embedded remote transport. Reconciled when settings change. */
   remote?: {
@@ -1739,8 +1752,10 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
   }>>>, "volatile-defined">;
   preview: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
+    hostWeb: z<boolean, boolean, "defined">;
   }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
+    hostWeb: z<boolean, boolean, "defined">;
   }>>>, "volatile-defined">;
   remote: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
@@ -1796,8 +1811,10 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
   }>>>, "volatile-defined">;
   preview: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
+    hostWeb: z<boolean, boolean, "defined">;
   }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
+    hostWeb: z<boolean, boolean, "defined">;
   }>>>, "volatile-defined">;
   remote: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;

@@ -277,6 +277,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     const previewState = props.useDeepPilotPreview((s) => s)
     hooks.previewEnabled = previewState.enabled
     hooks.previewSwitchReady = previewState.status === 'ready'
+    hooks.hostWebEnabled = previewState.hostWeb
   }
   const hooks: {
     report: DeepPilotReport | null
@@ -292,13 +293,14 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     debugSwitchReady: boolean
     previewEnabled: boolean
     previewSwitchReady: boolean
+    hostWebEnabled: boolean
   } = {
     report: null, enabled: true, switchReady: false,
     localPort: DEFAULT_LOCAL_PORT, localPortReady: false,
     remoteEnabled: false, remoteSwitchReady: false,
     remoteConnectionLimit: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, remoteConnectionLimitReady: false,
     debugEnabled: false, debugSwitchReady: false,
-    previewEnabled: true, previewSwitchReady: false,
+    previewEnabled: true, previewSwitchReady: false, hostWebEnabled: false,
   }
   try {
     readHooks()
@@ -319,6 +321,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
   const debugSwitchReady = hooks.debugSwitchReady
   const previewEnabled = hooks.previewEnabled
   const previewSwitchReady = hooks.previewSwitchReady
+  const hostWebEnabled = hooks.hostWebEnabled
 
   useEffect(() => {
     dispatchRemoteLimitDraft({ type: 'sync', value: remoteConnectionLimit })
@@ -719,8 +722,8 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
   // ---------- 新版布局的局部构造器（仅表现层） ----------
 
   // 原生 hidden 同时移出布局、焦点顺序和无障碍树；保留挂载以保留参数草稿。
-  const fold = (open: boolean, body: any): any =>
-    h('div', { className: 'pbb-fold', hidden: !open }, body)
+  const fold = (open: boolean, body: any, extraClass = ''): any =>
+    h('div', { className: 'pbb-fold' + (extraClass ? ' ' + extraClass : ''), hidden: !open }, body)
 
   /** 配对倒计时：仅在 QR 面板打开且 grant 在场时每秒刷新一次。 */
   useEffect(() => {
@@ -868,26 +871,28 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
             },
           }),
         ),
-        h('div', { className: 'pbb-channel' },
-          h('div', { className: 'pbb-row pbb-channelRow' },
-            settingsIcon('wifi'),
-            h('div', { className: 'pbb-controlText' },
-              h('span', { className: 'pbb-controlTitle' },
-                t(props.t, 'local.title')),
-              h('div', { className: 'pbb-channelState' }, h('span', { className: localMeta?.label === 'online' ? 'pbb-ok' : localMeta?.label === 'error' ? 'pbb-bad' : undefined }, localStateText))),
-            h('button', {
-              type: 'button', className: 'pbb-iconButton pbb-expand',
-              'aria-label': t(props.t, 'local.options'),
-              'aria-expanded': localOptionsOpen, 'aria-controls': localOptionsId,
-              onClick: () => setLocalOptionsOpen(!localOptionsOpen),
-            }, h('span', { className: 'pbb-chev' }, ChevronIcon())),
+        h('div', { className: 'pbb-channelGrid' },
+          h('div', { className: 'pbb-channel pbb-channelCell' },
+            h('div', { className: 'pbb-row pbb-channelRow' },
+              settingsIcon('wifi'),
+              h('div', { className: 'pbb-controlText' },
+                h('span', { className: 'pbb-controlTitle' },
+                  t(props.t, 'local.title')),
+                h('div', { className: 'pbb-channelState' }, h('span', { className: localMeta?.label === 'online' ? 'pbb-ok' : localMeta?.label === 'error' ? 'pbb-bad' : undefined }, localStateText))),
+              h('button', {
+                type: 'button', className: 'pbb-iconButton pbb-expand',
+                'aria-label': t(props.t, 'local.options'),
+                'aria-expanded': localOptionsOpen, 'aria-controls': localOptionsId,
+                onClick: () => setLocalOptionsOpen(!localOptionsOpen),
+              }, h('span', { className: 'pbb-chev' }, ChevronIcon())),
+            ),
+            report !== null && report.local.message && report.local.phase === 'error'
+              ? h('p', { className: 'pbb-diag pbb-diagBad', role: 'alert' }, t(props.t, 'local.errorDetails', { message: report.local.message }))
+              : null,
+            report !== null && report.local.tlsIdentityRegenerated === true
+              ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'local.tlsRegenerated'))
+              : null,
           ),
-          report !== null && report.local.message && report.local.phase === 'error'
-            ? h('p', { className: 'pbb-diag pbb-diagBad', role: 'alert' }, t(props.t, 'local.errorDetails', { message: report.local.message }))
-            : null,
-          report !== null && report.local.tlsIdentityRegenerated === true
-            ? h('p', { className: 'pbb-diag pbb-diagBad' }, t(props.t, 'local.tlsRegenerated'))
-            : null,
           fold(localOptionsOpen, h('div', { className: 'pbb-channelBody', id: localOptionsId },
             // 局域网连接常开：说明手机如何选路，替代原来的开关。
             h('p', { className: 'pbb-controlDescription' }, t(props.t, 'local.autoRoute')),
@@ -939,38 +944,38 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
                     h('span', { className: 'pbb-controlTitle' }, t(props.t, 'local.tlsFingerprint')),
                     h('code', { className: 'pbb-token' }, report.local.tlsFingerprint)))
               : null,
-          )),
-        ),
-        h('div', { className: 'pbb-channel' },
-          h('div', { className: 'pbb-row pbb-channelRow' },
-            settingsIcon('globe'),
-            h('div', { className: 'pbb-controlText' },
-              h('span', { className: 'pbb-controlTitle' },
-                t(props.t, 'remote.title')),
-              h('div', { className: 'pbb-channelState' }, h('span', { className: remoteMeta?.label === 'online' ? 'pbb-ok' : (remoteMeta?.label === 'error' || remoteMeta?.label === 'unavailable') ? 'pbb-bad' : undefined }, remoteStateText), h('span', { className: 'pbb-metaDivider', 'aria-hidden': true }), h('span', null, 'Tailscale Funnel'))),
-            h(Switch, {
-              checked: remoteEnabled,
-              label: t(props.t, 'remote.title'),
-              disabled: !remoteSwitchReady,
-              onChange: (next: boolean) => {
-                if (can('setRemoteEnabled')) props.setDeepPilotRemoteEnabled!(next)
-              },
-            }),
-            h('button', {
-              type: 'button', className: 'pbb-iconButton pbb-expand',
-              'aria-label': t(props.t, 'remote.options'),
-              'aria-expanded': remoteOptionsOpen, 'aria-controls': remoteOptionsId,
-              onClick: () => setRemoteOptionsOpen(!remoteOptionsOpen),
-            }, h('span', { className: 'pbb-chev' }, ChevronIcon())),
+          ), 'pbb-channelFull'),
+          h('div', { className: 'pbb-channel pbb-channelCell' },
+            h('div', { className: 'pbb-row pbb-channelRow' },
+              settingsIcon('globe'),
+              h('div', { className: 'pbb-controlText' },
+                h('span', { className: 'pbb-controlTitle' },
+                  t(props.t, 'remote.title')),
+                h('div', { className: 'pbb-channelState' }, h('span', { className: remoteMeta?.label === 'online' ? 'pbb-ok' : (remoteMeta?.label === 'error' || remoteMeta?.label === 'unavailable') ? 'pbb-bad' : undefined }, remoteStateText), h('span', { className: 'pbb-metaDivider', 'aria-hidden': true }), h('span', null, 'Tailscale Funnel'))),
+              h(Switch, {
+                checked: remoteEnabled,
+                label: t(props.t, 'remote.title'),
+                disabled: !remoteSwitchReady,
+                onChange: (next: boolean) => {
+                  if (can('setRemoteEnabled')) props.setDeepPilotRemoteEnabled!(next)
+                },
+              }),
+              h('button', {
+                type: 'button', className: 'pbb-iconButton pbb-expand',
+                'aria-label': t(props.t, 'remote.options'),
+                'aria-expanded': remoteOptionsOpen, 'aria-controls': remoteOptionsId,
+                onClick: () => setRemoteOptionsOpen(!remoteOptionsOpen),
+              }, h('span', { className: 'pbb-chev' }, ChevronIcon())),
+            ),
+            report !== null && report.remote.phase === 'login_required'
+              && typeof report.remote.authURL === 'string' && report.remote.authURL.startsWith('https://')
+              ? h('div', { className: 'pbb-rowAction' },
+                  h('a', { className: 'pbb-action pbb-buttonPrimary', href: report.remote.authURL, target: '_blank', rel: 'noreferrer' }, t(props.t, 'remote.openAuth')))
+              : null,
+            report !== null && report.remote.message && (report.remote.phase === 'error' || report.remote.phase === 'unavailable')
+              ? h('p', { className: 'pbb-diag pbb-diagBad', role: 'alert' }, t(props.t, 'remote.errorDetails', { message: report.remote.message }))
+              : null,
           ),
-          report !== null && report.remote.phase === 'login_required'
-            && typeof report.remote.authURL === 'string' && report.remote.authURL.startsWith('https://')
-            ? h('div', { className: 'pbb-rowAction' },
-                h('a', { className: 'pbb-action pbb-buttonPrimary', href: report.remote.authURL, target: '_blank', rel: 'noreferrer' }, t(props.t, 'remote.openAuth')))
-            : null,
-          report !== null && report.remote.message && (report.remote.phase === 'error' || report.remote.phase === 'unavailable')
-            ? h('p', { className: 'pbb-diag pbb-diagBad', role: 'alert' }, t(props.t, 'remote.errorDetails', { message: report.remote.message }))
-            : null,
           fold(remoteOptionsOpen, h('div', { className: 'pbb-channelBody', id: remoteOptionsId },
             report !== null && report.remote.phase === 'online'
               ? h('p', { className: 'pbb-diag pbb-endpoint' }, report.remote.publicURL) : null,
@@ -1065,7 +1070,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
                   h('a', { className: 'pbb-helpLink', href: 'https://tailscale.com/docs/features/tailscale-funnel', target: '_blank', rel: 'noreferrer' }, t(props.t, 'help.funnelDocs'))),
               ),
             )),
-          )),
+          ), 'pbb-channelFull'),
         ),
         // 本机预览开关（能力 localPreview）：与两条连接通道并列，作用于所有已配对手机。
         h('div', { className: 'pbb-channel' },
@@ -1080,6 +1085,24 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
               disabled: !previewSwitchReady,
               onChange: (next: boolean) => {
                 if (can('setPreview')) props.setDeepPilotPreview!(next)
+              },
+            }),
+          ),
+        ),
+        // 电脑端网页开关（能力 hostWeb）：手机经预览连接打开本机 DSH 网页端，拿到所有者权限。
+        // 依附本机预览：预览关闭时整条链路不通，开关置灰但保留已存的值，重新开启预览后照旧生效。
+        h('div', { className: 'pbb-channel pbb-channelSub' },
+          h('div', { className: 'pbb-row pbb-channelRow' },
+            settingsIcon('monitor'),
+            h('div', { className: 'pbb-controlText' },
+              h('span', { className: 'pbb-controlTitle' }, t(props.t, 'hostWeb.title')),
+              h('span', { className: 'pbb-controlDescription' }, t(props.t, 'hostWeb.description'))),
+            h(Switch, {
+              checked: hostWebEnabled,
+              label: t(props.t, 'hostWeb.title'),
+              disabled: !previewSwitchReady || !previewEnabled,
+              onChange: (next: boolean) => {
+                if (can('setHostWeb')) props.setDeepPilotHostWeb!(next)
               },
             }),
           ),
@@ -1108,18 +1131,18 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
         }, deviceMessage) : null,
         deviceRows)),
     h('section', { className: 'pbb-card pbb-tools', 'aria-label': t(props.t, 'tools.title') },
-      h('div', { className: 'pbb-toolSection' },
-      h('button', {
-        type: 'button',
-        className: 'pbb-cardHead',
-        'aria-expanded': troubleshootingOpen, 'aria-controls': troubleshootingId,
-        onClick: () => setTroubleshootingOpen(!troubleshootingOpen),
-      },
-        settingsIcon('activity', 17),
-        h('span', { className: 'pbb-cardTitle' }, t(props.t, 'troubleshooting.summary')),
-        h('span', { className: 'pbb-toolMeta' + (troubleGood ? ' pbb-ok' : troubleBad && relayTestResult !== null ? ' pbb-bad' : '') }, troubleConclusion),
-        h('span', { className: 'pbb-chev' }, ChevronIcon())),
-      fold(troubleshootingOpen, h('div', { className: 'pbb-cardBody', id: troubleshootingId },
+      h('div', { className: 'pbb-toolSection pbb-toolCell' },
+        h('button', {
+          type: 'button',
+          className: 'pbb-cardHead',
+          'aria-expanded': troubleshootingOpen, 'aria-controls': troubleshootingId,
+          onClick: () => setTroubleshootingOpen(!troubleshootingOpen),
+        },
+          settingsIcon('activity', 17),
+          h('span', { className: 'pbb-cardTitle' }, t(props.t, 'troubleshooting.summary')),
+          h('span', { className: 'pbb-toolMeta' + (troubleGood ? ' pbb-ok' : troubleBad && relayTestResult !== null ? ' pbb-bad' : '') }, troubleConclusion),
+          h('span', { className: 'pbb-chev' }, ChevronIcon()))),
+      fold(troubleshootingOpen, h('div', { className: 'pbb-cardBody pbb-toolPanel', id: troubleshootingId },
         h('div', { className: 'pbb-testGrid' },
           h('div', { className: 'pbb-testItem' },
             h('div', { className: 'pbb-controlText' },
@@ -1184,21 +1207,20 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
                   + (r.tokenFingerprint ? ' token:' + r.tokenFingerprint + '…' : ''), String(index))),
             ),
         diagnosticsSection,
-      )),
-    ),
-      report === null ? null : h('div', { className: 'pbb-toolSection' },
-      h('button', {
-        type: 'button',
-        className: 'pbb-cardHead',
-        'aria-expanded': systemOpen, 'aria-controls': systemId,
-        onClick: () => setSystemOpen(!systemOpen),
-      },
-        settingsIcon('info', 17),
-        h('span', { className: 'pbb-cardTitle' }, t(props.t, 'system.summary')),
-        h('span', { className: 'pbb-toolMeta' + (report.updateAvailable === true ? ' pbb-ok' : '') },
-          'v' + report.pluginVersion + (report.updateAvailable === true ? ' · ' + t(props.t, 'update.badge') : '')),
-        h('span', { className: 'pbb-chev' }, ChevronIcon())),
-      fold(systemOpen, h('div', { className: 'pbb-cardBody', id: systemId },
+      ), 'pbb-toolFull'),
+      report === null ? null : h('div', { className: 'pbb-toolSection pbb-toolCell' },
+        h('button', {
+          type: 'button',
+          className: 'pbb-cardHead',
+          'aria-expanded': systemOpen, 'aria-controls': systemId,
+          onClick: () => setSystemOpen(!systemOpen),
+        },
+          settingsIcon('info', 17),
+          h('span', { className: 'pbb-cardTitle' }, t(props.t, 'system.summary')),
+          h('span', { className: 'pbb-toolMeta' + (report.updateAvailable === true ? ' pbb-ok' : '') },
+            'v' + report.pluginVersion + (report.updateAvailable === true ? ' · ' + t(props.t, 'update.badge') : '')),
+          h('span', { className: 'pbb-chev' }, ChevronIcon()))),
+      report === null ? null : fold(systemOpen, h('div', { className: 'pbb-cardBody pbb-toolPanel', id: systemId },
         h('div', { className: 'pbb-sectionIntro' },
           h('h3', { className: 'pbb-cardTitle' }, t(props.t, 'system.title'))),
         h('div', { className: 'pbb-runtimeList' },
@@ -1226,8 +1248,8 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
               },
                 h('span', null, t(props.t, 'update.badge')),
                 h('span', { className: 'pbb-chev' }, ChevronIcon()))
-            : null))),
-    )),
+            : null)), 'pbb-toolFull'),
+    ),
     diag.length > 0 ? h('details', {
       className: 'pbb-card pbb-disclosure pbb-diagnostics',
       open: failed,

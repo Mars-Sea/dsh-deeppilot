@@ -27,7 +27,7 @@ function fullProps(overrides: Record<string, unknown> = {}): Record<string, unkn
     useDeepPilotRemoteEnabled: () => ({ status: 'ready', enabled: false }),
     useDeepPilotRemoteConnectionLimit: () => ({ status: 'ready', value: 8 }),
     useDeepPilotDebug: () => ({ status: 'ready', enabled: false }),
-    useDeepPilotPreview: () => ({ status: 'ready', enabled: true }),
+    useDeepPilotPreview: () => ({ status: 'ready', enabled: true, hostWeb: false }),
     refresh: () => {},
     beginPairing: async () => ({ code: 'c', expiresAt: 0, audience: 'a' }),
     revokeDevice: async () => true,
@@ -40,19 +40,20 @@ function fullProps(overrides: Record<string, unknown> = {}): Record<string, unkn
     setDeepPilotRemoteConnectionLimit: async () => {},
     setDeepPilotDebug: () => {},
     setDeepPilotPreview: () => {},
+    setDeepPilotHostWeb: () => {},
     t,
     ...overrides,
   }
 }
 
-test('宿主给全时没有诊断，十二个能力全部在位', () => {
+test('宿主给全时没有诊断，十三个能力全部在位', () => {
   const surface = normalizeSettingsPageProps(fullProps())
   assert.deepEqual(surface.diagnostics, [])
   assert.equal(surface.reportHookMissing, false)
   assert.deepEqual([...surface.can].sort(), [
     'beginPairing', 'refresh', 'revokeDevice', 'setDebug', 'setDeviceName',
     'setEnabled', 'setLocalPort', 'setRemoteEnabled',
-    'setPreview', 'setRemoteLimit', 'testPush', 'testRelay',
+    'setPreview', 'setHostWeb', 'setRemoteLimit', 'testPush', 'testRelay',
   ].sort())
 })
 
@@ -78,6 +79,7 @@ test('一个 prop 都不给时，诊断逐条对上且顺序与迁移前一致',
     'diag.missingSetDebug',
     'diag.missingPreviewHook',
     'diag.missingSetPreview',
+    'diag.missingSetHostWeb',
   ])
   assert.equal(surface.reportHookMissing, true, '报告 hook 缺失时统计/配对/系统区块整段跳过')
   assert.equal(surface.can.size, 0)
@@ -124,7 +126,7 @@ test('可选函数在位时才进 props 与 can', () => {
 test('props 不是对象时不会炸', () => {
   for (const raw of [undefined, null, 42, 'nope']) {
     const surface = normalizeSettingsPageProps(raw)
-    assert.equal(surface.diagnostics.length, 19)
+    assert.equal(surface.diagnostics.length, 20)
     assert.equal(typeof surface.props.useDeepPilotReport, 'function')
   }
 })

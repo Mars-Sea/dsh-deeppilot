@@ -66,6 +66,7 @@ export interface SettingsPageProps {
   setDeepPilotRemoteConnectionLimit?: (limit: number) => Promise<unknown> | unknown
   setDeepPilotDebug?: (enabled: boolean) => unknown
   setDeepPilotPreview?: (enabled: boolean) => unknown
+  setDeepPilotHostWeb?: (enabled: boolean) => unknown
   /** 绑定的翻译函数；页面所有文案都经它。 */
   t: Translate
 }
@@ -84,6 +85,7 @@ export type SettingsCapability =
   | 'setRemoteLimit'
   | 'setDebug'
   | 'setPreview'
+  | 'setHostWeb'
 
 export interface SettingsPageSurface {
   props: SettingsPageProps
@@ -102,7 +104,7 @@ export const MISSING_LOCAL_PORT_HOOK: LocalPortSelector = () => ({ status: 'unav
 export const MISSING_REMOTE_ENABLED_HOOK: RemoteEnabledSelector = () => ({ status: 'unavailable', enabled: false })
 export const MISSING_REMOTE_LIMIT_HOOK: RemoteLimitSelector = () => ({ status: 'unavailable', value: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE })
 export const MISSING_DEBUG_HOOK: DebugSelector = () => ({ status: 'unavailable', enabled: false })
-export const MISSING_PREVIEW_HOOK: PreviewSelector = () => ({ status: 'unavailable', enabled: true })
+export const MISSING_PREVIEW_HOOK: PreviewSelector = () => ({ status: 'unavailable', enabled: true, hostWeb: false })
 
 /** 诊断行的 key，集中在此便于对账（tests/settings-props.test.ts 逐条断言）。 */
 const DIAG_KEY = {
@@ -125,6 +127,7 @@ const DIAG_KEY = {
   setDebug: 'diag.missingSetDebug',
   previewHook: 'diag.missingPreviewHook',
   setPreview: 'diag.missingSetPreview',
+  setHostWeb: 'diag.missingSetHostWeb',
   settingsUnavailable: 'diag.settingsUnavailable',
 } as const
 
@@ -141,6 +144,7 @@ const CAPABILITY_BY_PROP: ReadonlyArray<[SettingsCapability, keyof SettingsPageP
   ['setRemoteLimit', 'setDeepPilotRemoteConnectionLimit'],
   ['setDebug', 'setDeepPilotDebug'],
   ['setPreview', 'setDeepPilotPreview'],
+  ['setHostWeb', 'setDeepPilotHostWeb'],
 ]
 
 const isFn = (value: unknown): value is (...args: never[]) => unknown => typeof value === 'function'
@@ -187,6 +191,7 @@ export function normalizeSettingsPageProps(raw: unknown): SettingsPageSurface {
   // 新增项追加在末尾，既有诊断行的顺序保持不变。
   if (!isFn(source.useDeepPilotPreview)) diagnostics.push(t(DIAG_KEY.previewHook))
   if (!isFn(source.setDeepPilotPreview)) diagnostics.push(t(DIAG_KEY.setPreview))
+  if (!isFn(source.setDeepPilotHostWeb)) diagnostics.push(t(DIAG_KEY.setHostWeb))
 
   for (const [capability, prop] of CAPABILITY_BY_PROP) {
     if (isFn(source[prop])) can.add(capability)
@@ -213,6 +218,7 @@ export function normalizeSettingsPageProps(raw: unknown): SettingsPageSurface {
     setDeepPilotRemoteConnectionLimit: isFn(source.setDeepPilotRemoteConnectionLimit) ? (source.setDeepPilotRemoteConnectionLimit as SettingsPageProps['setDeepPilotRemoteConnectionLimit']) : undefined,
     setDeepPilotDebug: isFn(source.setDeepPilotDebug) ? (source.setDeepPilotDebug as SettingsPageProps['setDeepPilotDebug']) : undefined,
     setDeepPilotPreview: isFn(source.setDeepPilotPreview) ? (source.setDeepPilotPreview as SettingsPageProps['setDeepPilotPreview']) : undefined,
+    setDeepPilotHostWeb: isFn(source.setDeepPilotHostWeb) ? (source.setDeepPilotHostWeb as SettingsPageProps['setDeepPilotHostWeb']) : undefined,
   }
 
   return { props, can, diagnostics, reportHookMissing: !isFn(source.useDeepPilotReport) }

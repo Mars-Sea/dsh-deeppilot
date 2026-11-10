@@ -71,6 +71,8 @@ const TABLES: LocaleTables = {
     'remote.options': '远程连接选项',
     'preview.title': '本机网页预览',
     'preview.description': '手机可在 App 内打开会话里出现过的本机网页',
+    'hostWeb.title': '允许手机打开电脑端网页',
+    'hostWeb.description': '手机获得与本机浏览器相同的完全权限，含设置与插件管理；需先开启本机网页预览',
     'local.errorDetails': '局域网连接异常，请检查连接选项（{message}）。',
     'remote.errorDetails': '远程连接异常，请检查授权与连接选项（{message}）。',
     'pair.add': '添加手机',
@@ -372,6 +374,7 @@ const TABLES: LocaleTables = {
     'diag.missingSetDebug': 'setDeepPilotDebug 回调缺失',
     'diag.missingPreviewHook': 'useDeepPilotPreview hook 缺失',
     'diag.missingSetPreview': 'setDeepPilotPreview 回调缺失',
+    'diag.missingSetHostWeb': 'setDeepPilotHostWeb 回调缺失',
     'diag.renderError': '渲染异常: ',
     'diag.prefix': 'diag: ',
 
@@ -395,6 +398,8 @@ const TABLES: LocaleTables = {
     'remote.options': 'Remote connection options',
     'preview.title': 'Local web preview',
     'preview.description': 'Phones can open local pages linked in the conversation',
+    'hostWeb.title': 'Allow phones to open the desktop web UI',
+    'hostWeb.description': 'Phones get the same full access as this computer\'s browser, including settings and plugins. Requires local web preview',
     'local.errorDetails': 'LAN connection failed. Check the connection options ({message}).',
     'remote.errorDetails': 'Remote connection failed. Check authorization and connection options ({message}).',
     'pair.add': 'Add phone',
@@ -694,6 +699,7 @@ const TABLES: LocaleTables = {
     'diag.missingSetDebug': 'setDeepPilotDebug callback missing',
     'diag.missingPreviewHook': 'useDeepPilotPreview hook missing',
     'diag.missingSetPreview': 'setDeepPilotPreview callback missing',
+    'diag.missingSetHostWeb': 'setDeepPilotHostWeb callback missing',
     'diag.renderError': 'Render error: ',
     'diag.prefix': 'diag: ',
 

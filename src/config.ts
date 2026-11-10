@@ -30,6 +30,12 @@ export interface Config {
    */
   preview?: {
     enabled?: boolean
+    /**
+     * 电脑端网页（能力 hostWeb）：允许已配对手机经预览连接打开电脑上的 DSH 网页端
+     * （所有者权限，含第三方插件页面），并打开网页里出现的其他本机端口。默认关闭；
+     * 还要求 `enabled` 为 true。关闭后请求回 reason "hostweb-disabled"，已开通道随即断开。
+     */
+    hostWeb?: boolean
   }
   /** Optional embedded remote transport. Reconciled when settings change. */
   remote?: {
@@ -97,8 +103,11 @@ export const Config = z.object({
   preview: z.object({
     enabled: z.boolean().default(true)
       .description('允许手机预览本机网页：只限会话消息里出现过的本机地址'),
+    hostWeb: z.boolean().default(false)
+      .description('允许手机打开电脑端网页：手机获得与本机浏览器相同的完全权限，需同时开启本机网页预览'),
   }).default({
     enabled: true,
+    hostWeb: false,
   }).volatile(),
   remote: z.object({
     enabled: z.boolean().default(false),

@@ -8,6 +8,10 @@
  * 数据来源与约束（PROTOCOL.md「本机预览扩展」）：
  * - 端口必须先经 `authorize` 授权（保留端口、会话消息核对由 preview-policy 与
  *   HostBridge.sessionMentions 完成），`open` 只认已授权端口；
+ * - 电脑端网页（能力 `hostWeb`，PROTOCOL.md「电脑端网页」）另有两条授权路径：
+ *   `hostWeb` 授权 DSH 网页端端口并下发登录地址；具备 `hostweb.open` 的设备
+ *   在开关打开时，`authorize` 不再核对会话消息（可不带 sessionId）。这类授权随开关
+ *   失效：关闭后新请求被拒、已开通道在下一批数据时以 disabled 断开；
  * - 每条通道每个方向 256 KiB 窗口，由接收方用 credit 归还。经 Funnel 时插件这一侧
  *   看不到手机侧的积压（ws.bufferedAmount 只反映到 Funnel helper 为止），所以下行
  *   不能只靠发送缓冲判断快慢，必须端到端发额度；
@@ -23,7 +27,8 @@ import type {
 } from './protocol.ts'
 import type { S2CType } from './wire-registry.ts'
 import type { WireErrorCode } from './wire-errors.ts'
-import { isReservedPreviewPort, parseLoopbackUrl } from './preview-policy.ts'
+import { isReservedPreviewPort, parseLoopbackUrl, type LoopbackTarget } from './preview-policy.ts'
+import type { HostWebEntry } from './host-web.ts'
 
 /** 每条通道每个方向的初始窗口（按解压后字节计）。 */
 export const PREVIEW_INITIAL_WINDOW = 256 * 1024
@@ -60,15 +65,32 @@ export interface PreviewTunnelDeps {
   reservedPorts(): Iterable<number>
   /** 会话消息里是否出现过 `needle`；null 表示会话读取失败。 */
   sessionMentions(sessionId: string, needle: string): Promise<boolean | null>
+  /** 设置页开关「允许手机打开电脑端网页」的当前值；缺省视为关闭。 */
+  isHostWebEnabled?(): boolean
+  /** 本连接的设备是否具备 scope `hostweb.open`；缺省视为不具备。 */
+  hasHostWebScope?(): boolean
+  /** 现算网页端登录地址；宿主不支持时 undefined。返回值带凭据，不得记录。 */
+  hostWeb?(): HostWebEntry | undefined
   /** 建 TCP 连接；缺省用 node:net。测试可注入假 socket。 */
   connect?(host: string, port: number): Socket
   /** 诊断日志；只记端口与原因，不记 URL 路径和内容。 */
   log?(message: string): void
 }
 
+/**
+ * 端口授权的来路：`mention` 来自会话消息核对，只受本机预览开关约束；`hostWeb` 来自
+ * 电脑端网页授权，另受其开关约束。
+ */
+type GrantSource = 'mention' | 'hostWeb'
+
+/** 电脑端网页被拒的原因（开关关闭优先于缺 scope：前者是用户能在设置页解决的）。 */
+type HostWebDenial = 'hostweb-disabled' | 'hostweb-forbidden'
+
 interface PreviewStream {
   readonly id: number
   readonly socket: Socket
+  /** 所用端口授权的来路；数据转发前据此复核开关。 */
+  readonly source: GrantSource
   /** 还能往手机发的字节数（手机发放的额度余量）。 */
   sendWindow: number
   /** 手机还能发来的字节数（本端发放的额度余量）。 */
@@ -82,6 +104,7 @@ interface PreviewStream {
 
 interface PortGrant {
   connectHosts: readonly string[]
+  source: GrantSource
 }
 
 export class PreviewTunnel {
@@ -100,21 +123,49 @@ export class PreviewTunnel {
 
   // ---------- 控制帧 ----------
 
-  /** c2s.preview.authorize：检查开关、URL、保留端口、会话消息；通过后记录授权。 */
-  async authorize(id: string | undefined, sessionId: string, rawUrl: string): Promise<void> {
+  /**
+   * c2s.preview.authorize：检查开关、URL、保留端口，再核对会话消息；通过后记录授权。
+   * 电脑端网页放宽（开关打开且设备具备 `hostweb.open`）时，会话里没出现过的端口也放行，
+   * 不带 sessionId 时只走这条路径。
+   */
+  async authorize(id: string | undefined, sessionId: string | undefined, rawUrl: string): Promise<void> {
     if (!this.deps.isEnabled()) return this.fail(id, 'E_FORBIDDEN', 'disabled', 'local preview is disabled')
     const target = parseLoopbackUrl(rawUrl)
     if (target === undefined) return this.fail(id, 'E_PROTOCOL', 'bad-url', 'url must be http on a loopback host with an explicit port')
     if (isReservedPreviewPort(target.port, this.deps.reservedPorts())) {
       return this.fail(id, 'E_FORBIDDEN', 'reserved-port', `port ${target.port} is reserved`)
     }
+    if (sessionId === undefined) {
+      const denial = this.hostWebDenial()
+      if (denial !== undefined) return this.fail(id, 'E_FORBIDDEN', denial, 'host web access is not allowed')
+      return this.grant(id, target, 'hostWeb')
+    }
     const mentioned = await this.deps.sessionMentions(sessionId, target.mention)
     if (this.disposed) return
+    if (mentioned === true) return this.grant(id, target, 'mention')
+    // 先核对会话再看放宽：会话里出现过的端口记为 mention，关掉电脑端网页开关后仍可用。
+    if (this.hostWebDenial() === undefined) return this.grant(id, target, 'hostWeb')
     if (mentioned === null) return this.fail(id, 'E_NOT_FOUND', 'session-not-found', 'session history unavailable')
-    if (!mentioned) return this.fail(id, 'E_FORBIDDEN', 'not-mentioned', `port ${target.port} not mentioned in session`)
-    this.grants.set(target.port, { connectHosts: target.connectHosts })
-    this.deps.log?.(`preview authorized port=${target.port}`)
-    this.deps.send('s2c.preview.authorized', { port: target.port, origin: target.origin }, id)
+    return this.fail(id, 'E_FORBIDDEN', 'not-mentioned', `port ${target.port} not mentioned in session`)
+  }
+
+  /**
+   * c2s.preview.hostWeb：授权 DSH 网页端端口并下发带登录令牌的地址。网页端端口在保留名单里，
+   * 只能经这条路径授权。登录地址是凭据：只发给手机，日志只记端口。
+   */
+  hostWeb(id: string | undefined): void {
+    if (this.disposed) return
+    if (!this.deps.isEnabled()) return this.fail(id, 'E_FORBIDDEN', 'disabled', 'local preview is disabled')
+    const denial = this.hostWebDenial()
+    if (denial !== undefined) return this.fail(id, 'E_FORBIDDEN', denial, 'host web access is not allowed')
+    const entry = this.deps.hostWeb?.()
+    if (entry === undefined) {
+      return this.fail(id, 'E_UNSUPPORTED', 'hostweb-unavailable', 'DSH Web is not served over plain HTTP on a loopback address')
+    }
+    const { target, url } = entry
+    this.grants.set(target.port, { connectHosts: target.connectHosts, source: 'hostWeb' })
+    this.deps.log?.(`preview host web authorized port=${target.port}`)
+    this.deps.send('s2c.preview.hostWeb', { port: target.port, origin: target.origin, url }, id)
   }
 
   /** c2s.preview.open：连接已授权端口，成功回 opened。 */
@@ -122,6 +173,10 @@ export class PreviewTunnel {
     if (!this.deps.isEnabled()) return this.fail(id, 'E_FORBIDDEN', 'disabled', 'local preview is disabled')
     const grant = this.grants.get(port)
     if (grant === undefined) return this.fail(id, 'E_FORBIDDEN', 'not-authorized', `port ${port} not authorized`)
+    if (grant.source === 'hostWeb') {
+      const denial = this.hostWebDenial()
+      if (denial !== undefined) return this.fail(id, 'E_FORBIDDEN', denial, 'host web access is not allowed')
+    }
     if (this.streams.has(streamId)) return this.fail(id, 'E_PROTOCOL', 'duplicate-stream', `stream ${streamId} in use`)
     if (this.streams.size >= PREVIEW_MAX_STREAMS) return this.fail(id, 'E_BUSY', 'too-many-streams', 'too many preview streams')
     const socket = await this.connectFirst(grant.connectHosts, port)
@@ -135,6 +190,7 @@ export class PreviewTunnel {
     const stream: PreviewStream = {
       id: streamId,
       socket,
+      source: grant.source,
       sendWindow: PREVIEW_INITIAL_WINDOW,
       recvWindow: PREVIEW_INITIAL_WINDOW,
       pending: [],
@@ -177,7 +233,7 @@ export class PreviewTunnel {
   data(streamId: number, body: Buffer): void {
     const stream = this.streams.get(streamId)
     if (stream === undefined || stream.closed) return
-    if (!this.deps.isEnabled()) return this.closeStream(stream, 'disabled', true)
+    if (!this.allows(stream)) return this.closeStream(stream, 'disabled', true)
     if (body.length === 0 || body.length > PREVIEW_MAX_CHUNK || body.length > stream.recvWindow) {
       return this.closeStream(stream, 'flow-control', true)
     }
@@ -206,9 +262,31 @@ export class PreviewTunnel {
 
   // ---------- 内部 ----------
 
+  /** 记录端口授权并回 authorized。会话来路的授权不被放宽来路覆盖（它不随电脑端网页开关失效）。 */
+  private grant(id: string | undefined, target: LoopbackTarget, source: GrantSource): void {
+    if (this.disposed) return
+    const existing = this.grants.get(target.port)
+    if (existing?.source !== 'mention') this.grants.set(target.port, { connectHosts: target.connectHosts, source })
+    this.deps.log?.(`preview authorized port=${target.port} via=${source}`)
+    this.deps.send('s2c.preview.authorized', { port: target.port, origin: target.origin }, id)
+  }
+
+  /** 电脑端网页当前是否放行；放行时返回 undefined。每次现取：开关可热更新。 */
+  private hostWebDenial(): HostWebDenial | undefined {
+    if (this.deps.isHostWebEnabled?.() !== true) return 'hostweb-disabled'
+    if (this.deps.hasHostWebScope?.() !== true) return 'hostweb-forbidden'
+    return undefined
+  }
+
+  /** 通道是否仍可转发：本机预览开关总要打开；电脑端网页来路另需其开关与 scope。 */
+  private allows(stream: PreviewStream): boolean {
+    if (!this.deps.isEnabled()) return false
+    return stream.source === 'mention' || this.hostWebDenial() === undefined
+  }
+
   private onSocketData(stream: PreviewStream, chunk: Buffer): void {
     if (stream.closed) return
-    if (!this.deps.isEnabled()) return this.closeStream(stream, 'disabled', true)
+    if (!this.allows(stream)) return this.closeStream(stream, 'disabled', true)
     stream.pending.push(chunk)
     this.flush(stream)
   }

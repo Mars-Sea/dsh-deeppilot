@@ -31,6 +31,7 @@ import {
   bindConfigForm,
   type ConfigFormsLike,
   type SettingsScopeLike,
+  type SettingsSectionValue,
 } from './config-form.ts'
 
 export { DeepPilotSettingsPage } from './settings-page.ts'
@@ -74,10 +75,14 @@ export interface DebugState {
   enabled: boolean
 }
 
-/** 本机预览开关（能力 localPreview），读自 `preview.enabled`；缺省开启。 */
+/**
+ * 本机预览开关（能力 localPreview），读自 `preview.enabled`，缺省开启；
+ * 电脑端网页开关（能力 hostWeb），读自 `preview.hostWeb`，缺省关闭。
+ */
 export interface PreviewState {
   status: 'loading' | 'ready' | 'unavailable'
   enabled: boolean
+  hostWeb: boolean
 }
 
 export interface LocalPortState {
@@ -383,32 +388,41 @@ export function apply(ctx: Context): void {
   }
 
   // 本机预览开关：缺省开启（与 debug 相反），只有显式 false 才算关闭。
-  const previewStore = createSnapshotStore<PreviewState>({ status: 'loading', enabled: true })
+  // 电脑端网页开关：缺省关闭（手机会拿到网页端的完全权限），只有显式 true 才算打开。
+  const previewStore = createSnapshotStore<PreviewState>({ status: 'loading', enabled: true, hostWeb: false })
+  const confirmedPreview = (value: SettingsSectionValue['preview']): { enabled: boolean; hostWeb: boolean } => ({
+    enabled: value?.enabled !== false,
+    hostWeb: value?.hostWeb === true,
+  })
   const adoptPreview = (): void => {
     if (scope === undefined) return
     const snap = scope.getSnapshot()
     if (snap.status === 'ready') {
-      previewStore.set({ status: 'ready', enabled: snap.value?.preview?.enabled !== false })
+      previewStore.set({ status: 'ready', ...confirmedPreview(snap.value?.preview) })
     } else if (snap.status === 'unavailable') {
-      previewStore.set({ status: 'unavailable', enabled: true })
+      previewStore.set({ status: 'unavailable', enabled: true, hostWeb: false })
     }
   }
   scopeAdoptions.push(adoptPreview)
-  const lastConfirmedPreview = (): boolean => {
+  const lastConfirmedPreview = (): { enabled: boolean; hostWeb: boolean } => {
     const snap = scope?.getSnapshot()
-    if (snap?.status === 'ready') return snap.value?.preview?.enabled !== false
-    return previewStore.getSnapshot().enabled
+    if (snap?.status === 'ready') return confirmedPreview(snap.value?.preview)
+    const { enabled, hostWeb } = previewStore.getSnapshot()
+    return { enabled, hostWeb }
   }
-  const setDeepPilotPreview = (value: boolean): void => {
+  /** 两个开关同写 `preview` 对象：只改自己的键，其余键（含另一个开关）原样保留。 */
+  const setPreviewKey = (key: 'enabled' | 'hostWeb', value: boolean): void => {
     const previous = lastConfirmedPreview()
-    previewStore.set({ status: 'ready', enabled: value })
+    previewStore.set({ status: 'ready', ...previous, [key]: value })
     if (scope === undefined) return
     const currentPreview = scope.getSnapshot().value?.preview ?? {}
-    void scope.set('preview', { ...currentPreview, enabled: value }).then(() => {}, (error: unknown) => {
-      previewStore.set({ status: 'ready', enabled: previous })
-      console.error('[deeppilot] failed to persist preview.enabled=' + String(value) + ': ' + (error instanceof Error ? error.message : String(error)))
+    void scope.set('preview', { ...currentPreview, [key]: value }).then(() => {}, (error: unknown) => {
+      previewStore.set({ status: 'ready', ...previous })
+      console.error('[deeppilot] failed to persist preview.' + key + '=' + String(value) + ': ' + (error instanceof Error ? error.message : String(error)))
     })
   }
+  const setDeepPilotPreview = (value: boolean): void => setPreviewKey('enabled', value)
+  const setDeepPilotHostWeb = (value: boolean): void => setPreviewKey('hostWeb', value)
 
   const remoteEnabledStore = createSnapshotStore<RemoteEnabledState>({ status: 'loading', enabled: false })
   const remoteConnectionLimitStore = createSnapshotStore<RemoteConnectionLimitState>({
@@ -518,6 +532,7 @@ export function apply(ctx: Context): void {
         setDeepPilotRemoteConnectionLimit,
         setDeepPilotDebug,
         setDeepPilotPreview,
+        setDeepPilotHostWeb,
         // Bound translation function for the page. The page never imports
         // t() directly so it can be re-supplied if the host swaps the
         // locale face at runtime (a feature today; exercised in tests).

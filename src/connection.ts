@@ -12,6 +12,7 @@ import type { DiagnosticsRecorder } from './diagnostics.ts'
 import { ConnectionGate, type AuthenticatedIdentity, type GateHost } from './connection-gate.ts'
 import type { OpenEventBuffer, S2CType } from './wire-registry.ts'
 import { PreviewTunnel } from './preview-tunnel.ts'
+import type { HostWebEntry } from './host-web.ts'
 
 export {
   AUTH_TIMEOUT_MS,
@@ -46,6 +47,10 @@ export interface ConnectionStateDeps {
   preview?: {
     isEnabled(): boolean
     reservedPorts(): Iterable<number>
+    /** 电脑端网页（能力 hostWeb）开关；缺省视为关闭。 */
+    isHostWebEnabled?(): boolean
+    /** 现算 DSH 网页端登录地址（带凭据，不得记录）；宿主不支持时 undefined。 */
+    hostWeb?(): HostWebEntry | undefined
   }
   /** Called once when the socket closes (cleanly or not). */
   onClosed?: (connection: BridgeConnection) => void
@@ -345,7 +350,7 @@ export class BridgeConnection implements BridgeSink {
     // 小组件与预览连接都是附属连接，选路以主连接为准。
     const auxiliary = identity.widgetClient || identity.previewClient
     const routes = auxiliary ? undefined : this.deps.routes?.()
-    if (identity.previewClient) this.previewTunnel = this.createPreviewTunnel()
+    if (identity.previewClient) this.previewTunnel = this.createPreviewTunnel(identity.scopes)
     // Welcome strictly precedes any replayed pushes.
     this.send('s2c.welcome', {
       protocolVersion: PROTOCOL_VERSION,
@@ -397,8 +402,11 @@ export class BridgeConnection implements BridgeSink {
     if (this.identity !== undefined) this.deps.bridge.removeSink(this)
   }
 
-  /** 预览转发器：出口绑到本连接，环境（开关、保留端口）由接入方现取。 */
-  private createPreviewTunnel(): PreviewTunnel {
+  /**
+   * 预览转发器：出口绑到本连接，环境（开关、保留端口、网页端登录地址）由接入方现取；
+   * scope 取认证时的快照——设备权限变更会断开它的全部连接，不会在连接内变化。
+   */
+  private createPreviewTunnel(scopes: ReadonlySet<DeviceScope>): PreviewTunnel {
     const preview = this.deps.preview
     return new PreviewTunnel({
       send: (type, payload, id) => this.send(type, payload, id),
@@ -407,6 +415,9 @@ export class BridgeConnection implements BridgeSink {
       isEnabled: () => preview?.isEnabled() ?? true,
       reservedPorts: () => preview?.reservedPorts() ?? [],
       sessionMentions: (sessionId, needle) => this.deps.bridge.sessionMentions(sessionId, needle),
+      isHostWebEnabled: () => preview?.isHostWebEnabled?.() ?? false,
+      hasHostWebScope: () => scopes.has('hostweb.open'),
+      hostWeb: () => preview?.hostWeb?.(),
       log: (message) => {
         if (this.deps.debug === true) this.deps.log(message)
       },

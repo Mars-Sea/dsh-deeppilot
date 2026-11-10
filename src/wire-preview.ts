@@ -4,9 +4,13 @@
  * 只登记 JSON 控制帧；数据帧是二进制帧，由连接门的 handleBinaryFrame 直接交给
  * PreviewTunnel，不经注册表（每秒可能上百帧，走 JSON 校验链没有意义）。
  *
- * 四帧都只在预览连接（clientRole: "preview"）上有效：主连接没有 PreviewTunnel，
- * handler 统一回 E_FORBIDDEN。反方向的限制（预览连接只准发这四帧与 ping）由
+ * 这些帧都只在预览连接（clientRole: "preview"）上有效：主连接没有 PreviewTunnel，
+ * handler 统一回 E_FORBIDDEN。反方向的限制（预览连接只准发这些帧与 ping）由
  * `previewPolicy` 在连接门里执行。
+ *
+ * c2s.preview.hostWeb（能力 hostWeb，PROTOCOL.md「电脑端网页」）的行级 scope 只要求
+ * `preview.open`：缺 `hostweb.open` 由 PreviewTunnel 以 reason `hostweb-forbidden` 拒绝，
+ * 客户端才能据 reason 选文案（行级 scope 拒绝不带 reason）。
  */
 
 import {
@@ -23,6 +27,7 @@ import { MAX_STREAM_ID } from './preview-tunnel.ts'
 
 const PREVIEW: readonly DeviceScope[] = ['preview.open']
 const DOC = 'PROTOCOL.md 本机预览扩展'
+const HOST_WEB_DOC = 'PROTOCOL.md 电脑端网页'
 
 /** URL 上限：本机链接不会更长，超长直接按非法载荷拒绝。 */
 const MAX_URL_CHARS = 2048
@@ -53,13 +58,14 @@ export const previewRows: readonly WireFrameRow[] = [
     validate: (payload) => {
       const checked = payloadObject(payload)
       if (!checked.ok) return checked
-      if (!isText(checked.value.sessionId)) return reject('E_PROTOCOL', 'invalid sessionId')
+      // sessionId 可省：只有电脑端网页放宽的设备才会这样发，PreviewTunnel 负责判定。
+      if (checked.value.sessionId !== undefined && !isText(checked.value.sessionId)) return reject('E_PROTOCOL', 'invalid sessionId')
       if (!isText(checked.value.url, MAX_URL_CHARS)) return reject('E_PROTOCOL', 'invalid url')
       return accept(checked.value)
     },
     handle: async (ctx, payload) => {
       if (!requirePreview(ctx)) return
-      await ctx.preview.authorize(ctx.frame.id, payload.sessionId as string, payload.url as string)
+      await ctx.preview.authorize(ctx.frame.id, payload.sessionId as string | undefined, payload.url as string)
     },
   },
   {
@@ -88,6 +94,19 @@ export const previewRows: readonly WireFrameRow[] = [
     handle: (ctx, payload) => {
       if (!requirePreview(ctx)) return
       ctx.preview.credit(payload.streamId as number, payload.bytes as number)
+    },
+  },
+  {
+    type: 'c2s.preview.hostWeb',
+    stage: 'authenticated',
+    scopes: PREVIEW,
+    capability: 'hostWeb',
+    previewPolicy: 'allowed',
+    doc: HOST_WEB_DOC,
+    validate: (payload) => payloadObject(payload),
+    handle: (ctx) => {
+      if (!requirePreview(ctx)) return
+      ctx.preview.hostWeb(ctx.frame.id)
     },
   },
   {

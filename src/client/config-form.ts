@@ -13,7 +13,7 @@ export interface SettingsSectionValue {
   local?: { enabled?: boolean; port?: number; [key: string]: unknown }
   remote?: { enabled?: boolean; maxConnectionsPerSource?: number; [key: string]: unknown }
   diagnostics?: { debug?: boolean; [key: string]: unknown }
-  preview?: { enabled?: boolean; [key: string]: unknown }
+  preview?: { enabled?: boolean; hostWeb?: boolean; [key: string]: unknown }
   [key: string]: unknown
 }
 

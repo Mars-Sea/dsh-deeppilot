@@ -24,6 +24,9 @@ export const DEVICE_SCOPES = [
   'schedule.manage',
   // 本机预览（能力 localPreview，0.9.18 起）：经预览连接访问电脑回环地址上的网页。
   'preview.open',
+  // 电脑端网页（能力 hostWeb，0.9.20 起）：经预览连接打开电脑上的 DSH 网页端（所有者权限），
+  // 并可授权任意非保留本机端口。另受设置页开关约束，开关默认关闭。
+  'hostweb.open',
 ] as const
 
 export type DeviceScope = (typeof DEVICE_SCOPES)[number]
@@ -139,11 +142,13 @@ export function normalizeDeviceScopes(value: unknown): DeviceScope[] {
  * 历代「全部权限」。App 配对时一直申请 DeviceScope 的全部取值，设置页也没有收窄权限的
  * 入口，所以存量记录恰好等于某一代全量，只说明「配对时后来的权限还不存在」，不是有意关闭：
  * - 0.8.3 之前：五项，还没有 `schedule.manage`；
- * - 0.9.18 之前：六项，还没有 `preview.open`。
+ * - 0.9.18 之前：六项，还没有 `preview.open`；
+ * - 0.9.20 之前：七项，还没有 `hostweb.open`。
  */
 const LEGACY_FULL_SCOPE_SETS: ReadonlyArray<readonly DeviceScope[]> = [
   ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register'],
   ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage'],
+  ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage', 'preview.open'],
 ]
 
 /**
@@ -166,10 +171,11 @@ export function upgradeLegacyFullScopes(value: unknown): DeviceScope[] | null {
  * 会判整帧无效、按「插件版本不兼容」停止重连。旧版全量设备载入及配对时会补上 `preview.open`，
  * 若照常列在主连接（及小组件连接）的 welcome 里，插件先升级、App 未升级的用户就会断连。
  * 只有新版 App 才会开预览连接，所以只在那里列出；权限判定本身不受影响。
+ * `hostweb.open` 同理：它只在预览连接上用得到，开预览连接的 App 已按字符串宽松解码 scopes。
  */
-const PREVIEW_ONLY_WELCOME_SCOPES: ReadonlySet<DeviceScope> = new Set(['preview.open'])
+const PREVIEW_ONLY_WELCOME_SCOPES: ReadonlySet<DeviceScope> = new Set(['preview.open', 'hostweb.open'])
 
-/** welcome 里下发的 scope 列表：非预览连接去掉旧 App 不认识的 `preview.open`。 */
+/** welcome 里下发的 scope 列表：非预览连接去掉旧 App 不认识的 `preview.open`、`hostweb.open`。 */
 export function welcomeScopes(scopes: Iterable<DeviceScope>, previewClient: boolean): DeviceScope[] {
   const list = [...scopes]
   return previewClient ? list : list.filter((scope) => !PREVIEW_ONLY_WELCOME_SCOPES.has(scope))

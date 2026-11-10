@@ -82,6 +82,7 @@ export type S2CType =
   | 's2c.preview.data'
   | 's2c.preview.credit'
   | 's2c.preview.closed'
+  | 's2c.preview.hostWeb'
 
 /**
  * 入站帧字面量 = 本 Bridge 实现的全部客户端帧。
@@ -148,6 +149,7 @@ export type C2SType =
   | 'c2s.preview.open'
   | 'c2s.preview.credit'
   | 'c2s.preview.close'
+  | 'c2s.preview.hostWeb'
 
 /** 帧在连接生命周期里允许出现的阶段。 */
 export type FrameStage = 'pre-auth' | 'authenticated'
