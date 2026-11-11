@@ -24,10 +24,14 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
   (the settings page's switch); the old top-level `debug` field is removed and
   must not be reintroduced.
 - Keep `/phone` and `/phone/health` compatible with the current iOS client.
+- `tests/fixtures/*.json` are the cross-client protocol fixtures (see
+  `tests/fixtures/README.md`). This repository is the only place they are
+  edited; the iOS app, the relay and the Android app vendor copies and fail a
+  drift test while a copy is stale. After changing a fixture, run
+  `scripts/sync-protocol-fixtures.sh` in each client checkout and commit there.
 - `tests/fixtures/auth-vectors.json` is the cross-language contract for the
-  `c2s.auth.prove` signature input. The iOS `AuthVectorTests` read it in place
-  from the sibling checkout. Change the canonical string only together with
-  `PROTOCOL.md`, the Swift mirror, and a regenerated fixture
+  `c2s.auth.prove` signature input. Change the canonical string only together
+  with `PROTOCOL.md`, the Swift and Kotlin mirrors, and a regenerated fixture
   (`npx tsx scripts/gen-auth-vectors.mts`, needs `swift` on macOS).
 
 ## Validation by change scope

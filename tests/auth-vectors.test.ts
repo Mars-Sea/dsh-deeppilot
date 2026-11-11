@@ -4,9 +4,10 @@ import test from 'node:test'
 import { canonicalAuthChallenge, verifyAuthProof, type AuthProofFields } from '../src/device-auth.ts'
 
 // tests/fixtures/auth-vectors.json is the cross-language contract for the v2
-// authentication proof. The iOS app reads the same file (AuthVectorTests), so a
-// change to the canonical string or the signature encoding on either side fails
-// a test on the other. Regenerate with scripts/gen-auth-vectors.mts.
+// authentication proof. The iOS and Android apps test against copies of the
+// same file (see tests/fixtures/README.md), so a change to the canonical string
+// or the signature encoding on any side fails a test on the others. Regenerate
+// with scripts/gen-auth-vectors.mts.
 interface Vectors {
   cases: Array<{ name: string; fields: AuthProofFields; canonical: string }>
   signers: Record<'node' | 'swift', { publicKey: string; signatures: Record<string, string> }>

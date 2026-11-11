@@ -1,9 +1,11 @@
 // Regenerates tests/fixtures/auth-vectors.json, the single cross-language
 // contract for the protocol-v2 authentication proof (PROTOCOL.md, auth.prove).
 //
-// Both the TypeScript Host (tests/auth-vectors.test.ts) and the iOS app
-// (deeppilot-ios/ios/Tests/AuthVectorTests.swift) read this file, so the
-// canonical string and the signature encoding cannot drift apart silently.
+// The TypeScript Host (tests/auth-vectors.test.ts), the iOS app
+// (AuthVectorTests.swift) and the Android app (AuthVectorsTest.kt) all test
+// against this file, the clients through vendored copies (see
+// tests/fixtures/README.md), so the canonical string and the signature
+// encoding cannot drift apart silently.
 //
 // The file holds two independent signers over the same canonical strings:
 //   node  - Node's crypto, what tests/auth-fixture.ts uses
@@ -11,7 +13,8 @@
 //
 // Run only when the canonical form changes on purpose. Regeneration draws new
 // throwaway keys, so every signature in the file changes; commit the result
-// together with the matching Swift mirror change.
+// together with the matching Swift and Kotlin mirror changes, then re-sync the
+// copies in each client repository.
 //   npx tsx scripts/gen-auth-vectors.mts
 import { execFileSync } from 'node:child_process'
 import { generateKeyPairSync, sign } from 'node:crypto'
