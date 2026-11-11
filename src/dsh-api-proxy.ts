@@ -191,6 +191,77 @@ export class DshApiProxy implements ApiProxyLike {
     }
   }
 
+  /** Optional services are read with ctx.get, which does not add a Cordis injection requirement. */
+  get goalViewAvailable(): boolean {
+    const projections = this.ctx.get('sessionProjections') as { summaryKeys?(): ReadonlySet<string>; onChanged?: unknown } | undefined
+    try {
+      return typeof this.session.projections === 'function' && typeof projections?.onChanged === 'function' &&
+        projections.summaryKeys?.().has('goal') === true
+    } catch { return false }
+  }
+
+  /** Add activation only for the exact durable goal ref; a cold session is never activated by this read. */
+  private goalValues(sessionId: string, values: Record<string, unknown>): Record<string, unknown> {
+    const projection = values.goal as { goal?: { id?: unknown; revision?: unknown } } | null | undefined
+    if (!projection?.goal) return values
+    const goals = this.ctx.get('goals') as { get?(agent: unknown): { id: string; revision: number; activation: unknown } | undefined } | undefined
+    const agents = this.ctx.get('agents') as { get?(id: string): unknown } | undefined
+    if (typeof goals?.get !== 'function' || typeof agents?.get !== 'function') return values
+    try {
+      const agent = agents.get(sessionId)
+      const live = agent === undefined ? undefined : goals.get(agent)
+      const activation = agent === undefined ? 'disarmed' : live && live.id === projection.goal.id && live.revision === projection.goal.revision ? live.activation : undefined
+      if (activation !== 'armed' && activation !== 'disarmed') return values
+      return { ...values, goal: { ...projection, activation } }
+    } catch { return values }
+  }
+
+  /**
+   * Goal baselines read for rows whose cold checkpoint summary omits the key,
+   * so later lists do not read every goal-less session again. A live goal
+   * change retires the entry; `changes` also discards a read it overtook.
+   */
+  private readonly coldGoals = new Map<string, { asOfSeq: number; goal?: unknown }>()
+  private coldGoalChanges = 0
+  private static readonly COLD_GOAL_READS = 8
+
+  private forgetColdGoal(sessionId: string): void {
+    this.coldGoalChanges++
+    this.coldGoals.delete(sessionId)
+  }
+
+  /** Omission is not a goal clear: pull the passive complete projection once per session. */
+  private async hydrateColdGoals(rows: PhoneSessionRow[]): Promise<void> {
+    if (!this.goalViewAvailable) return
+    const listed = new Set(rows.map(row => row.sessionId))
+    for (const id of this.coldGoals.keys()) if (!listed.has(id)) this.coldGoals.delete(id)
+    const missing: PhoneSessionRow[] = []
+    for (const row of rows) {
+      if (Object.hasOwn(row.projections?.values ?? {}, 'goal')) { this.coldGoals.delete(row.sessionId); continue }
+      const known = this.coldGoals.get(row.sessionId)
+      if (!known) { missing.push(row); continue }
+      if (Object.hasOwn(known, 'goal')) {
+        row.projections = { asOfSeq: known.asOfSeq, ...row.projections, values: { ...row.projections?.values, goal: known.goal } }
+      }
+    }
+    let next = 0
+    const read = async (): Promise<void> => {
+      while (next < missing.length) {
+        const row = missing[next++]!
+        const changes = this.coldGoalChanges
+        try {
+          const baseline = await this.session.projections({ sessionId: row.sessionId }, new AbortController().signal)
+          if (!baseline) continue
+          row.projections = baseline
+          if (changes !== this.coldGoalChanges) continue
+          this.coldGoals.set(row.sessionId, { asOfSeq: baseline.asOfSeq,
+            ...(Object.hasOwn(baseline.values, 'goal') ? { goal: baseline.values.goal } : {}) })
+        } catch { /* the rest of the list remains usable; retried on the next list */ }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(DshApiProxy.COLD_GOAL_READS, missing.length) }, read))
+  }
+
   private readonly commandApi: DshCommandApi
   get commands(): CommandsApiLike | undefined {
     if (!this.commandApi.available) return undefined
@@ -421,7 +492,12 @@ export class DshApiProxy implements ApiProxyLike {
       const value = await this.session.list({}, new AbortController().signal)
       // Keep worker identity internally so HostBridge can suppress notifications
       // as well as exclude these rows from the phone's session list.
-      return { items: value.items.map(toPhoneSessionRow) }
+      const rows = value.items.map(toPhoneSessionRow)
+      await this.hydrateColdGoals(rows)
+      for (const row of rows) {
+        if (row.projections?.values) row.projections = { ...row.projections, values: this.goalValues(row.sessionId, row.projections.values) }
+      }
+      return { items: rows }
     }),
     history: async (request) => this.call(async () => {
       const sessionId = request.payload!.sessionId
@@ -483,7 +559,10 @@ export class DshApiProxy implements ApiProxyLike {
     cancel: async (request) => this.call(() => this.session.cancel(request.payload!)),
     updateQueue: async (request) => this.call(() => this.session.updateQueue!(request.payload!)),
     attachment: async (request) => this.call(() => this.session.attachment(request.payload!)),
-    projections: async (request) => this.call(() => this.session.projections(request.payload!, new AbortController().signal)),
+    projections: async (request) => this.call(async () => {
+      const baseline = await this.session.projections(request.payload!, new AbortController().signal)
+      return baseline ? { ...baseline, values: this.goalValues(request.payload!.sessionId, baseline.values) } : baseline
+    }),
   }
 
   readonly workspace: ApiProxyLike['workspace'] = {
@@ -539,6 +618,9 @@ export class DshApiProxy implements ApiProxyLike {
 
   private async *mux(signal: AbortSignal): AsyncIterable<MuxFrameLike> {
     const queue = new AsyncFrameQueue(signal)
+    // Goal changes while no listener was attached were not observed.
+    this.coldGoalChanges++
+    this.coldGoals.clear()
     const offEvent = this.ctx.on('session/event' as never, ((session: { id: string; header?: { origin?: string } }, event: unknown) => {
       queue.push({
         type: 'session/event', sessionId: String(session.id),
@@ -560,11 +642,17 @@ export class DshApiProxy implements ApiProxyLike {
       agent: { session: { id: string } }
     }) => queue.push({ type: 'session/assistant-stream-disposed', sessionId: String(agent.session.id) })) as never, { global: true })
     const projections = this.ctx.get('sessionProjections') as {
-      onChanged?(listener: (session: { id: string }, key: string, value: unknown) => void): () => void
+      onChanged?(listener: (session: { id: string }, key: string, value: unknown, seq?: number) => void): () => void
     } | undefined
-    const offProjection = projections?.onChanged?.((session, key, value) => {
-      queue.push({ type: 'session/projection', sessionId: String(session.id), key, value })
+    const offProjection = projections?.onChanged?.((session, key, value, seq) => {
+      const sessionId = String(session.id)
+      if (key === 'goal') this.forgetColdGoal(sessionId)
+      const projected = key === 'goal' ? this.goalValues(sessionId, { goal: value }).goal : value
+      queue.push({ type: 'session/projection', sessionId, key, value: projected, seq })
     })
+    const offGoalActivation = this.ctx.on('goal/activation-changed' as never, ((payload: { sessionId: string; goal?: unknown }) => {
+      queue.push({ type: 'goal/activation-changed', sessionId: String(payload.sessionId), value: payload.goal })
+    }) as never, { global: true })
     const offSkills = this.ctx.on('skills/change' as never, (() => {
       queue.push({ type: 'skills/changed' })
     }) as never, { global: true })
@@ -588,6 +676,7 @@ export class DshApiProxy implements ApiProxyLike {
       offAssistantStream()
       offAgentDisposed()
       offProjection?.()
+      offGoalActivation()
       offSkills()
       offCommands.forEach(dispose => dispose())
       await disposeInteractions?.()

@@ -1,0 +1,9 @@
+{
+  "active": { "id": "goal-1", "revision": 2, "objective": "完成跨回合目标", "phase": "active", "activation": "armed", "roundsStarted": 1, "maxGoalRounds": 8, "createdAt": 1794312000000, "updatedAt": 1794312060000 },
+  "disarmed": { "id": "goal-1", "revision": 2, "objective": "完成跨回合目标", "phase": "active", "activation": "disarmed", "roundsStarted": 1, "maxGoalRounds": 8, "createdAt": 1794312000000, "updatedAt": 1794312060000 },
+  "paused": { "id": "goal-1", "revision": 3, "objective": "完成跨回合目标", "phase": "paused", "activation": "disarmed", "roundsStarted": 1, "maxGoalRounds": 8, "createdAt": 1794312000000, "updatedAt": 1794312120000 },
+  "blocked": { "id": "goal-1", "revision": 4, "objective": "完成跨回合目标", "phase": "blocked", "activation": "disarmed", "roundsStarted": 3, "maxGoalRounds": 8, "createdAt": 1794312000000, "updatedAt": 1794312180000, "blockedReason": { "code": "dependency-unavailable", "message": "等待依赖服务恢复" } },
+  "complete": { "id": "goal-1", "revision": 5, "objective": "完成跨回合目标", "phase": "complete", "activation": "disarmed", "roundsStarted": 4, "maxGoalRounds": 8, "createdAt": 1794312000000, "updatedAt": 1794312240000 },
+  "unknownActivation": { "id": "goal-2", "revision": 1, "objective": "兼容未提供 activation 的 Host", "phase": "active", "roundsStarted": 0, "maxGoalRounds": 3, "createdAt": 1794312300000, "updatedAt": 1794312300000 },
+  "cleared": null
+}

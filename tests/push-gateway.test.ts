@@ -357,6 +357,36 @@ test('中继 401 触发自愈：丢凭据、重新注册', async () => {
   }
 })
 
+test('fanOut applies per-device sound and quiet hours to completion notices only', async () => {
+  const h = await makeGateway({ push: { provider: 'relay', relayUrl: 'https://relay.example', relayToken: 'tok' }, devices: [
+    { deviceName: 'Silent' }, { deviceName: 'Legacy' }, { deviceName: 'Quiet' },
+  ] })
+  try {
+    const [silent, legacy, quiet] = h.store.list()
+    h.store.setPushToken(silent!.deviceId, 'a'.repeat(64), 'production', undefined, Date.now(), { soundEnabled: false })
+    h.store.setPushToken(legacy!.deviceId, 'b'.repeat(64), 'production', undefined, Date.now())
+    h.store.setPushToken(quiet!.deviceId, 'c'.repeat(64), 'production', undefined, Date.now(), { soundEnabled: false,
+      quietHours: { enabled: true, startMinutes: 0, endMinutes: 0, timeZone: 'Pacific/Honolulu' } })
+    const completion: string[] = ['goal.completed', 'turn.completed']
+    for (const category of ['goal.completed', 'turn.completed', 'approval.required', 'question.asked', 'session.error'] as const) {
+      h.gateway.fanOut({ category, notificationId: category, sessionId: 's', title: 'Update', body: 'Work' })
+    }
+    await settle()
+    const calls = h.fetchCalls.map(call => call.body as any)
+    const sent = (token: string) => calls.filter(call => call.deviceToken === token.repeat(64)).map(call => call.notification)
+    assert.equal(calls.length, 13)
+    // Quiet hours drop completion notices; requests and failures still arrive, audibly.
+    assert.deepEqual(sent('c').map(n => n.category).sort(), ['approval.required', 'question.asked', 'session.error'])
+    assert.equal(sent('c').every(n => n.soundEnabled === undefined), true)
+    for (const n of sent('a')) assert.equal(n.soundEnabled, completion.includes(n.category) ? false : undefined, n.category)
+    assert.equal(sent('b').every(n => n.soundEnabled === undefined), true)
+  } finally {
+    await h.gateway.dispose()
+    await h.store.drain()
+    await h.cleanup()
+  }
+})
+
 async function settle(): Promise<void> {
   for (let i = 0; i < 12; i += 1) await new Promise((resolve) => setImmediate(resolve))
 }

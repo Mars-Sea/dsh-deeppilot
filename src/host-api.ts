@@ -359,6 +359,8 @@ export interface MuxFrameLike {
   sessionId?: string
   event?: SessionEventLike
   key?: string
+  /** Host projection watermark for ordering live changes against asynchronous baselines. */
+  seq?: number
   value?: unknown
   approvalId?: string
   callId?: string
@@ -391,6 +393,8 @@ export function unwrapStreamItem(item: MuxFrameLike | ApiStreamItemLike): MuxFra
 }
 
 export interface ApiProxyLike {
+  /** Host has registered the goal summary projection and its passive baseline/live feed. */
+  readonly goalViewAvailable?: boolean
   /** 真实宿主反射声明了助手流帧时才为 true；旧代理缺省关闭。 */
   readonly assistantStreamAvailable?: boolean
   commands?: CommandsApiLike

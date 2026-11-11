@@ -8,13 +8,39 @@ export function liveActivityState(session?: SessionSummary): LiveActivityState {
   const done = Math.min(total, Math.max(0, session?.todos?.done ?? 0))
   const task = session?.todoItems?.find(item => item.status === 'in_progress') ??
     session?.todoItems?.find(item => item.status === 'pending')
+  const goal = session?.goal
+  // Keep this projection identical to the iOS ContentState.project rule:
+  // terminal/paused goals win, pending interactions win over disarmed, and a
+  // running turn is evidence of execution even when activation is unknown.
+  const phase: LiveActivityState['phase'] = goal
+    ? goal.phase === 'complete' ? 'ended' : goal.phase === 'blocked' ? 'failed' :
+      goal.phase !== 'active' ? 'unavailable' :
+      session?.pendingApproval ? 'approval' : session?.pendingQuestion ? 'question' :
+      goal.activation === 'disarmed' ? 'unavailable' :
+      session?.status === 'running' || goal.activation === 'armed' ? 'running' : 'unavailable'
+    : !session || total === 0 ? 'unavailable' : session.pendingApproval ? 'approval' :
+      session.pendingQuestion ? 'question' : session.status === 'running' ? 'running' :
+      session.status === 'idle' ? 'ended' : session.status === 'error' ? 'failed' : 'unavailable'
   return {
+    ...(goal ? { goalId: goal.id, goalText: Array.from(goal.objective).slice(0, 160).join(''), goalPhase: goal.phase,
+      goalRounds: goal.roundsStarted, goalMaxRounds: goal.maxGoalRounds, goalStartedAt: goal.createdAt } : {}),
     title: Array.from(session?.title ?? '').slice(0, 100).join(''),
     task: Array.from(session?.activity?.trim() || task?.content || '').slice(0, 160).join(''), done, total,
-    phase: !session || total === 0 ? 'unavailable' : session.pendingApproval ? 'approval' :
-      session.pendingQuestion ? 'question' : session.status === 'running' ? 'running' :
-      session.status === 'idle' ? 'ended' : session.status === 'error' ? 'failed' : 'unavailable',
+    phase,
   }
+}
+
+/** Goal pauses/disarming are non-executing updates, never terminal completion. */
+export function liveActivityEnded(state: LiveActivityState): boolean {
+  if (state.goalId) return state.goalPhase === 'complete' || state.goalPhase === 'blocked'
+  return state.phase === 'ended' || state.phase === 'failed' || state.phase === 'unavailable'
+}
+
+function stateForRegistration(session: SessionSummary | undefined, goalId?: string): LiveActivityState | undefined {
+  if (goalId && session && session.goal === undefined) return undefined // incomplete baseline
+  if (goalId && session?.goal?.id !== goalId) return liveActivityState()
+  // Legacy registrations without an explicit goal binding retain their turn/todo lifecycle.
+  return liveActivityState(goalId || !session ? session : { ...session, goal: undefined })
 }
 
 /** Persist terminal state before coalescing so a rapid next round cannot revive an activity. */
@@ -33,8 +59,8 @@ export class LiveActivityPushManager {
     for (const device of this.devices()?.list() ?? []) {
       const r = device.liveActivity
       if (!r) continue
-      const state = liveActivityState(this.latest.get(r.sessionId))
-      if (state.phase === 'ended' || state.phase === 'failed' || state.phase === 'unavailable') {
+      const state = stateForRegistration(this.latest.get(r.sessionId), r.goalId)
+      if (state && liveActivityEnded(state)) {
         this.devices()?.endLiveActivity(device.deviceId, r.token, state)
       }
     }
@@ -54,7 +80,8 @@ export class LiveActivityPushManager {
         devices.clearLiveActivity(device.deviceId, r.activityId, r.token)
         continue
       }
-      const state = r.endedState ?? liveActivityState(this.latest.get(r.sessionId))
+      const state = r.endedState ?? stateForRegistration(this.latest.get(r.sessionId), r.goalId)
+      if (!state) continue
       const fingerprint = JSON.stringify(state)
       if (this.sent.get(key) === fingerprint) continue
       // Never send a queued registration after it has rotated or been removed.

@@ -19,6 +19,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import { inQuietHours, isCompletionCategory } from './notification-preferences.ts'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -222,6 +223,12 @@ export class PushGateway implements PushOutlet {
           }
           return false
         }
+        if (isCompletionCategory(notification.category) && inQuietHours(registration.preferences)) {
+          if (this.deps.config().diagnostics?.debug === true) {
+            this.deps.log(`push skip "${deviceDisplayName(device)}": category ${notification.category} in quiet hours`)
+          }
+          return false
+        }
         if (registration.categories?.[notification.category] === false) {
           if (this.deps.config().diagnostics?.debug === true) {
             this.deps.log(`push skip "${deviceDisplayName(device)}": category ${notification.category} muted`)
@@ -243,7 +250,8 @@ export class PushGateway implements PushOutlet {
       const hasEnrollKey = Boolean(this.enrollmentCell.enrollKey)
       for (const device of candidates) {
         const registration = device.apns!
-        void send({ deviceToken: registration.token, environment: registration.environment, notification })
+        void send({ deviceToken: registration.token, environment: registration.environment,
+          notification: { ...notification, ...(registration.preferences && isCompletionCategory(notification.category) ? { soundEnabled: registration.preferences.soundEnabled } : {}) } })
           .then(({ outcome, reason }) => {
             this.deps.log(`push(${transport}) ${notification.category} → "${deviceDisplayName(device)}" [${registration.environment}] = ${outcome}${reason ? ' (' + reason + ')' : ''}`)
             if (shouldPrunePushToken(outcome, reason)) {

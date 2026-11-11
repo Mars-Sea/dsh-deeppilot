@@ -96,7 +96,7 @@ function alertPayload(notification: PushNotification): Record<string, unknown> {
         title: notification.title.slice(0, 120),
         body: notification.body.slice(0, 200),
       },
-      sound: 'default',
+      ...(notification.soundEnabled === false ? {} : { sound: 'default' }),
       category: notification.category,
       // 让 Notification Service Extension 有机会按类别给横幅附上阶段缩略图。
       'mutable-content': 1,

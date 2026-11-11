@@ -7,6 +7,7 @@ import {
 } from './dispatch-journal.ts'
 import { randomUUID } from 'node:crypto'
 import { notificationPlainText } from './notification-text.ts'
+import { GoalProjectionTracker } from './goal-projection.ts'
 import type { Envelope, MessageProjection, NotifyCategory, PendingSnapshotPayload, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus, SessionQueueItem, SessionUsageStats, WelcomeCapabilities } from './protocol.ts'
 import {
   isSubagentRow,
@@ -130,6 +131,7 @@ let BRIDGE_SEQ = 0;
 export class HostBridge {
   readonly id = ++BRIDGE_SEQ;
   private summaries = new Map<string, SessionSummary>()
+  private readonly goals = new GoalProjectionTracker()
   /**
    * 列表推送节流（连接传输第二批 P5）。每个会话最近一次推出去的摘要指纹，
    * 用来丢掉内容完全相同的重复推送；只改了 `stats` 的变化按 SUMMARY_STATS_THROTTLE_MS
@@ -336,7 +338,9 @@ export class HostBridge {
         ...approvalExtras,
         ts: Date.now(),
       },
-      (sink) => this.isViewedBy(sink, args.sessionId),
+      // Background clients can keep their session subscription during the socket
+      // grace period; deliver goals to all sinks so their local foreground policy decides.
+      args.category === 'goal.completed' ? undefined : (sink) => this.isViewedBy(sink, args.sessionId),
     );
     this.fanOutPush({
       notificationId: args.notificationId,
@@ -353,6 +357,9 @@ export class HostBridge {
     if (this.subagentSessionIds.has(sessionId)) return;
 
     const row = this.summaries.get(sessionId);
+    // A goal spans turns. Its completion has one separate durable transition;
+    // failures remain actionable even while a goal is unfinished.
+    if (ok && this.goals.inGoalTurn(sessionId)) return;
     const title = ok ? '任务完成' : '任务异常结束';
     // 异常结束时优先携带本轮错误原因，避免拿上一轮旧回复或空串充数。
     const body = (!ok && errorText)
@@ -615,6 +622,7 @@ export class HostBridge {
           this.lastAssistantText.delete(sessionId);
           this.failedSessionIds.delete(sessionId);
           const row = this.summaries.get(sessionId);
+          this.goals.turnStarted(sessionId);
           if (row && row.status === 'error') row.status = 'running';
         }
         const projection = projectEvent(sessionId, event);
@@ -650,11 +658,20 @@ export class HostBridge {
           } else {
             this.emitTurnCompletedNotify(sessionId, ok, errorText);
           }
+          this.goals.turnEnded(sessionId);
+        }
+        break;
+      }
+      case 'goal/activation-changed': {
+        const sessionId = String(frame.sessionId ?? '');
+        if (this.goals.activate(sessionId, frame.value)) {
+          const row = this.summaries.get(sessionId);
+          if (row) { row.goal = this.goals.get(sessionId); this.pushSummary(row); }
         }
         break;
       }
       case 'session/projection': {
-        const p = frame as { sessionId?: string; key?: string; value?: unknown };
+        const p = frame as { sessionId?: string; key?: string; value?: unknown; seq?: number };
         if (!p.sessionId) break;
         if (p.key === 'workingDirectory' || p.key === 'agentPreset') {
           this.record('s2c.skills.changed', { sessionId: p.sessionId });
@@ -673,7 +690,7 @@ export class HostBridge {
           this.record('s2c.models.changed', { sessionId: p.sessionId, ...(current ? { current } : {}) });
         }
         if (p.key === 'inbox') this.applyInbox(p.sessionId, p.value, 'live');
-        this.applyProjection(p.sessionId, String(p.key ?? ''), p.value);
+        this.applyProjection(p.sessionId, String(p.key ?? ''), p.value, 'live', p.seq);
         break;
       }
       case 'approval/requested': {
@@ -790,6 +807,9 @@ export class HostBridge {
         if (this.subagentSessionIds.has(row.sessionId)) continue
         if (row.running) this.failedSessionIds.delete(row.sessionId);
         const summary = toSummary(row, this.approvals, this.questions, workspaceBySession.get(row.sessionId));
+        this.goals.apply(row.sessionId, row.projections?.values?.goal, 'baseline', row.projections?.asOfSeq);
+        const goal = this.goals.get(row.sessionId);
+        if (goal !== undefined) summary.goal = goal;
         if (!row.running && this.failedSessionIds.has(row.sessionId)) {
           summary.status = 'error';
         }
@@ -820,6 +840,7 @@ export class HostBridge {
         if (!next.has(id)) this.lastAssistantText.delete(id)
       }
       for (const id of removedIds) {
+        this.goals.forget(id)
         this.failedSessionIds.delete(id)
         this.retryActivities.delete(id)
       }
@@ -933,8 +954,19 @@ export class HostBridge {
     sink.push('s2c.session.queue', { sessionId, items: queue.items });
   }
 
-  private applyProjection(sessionId: string, key: string, value: unknown): void {
+  private applyProjection(sessionId: string, key: string, value: unknown, origin: 'baseline' | 'live' = 'baseline', seq?: number): void {
     const row = this.summaries.get(sessionId);
+    if (key === 'goal') {
+      if (this.subagentSessionIds.has(sessionId)) return;
+      const result = this.goals.apply(sessionId, value, origin, seq);
+      if (!result.accepted) return;
+      if (row) { row.goal = this.goals.get(sessionId); this.pushSummary(row); }
+      if (result.completed) this.emitNotify({
+        sessionId, category: 'goal.completed', title: '目标完成', body: result.completed.objective,
+        notificationId: 'goal-' + result.completed.id + ':' + sessionId,
+      });
+      return;
+    }
     if (!row) return;
     if (key === 'title') {
       row.title = typeof value === 'string' ? value : '';
@@ -1154,7 +1186,7 @@ export class HostBridge {
       }
       for (const [key, value] of Object.entries(baseline.values ?? {})) {
         if (key === 'inbox') this.applyInbox(sessionId, value, 'baseline');
-        this.applyProjection(sessionId, key, value);
+        this.applyProjection(sessionId, key, value, 'baseline', baseline.asOfSeq);
       }
     } catch (error) {
       this.diagnostic('sessions.projections threw: ' + String((error as { message?: unknown })?.message ?? error));
@@ -1430,6 +1462,7 @@ export class HostBridge {
         (response.result.value.archivedSessionIds ?? []).map(String),
       )
       this.summaries.delete(sessionId)
+      this.goals.forget(sessionId)
       this.lastAssistantText.delete(sessionId)
       this.forgetSummaryPush(sessionId)
       this.record('s2c.sessions.delta', { upserted: [], removedIds: [sessionId] })

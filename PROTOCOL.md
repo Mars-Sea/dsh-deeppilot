@@ -284,7 +284,7 @@ APNs 必须同时具备 notifications.register 和对应通知类别的内容权
   "serverVersion": "0.1.0",
   "deviceId": "<authenticated device id>",
   "scopes": ["sessions.read", "prompt.send"],
-  "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "pendingSnapshot": true, "notifyAllCategories": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true, "widgetPush": true, "deviceRevoke": true },
+  "capabilities": { "historyPaging": true, "replay": true, "approvals": true, "questions": true, "pendingSnapshot": true, "notifyAllCategories": true, "goalView": true, "goalNotifications": true, "models": true, "sessionManagement": true, "projectSelection": true, "push": true, "widgetPush": true, "deviceRevoke": true },
   "cursor": 1042,
   "resumed": true,
   "routes": {
@@ -304,6 +304,11 @@ APNs 必须同时具备 notifications.register 和对应通知类别的内容权
 - 客户端可以据此在同一网络下先走局域网、失败或在外时走 `remote`；经局域网配对的设备也因此获得公网地址。
 - 局域网证书密钥重建后指纹会变：经 `remote` 认证的连接收到的新 `tlsFingerprint` 可以直接替换本机保存的值，
   无需重新配对。只能走局域网、拿不到 `remote` 的设备仍须重新配对。
+
+`goalView` 与 `goalNotifications` 为可选 v2 能力位。`goalView=true` 表示 Host 提供权威的
+`goal` projection，Bridge 可在 SessionSummary 中携带目标；缺失或 false 时客户端隐藏目标界面，
+不得从消息流猜测 `/goal`。`goalNotifications=true` 表示 Bridge 实现 `goal.completed` 通知与
+`c2s.push.register.preferences` 设备偏好。旧 Bridge 缺失此位时，完成提醒的声音和免打扰设置只保证本机生效。
 
 ## 3. 会话列表
 
@@ -339,7 +344,18 @@ SessionSummary：
   },
   "workspaceLabel": "deeppilot-demo",
   "workspaceId": "workspace-…",
-  "workspacePath": "/Users/sea/Development/deeppilot-demo"
+  "workspacePath": "/Users/sea/Development/deeppilot-demo",
+  "goal": {
+    "id": "goal-…",
+    "revision": 2,
+    "objective": "把登录流程迁移到新的会话服务",
+    "phase": "active",
+    "activation": "armed",
+    "roundsStarted": 1,
+    "maxGoalRounds": 8,
+    "createdAt": 1756000000000,
+    "updatedAt": 1756000300000
+  }
 }
 ```
 
@@ -357,6 +373,31 @@ completed），供会话详情页渲染任务进度；无任务时为 null 或�
 cacheWriteTokens)`；输入总量 = `inputTokens + cacheReadTokens + cacheWriteTokens`。
 该字段为可选字段：未安装统计 projection 的旧版 Host 或尚未产生任何统计的会话
 会缺省或为 null，客户端必须容忍并回退。
+
+`goal` 为可选的当前目标投影（`goalView` 能力）：省略表示 Bridge 不支持或尚未取得权威值，
+`null` 表示目标已被清除。两者客户端都必须容忍，且不能据此生成完成通知。SessionSummary 是完整替换，
+新摘要缺省 `goal` 时客户端也不再展示上一份摘要中的目标；Bridge 在权威来源尚未返回时自行保留已知值。字段形状：
+
+```json
+{
+  "id": "goal-…", "revision": 2, "objective": "把登录流程迁移到新的会话服务",
+  "phase": "blocked", "activation": "disarmed", "roundsStarted": 1, "maxGoalRounds": 8,
+  "createdAt": 1756000000000, "updatedAt": 1756000300000,
+  "blockedReason": { "code": "dependency-unavailable", "message": "等待依赖服务恢复" }
+}
+```
+
+- `id` 稳定标识一个目标；`revision` 为该目标的 CAS 版本，同一 `id` 的旧 `revision` 不得覆盖新值。
+- `phase` 取 active | paused | blocked | complete；`activation` 是进程内是否允许自动继续的
+  瞬时状态（armed | disarmed），与 `phase` 独立，缺省表示未知，不得推断为 armed。
+- `roundsStarted` / `createdAt` / `updatedAt` 为非负整数，`maxGoalRounds` 为正整数（时间戳为 epoch ms）；
+  `blockedReason` 只在 `phase=blocked` 时存在。未知 `phase` / `activation` 字符串按未知状态容错，
+  不得让整条 SessionSummary 解码失败。
+- 目标可跨多个回合：`s2c.sessions.snapshot` 与 `s2c.sessions.delta` 都携带完整 `goal`，
+  客户端原地替换，不重排会话或消息。Bridge 只镜像 Host 的 `goal` projection 与同 `id`/`revision`
+  的 `goal/activation-changed`，不解析消息流、不激活冷会话。
+- 目标跨回合继续时，Bridge 抑制该目标回合的普通 `turn.completed`；同一目标从非 `complete` 转为 `complete` 的
+  实时转换单独产生一次 `goal.completed`。基线读取、重放或插件重启时读到 `complete` 不产生完成通知。
 
 列表变更推送（握手后自动开始，无需订阅）：
 
@@ -800,17 +841,25 @@ Web 或另一 Client 先回答时，Gateway cancellation 会让插件发布对�
 } }
 ```
 
-- category：turn.completed | approval.required | question.asked | session.error。
-- `welcome.capabilities.notifyAllCategories=true` 表示 Bridge 会为上述四类事件统一发送
-  `s2c.notify`。此时客户端只能从 `s2c.notify` 触发横幅、声音等通知展示，不得再从
+- category：turn.completed | goal.completed | approval.required | question.asked | session.error。
+- `welcome.capabilities.notifyAllCategories=true` 表示 Bridge 统一通过 `s2c.notify` 发送通知；
+  `goal.completed` 另外由 `goalNotifications=true` 声明。此时客户端只能从 `s2c.notify` 触发横幅、声音等通知展示，不得再从
   `s2c.session.event(turn.end)`、`s2c.pending.approval` 或 `s2c.pending.question` 重复展示。
+- `goal.completed` 与单轮完成分开：仅当 `goalView=true` 且实时观察到同一 `(sessionId, goal.id)`
+  从非 `complete` 转为 `complete` 时发一次；基线、resume 重放、插件重启读到 `complete` 都不发。
+  其 `notificationId` 稳定包含 `sessionId` 与 `goalId`，`body` 为目标正文；目标是普通完成级别，
+  不设 `interruption-level: time-sensitive`。目标进行中的回合不发普通 `turn.completed`，
+  其后的普通回合从已完成的旧目标开始时恢复 `turn.completed`；失败始终发 `session.error`。
+  与「正在查看会话」的过滤不同，`goal.completed` 会投递给所有在线 sink（包括正在查看的设备），
+  由客户端按前台/后台策略决定是否展示，以覆盖后台宽限期内仍在线、但 APNs 被抑制的窗口。
 - `s2c.session.event` 和 `s2c.pending.*` 仍是会话内容、待处理状态及回答操作的权威数据源；
   `s2c.notify` 只是面向用户的展示投影。Bridge 必须先记录权威事件，再记录对应 notify，
   以保证按 seq 重放时状态先于通知到达。
 - `notifyAllCategories` 为 false 或缺失时，客户端可从 turn.end / pending.* 做回退；
   一旦能力为 true，就必须关闭这些回退分支。
-- 触发规则（F-9）：对未打开该会话的在线设备，在 turn 结束、出现
-  pending.approval / pending.question 或会话 error 时发送；离线设备走同事实的 APNs 投影。
+- 触发规则（F-9）：普通类别对未打开该会话的在线设备，在 turn 结束、出现
+  pending.approval / pending.question 或会话 error 时发送；`goal.completed` 例外，投递给所有在线
+  sink。离线设备走同事实的 APNs 投影，并按设备类别开关与 `preferences` 过滤。
 - 计划任务按需完成通知：`schedulesHost=true` 的 Host 上，插件向计划任务会话提供 Agent
   工具 `deeppilot_skip_completion_notice`。由计划任务投递触发、且用户本轮未插话的一轮，
   若 Agent 调用了该工具并成功结束，Bridge 不发这一轮的 `turn.completed` notify 与 APNs；
@@ -840,7 +889,11 @@ token 后发送：
 { "type": "c2s.push.register", "id": "pu-1", "payload": {
   "deviceToken": "<64 位 hex 设备 token>",
   "environment": "development",
-  "categories": { "turn.completed": true, "approval.required": true },
+  "categories": { "turn.completed": true, "goal.completed": true, "approval.required": true },
+  "preferences": {
+    "soundEnabled": false,
+    "quietHours": { "enabled": true, "startMinutes": 1380, "endMinutes": 480, "timeZone": "Asia/Shanghai" }
+  },
   "enrollKey": "<可选：分发版 App 内置的注册密钥>"
 } }
 { "type": "s2c.ack", "id": "pu-1", "payload": { "enabled": true } }
@@ -854,7 +907,21 @@ token 后发送：
 - `environment`：development | production。设备按自身构建自动上报
   （调试=sandbox，TestFlight/App Store=production），Bridge 按设备逐一路由。
 - `categories` 可选：设备端按类别的开关镜像；缺省视为全开。Bridge 对离线设备
-  推送时必须尊重该开关。
+  推送时必须尊重该开关，包括 `goal.completed`。
+- `preferences` 可选（能力 `goalNotifications`）：设备级提醒偏好，按设备持久化并随
+  token 轮换保留；省略表示保留该设备上次的值，不得重置为默认。形状：
+
+  - `soundEnabled`（必填布尔）：只作用于完成类通知（`turn.completed`、`goal.completed`）。false 时
+    这两类的 APNs / Relay `aps` 不带 `sound`，本机的本地通知也不设声音；`approval.required`、
+    `question.asked`、`session.error` 始终带默认声音。缺省 `soundEnabled` 的旧注册沿用历史行为
+    （全部带默认声音）。新 App 默认上报 false。
+  - `quietHours`（可选）：`enabled` 布尔；`startMinutes` / `endMinutes` 为 0–1439 的本地墙上
+    分钟，`[start, end)` 半开区间，跨午夜由 start > end 表示，两者相等表示全天；`timeZone` 为
+    IANA 时区名，按投递时刻在该时区的墙上时间判断，DST 由运行时区数据决定。字段类型错误或
+    时区无效回 `E_PROTOCOL`。
+  - 免打扰同样只作用于完成类通知：命中时 Bridge 不发 `turn.completed` 与 `goal.completed` 的
+    alert 推送，App 也不弹对应的本地通知；待审批、提问和会话出错照常投递，Live Activity 更新
+    推送照常发送。Bridge 未声明 `goalNotifications=true` 时 App 不上报该字段，并提示偏好仅本机生效。
 - 投递前提：目标设备必须持有 `notifications.register` scope——即使持有 APNs
   token，scope 被撤销的设备也不接收离线推送；同时必须满足上述通知类别的内容权限。
 - `enrollKey` 可选：分发者内置到 App 的共享注册密钥。Bridge 在
@@ -863,10 +930,11 @@ token 后发送：
 - 每次握手成功后 App 应重新发送（token 与开关都可能变化）；重复注册幂等。
 - 能力为 false 时请求回 `E_UNSUPPORTED`。
 
-**推送触发规则**：与 notify 帧相同的事件（turn 完成/异常、待审批、提问、会话出错），
+**推送触发规则**：与 notify 帧相同的事件（turn 完成、目标完成/异常、待审批、提问、会话出错），
 对「已持有 token 且当前无活跃 WebSocket 连接」的设备经 APNs 下发；在线设备的
-通知仍走 WS 帧 + 本地通知路径，两条通道互斥以避免重复横幅。推送不计入 seq
-游标、不参与重放（重连后的离线事件由 resume 重放覆盖）。
+通知仍走 WS 帧 + 本地通知路径，两条通道互斥以避免重复横幅。离线推送的 `PushNotification`
+携带可选 `soundEnabled`，仅完成类通知由设备 `preferences` 投影；Relay 与 APNs 都必须按它决定是否带
+`aps.sound`。推送不计入 seq 游标、不参与重放（重连后的离线事件由 resume 重放覆盖）。
 
 ### 小组件刷新推送（WidgetKit）
 
@@ -1105,12 +1173,17 @@ APNs environment 若提供只接受 development/production，categories 的值�
 
 ## Live Activity updates (optional protocol-v2 extension)
 
-Live Activities are limited to sessions with a nonempty TODO checklist: use
-`todos.total > 0`, falling back to `todoItems.length` only when the count is
-absent. Starting also requires running or pending-interaction state. Ordinary
-chat does not create an activity. Clearing the checklist projects `unavailable`
-and ends an existing activity; completing a round with a retained checklist
-continues to use `ended`. This policy does not change protocol-v2 wire fields.
+A Live Activity starts for either a nonempty TODO checklist (`todos.total > 0`,
+falling back to `todoItems.length` only when the count is absent) or an active
+goal (`goalView=true` and `goal.phase` is not terminal). Checklist-only starting
+also requires running / pending-interaction state. A goal opened in the foreground
+can show its waiting or paused state without claiming execution. Ordinary chat without a checklist or goal does not
+create an activity. Clearing the checklist with no goal projects `unavailable`
+and ends the activity; a goal outlives idle turns. A goal reaching `complete`
+or `blocked` ends the activity; `paused` / `disarmed` / unknown activation are
+non-executing updates, never a completion. A new `goal.id` in the same session
+ends the old activity instead of retargeting it, and a fresh activity is
+registered for the new goal. This policy adds only optional protocol-v2 fields.
 
 `WelcomeCapabilities.liveActivityPush: true` advertises registration support;
 `push` still indicates whether the configured delivery provider is ready.
@@ -1120,10 +1193,16 @@ it is absent and may retain foreground-only ActivityKit updates.
 - `c2s.liveActivity.register` → `s2c.ack { enabled: boolean }`: payload contains
   `activityId` (1–128 characters), `sessionId`, `deviceToken` (32–512 hex
   characters), `environment` (`development` or `production`), and optional
-  `enrollKey`. This is the individual ActivityKit **update** token, never an
-  alert, WidgetKit, or push-to-start token. Requires `notifications.register`,
-  `sessions.read`, and `interactions.respond`; authorization is rechecked after
-  enrollment. The session must exist. An activity cannot change sessions.
+  `goalId` (1–128 characters) and `enrollKey`. This is the individual ActivityKit
+  **update** token, never an alert, WidgetKit, or push-to-start token. Requires
+  `notifications.register`, `sessions.read`, and `interactions.respond`;
+  authorization is rechecked after enrollment. The session must exist. An activity
+  cannot change sessions. `goalId` binds the registration to one exact goal;
+  omitting it on a new activity retains legacy checklist-only behavior. Token
+  rotation for an already-bound activity retains its binding when omitted.
+  If the session's goal
+  no longer matches the registered `goalId`, the Bridge ends that registration
+  with a content-free `unavailable` state rather than projecting half a goal.
 - `c2s.liveActivity.unregister` → `s2c.ack {}`: `{ activityId }`, scoped to the
   authenticated device. A stale activity ID cannot remove a newer registration.
 - One registration per device; a new activity replaces the old registration.
@@ -1132,25 +1211,38 @@ it is absent and may retain foreground-only ActivityKit updates.
   persisted before batching and cannot be revived by a subsequent round.
 
 Push delivery adds `kind: "liveactivity"`, `event: "update" | "end"`, `timestamp`
-(Unix seconds), and `contentState: { title, task, done, total, phase }`. Title and
-current-task text (current tool operation when available, otherwise the checklist item) are limited to 100 and 160 Unicode code points. Counts are
-nonnegative integers, with `done <= total`; phase is `running`, `approval`,
-`question`, `ended`, `failed`, or `unavailable`. `failed` is projected when the
-session status is `error` and, like `ended` and `unavailable`, is terminal (sent
-as an `end` event). A client that does not know `failed` must treat it as
-`unavailable`. Deploy order: Relay, then plugin, then App; an App that predates
-`failed` shows an untranslated label. End does not imply all todos completed.
+(Unix seconds), and `contentState: { title, task, done, total, phase }` plus optional
+goal fields `goalId` (≤128 chars), `goalText` (≤160 code points), `goalPhase`
+(`active` | `paused` | `blocked` | `complete`), `goalRounds`, `goalMaxRounds`
+(positive integer), and `goalStartedAt` (epoch ms). Title and current-task text
+(current tool operation when available, otherwise the checklist item) are limited
+to 100 and 160 Unicode code points. Counts are nonnegative integers, with
+`done <= total`; phase is `running`, `approval`, `question`, `ended`, `failed`,
+or `unavailable`. `failed` is projected when the session status is `error` or a
+goal is `blocked`; `ended` is projected when a goal is `complete` or a checklist
+round ends. Terminal states are sent as an `end` event. A client that does not
+know `failed` must treat it as `unavailable`. When `goalId` is present, only
+`goalPhase=complete` or `blocked` is terminal; `active` / `paused` / unknown
+activation survive an idle turn. Clients should prefer `goalPhase` over `phase`
+for goal status labels and fall back to `phase` for legacy activities. Deploy
+order: Relay, then plugin, then App; an App that predates `failed` shows an
+untranslated label. End does not imply all todos completed.
 APNs uses the main app topic suffixed `.push-type.liveactivity`, push type
 `liveactivity`, and `aps.content-state`. Updates have a 180-second stale date;
 end events dismiss after 300 seconds. Bursts coalesce with a 15-second minimum
 interval; failed sends retry while the registration remains valid. There is
 no push-to-start and no continuous network connection inside the activity.
 
-Relay mode carries only this bounded progress projection, never conversation
-history, attachments, or full todo lists. It rejects unknown content-state
-fields, oversized text, invalid counts, stale timestamps, and event/phase
-mismatches. The updated Relay must be deployed before background Live Activity
-updates work through relay mode. System delivery and refresh budgets still apply.
+Relay mode carries only this bounded progress projection (including the optional
+goal fields above), never conversation history, attachments, or full todo lists.
+It rejects unknown content-state fields, oversized text, invalid counts, stale
+timestamps, and event/phase mismatches. Any goal field requires both a nonempty
+`goalId` and valid `goalPhase`; the remaining goal fields are optional.
+`goalPhase=complete` requires `phase=ended`, `goalPhase=blocked` requires
+`phase=failed`, `goalPhase=paused` requires `phase=unavailable`, and an ongoing
+goal requires a non-terminal `phase`. The updated Relay must be deployed before background Live
+Activity updates work through relay mode. System delivery and refresh budgets
+still apply.
 
 ## Schedule 定时任务扩展（可选 v2 能力）
 

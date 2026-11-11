@@ -46,6 +46,7 @@ export function pushContent(notification: PushNotification, mode?: 'preview' | '
   notification = rest
   const bodies: Record<PushNotification['category'], string> = {
     'turn.completed': 'A task has completed.',
+    'goal.completed': 'A goal has completed.',
     'approval.required': 'An approval needs your attention.',
     'question.asked': 'A question needs your answer.',
     'session.error': 'A task needs your attention.',

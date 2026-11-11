@@ -11,6 +11,8 @@
  */
 
 import type { ApnsEnvironment } from './token.ts'
+import type { NotificationPreferences } from './protocol.ts'
+import { isNotificationPreferences } from './notification-preferences.ts'
 import { isValidApnsToken } from './token.ts'
 import {
   isOptionalField,
@@ -66,6 +68,7 @@ export const pushRows: readonly WireFrameRow[] = [
       ) {
         return reject('E_PROTOCOL', 'invalid categories')
       }
+      if (p.preferences !== undefined && !isNotificationPreferences(p.preferences)) return reject('E_PROTOCOL', 'invalid notification preferences')
       return checked
     },
     handle: async (ctx, payload) => {
@@ -86,7 +89,7 @@ export const pushRows: readonly WireFrameRow[] = [
       if (!record?.scopes?.includes('notifications.register')) {
         return ctx.fail('E_FORBIDDEN', 'device authorization changed')
       }
-      ctx.devices.setPushToken(deviceId, token, environment, categories, Date.now())
+      ctx.devices.setPushToken(deviceId, token, environment, categories, Date.now(), payload.preferences as NotificationPreferences | undefined)
       if (ctx.bridge.capabilities.push !== true) {
         if (ctx.debug) ctx.log('push register held: bridge not ready')
         return ctx.fail('E_UNSUPPORTED', 'push is not configured on this bridge')
@@ -172,6 +175,7 @@ export const pushRows: readonly WireFrameRow[] = [
       if (!checked.ok) return checked
       const p = checked.value
       if (!isText(p.activityId, 128)) return reject('E_PROTOCOL', 'invalid activityId')
+      if (!isOptionalField(p, 'goalId', (v) => isText(v, 128))) return reject('E_PROTOCOL', 'invalid goalId')
       if (
         !isText(p.sessionId) ||
         typeof p.deviceToken !== 'string' ||
@@ -206,16 +210,21 @@ export const pushRows: readonly WireFrameRow[] = [
       ) {
         return ctx.fail('E_FORBIDDEN', 'live activity permissions required')
       }
-      if (!ctx.bridge.listSessions().some((row) => row.id === payload.sessionId)) {
-        return ctx.fail('E_NOT_FOUND', 'session not found')
-      }
+      const session = ctx.bridge.listSessions().find((row) => row.id === payload.sessionId)
+      if (!session) return ctx.fail('E_NOT_FOUND', 'session not found')
       const previous = record.liveActivity
-      if (previous?.activityId === activityId && previous.sessionId !== payload.sessionId) {
-        return ctx.fail('E_PROTOCOL', 'activity is bound to another session')
+      // Same-activity reconnect keeps its original binding, even after its goal cleared.
+      const goalId = payload.goalId as string | undefined ?? (previous?.activityId === activityId ? previous.goalId : undefined)
+      if (previous?.activityId === activityId && (previous.sessionId !== payload.sessionId || previous.goalId !== goalId)) {
+        return ctx.fail('E_PROTOCOL', 'activity is bound to another session or goal')
+      }
+      if (goalId && previous?.activityId !== activityId && session.goal?.id !== goalId) {
+        return ctx.fail('E_NOT_FOUND', 'goal not found')
       }
       ctx.devices.setLiveActivity(record.deviceId, {
         activityId,
         sessionId: payload.sessionId as string,
+        ...(goalId ? { goalId } : {}),
         token: String(payload.deviceToken).toLowerCase(),
         environment: payload.environment as ApnsEnvironment,
         updatedAt: Date.now(),

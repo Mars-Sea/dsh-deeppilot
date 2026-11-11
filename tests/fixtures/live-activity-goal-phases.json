@@ -1,0 +1,19 @@
+{
+  "description": "Live Activity phase for a goal-bound session. `goal` names an entry in session-goal.json. Shared by the plugin projection, the iOS ContentState mirror and the Relay validator.",
+  "cases": [
+    {"name": "armed goal between rounds keeps running", "goal": "active", "status": "idle", "pendingApproval": false, "pendingQuestion": false, "phase": "running", "ended": false},
+    {"name": "armed goal in a running turn", "goal": "active", "status": "running", "pendingApproval": false, "pendingQuestion": false, "phase": "running", "ended": false},
+    {"name": "disarmed goal waits", "goal": "disarmed", "status": "idle", "pendingApproval": false, "pendingQuestion": false, "phase": "unavailable", "ended": false},
+    {"name": "disarmed wins over a running turn", "goal": "disarmed", "status": "running", "pendingApproval": false, "pendingQuestion": false, "phase": "unavailable", "ended": false},
+    {"name": "pending approval wins over disarmed", "goal": "disarmed", "status": "idle", "pendingApproval": true, "pendingQuestion": false, "phase": "approval", "ended": false},
+    {"name": "pending question wins over disarmed", "goal": "disarmed", "status": "idle", "pendingApproval": false, "pendingQuestion": true, "phase": "question", "ended": false},
+    {"name": "approval wins over question", "goal": "active", "status": "idle", "pendingApproval": true, "pendingQuestion": true, "phase": "approval", "ended": false},
+    {"name": "unknown activation is not running while idle", "goal": "unknownActivation", "status": "idle", "pendingApproval": false, "pendingQuestion": false, "phase": "unavailable", "ended": false},
+    {"name": "unknown activation with a running turn is running", "goal": "unknownActivation", "status": "running", "pendingApproval": false, "pendingQuestion": false, "phase": "running", "ended": false},
+    {"name": "paused goal waits without ending", "goal": "paused", "status": "idle", "pendingApproval": false, "pendingQuestion": false, "phase": "unavailable", "ended": false},
+    {"name": "paused wins over a pending approval", "goal": "paused", "status": "idle", "pendingApproval": true, "pendingQuestion": false, "phase": "unavailable", "ended": false},
+    {"name": "blocked goal ends as failed", "goal": "blocked", "status": "idle", "pendingApproval": false, "pendingQuestion": false, "phase": "failed", "ended": true},
+    {"name": "complete goal ends", "goal": "complete", "status": "idle", "pendingApproval": false, "pendingQuestion": false, "phase": "ended", "ended": true},
+    {"name": "complete wins over a pending approval", "goal": "complete", "status": "idle", "pendingApproval": true, "pendingQuestion": false, "phase": "ended", "ended": true}
+  ]
+}

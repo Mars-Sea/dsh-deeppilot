@@ -149,6 +149,8 @@ export function capabilityBits(
     pendingSnapshot: true,
     promptDelivery: true,
     notifyAllCategories: true,
+    goalView: proxy.goalViewAvailable === true,
+    goalNotifications: true,
     models: HOST_CAPABILITY_PROBES.models(proxy),
     skills: HOST_CAPABILITY_PROBES.skills(proxy),
     commands: HOST_CAPABILITY_PROBES.commands(proxy),

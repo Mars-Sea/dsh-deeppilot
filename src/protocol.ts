@@ -59,6 +59,12 @@ export interface LiveActivityState {
   done: number
   total: number
   phase: 'running' | 'approval' | 'question' | 'ended' | 'failed' | 'unavailable'
+  goalId?: string
+  goalText?: string
+  goalPhase?: SessionGoal['phase']
+  goalRounds?: number
+  goalMaxRounds?: number
+  goalStartedAt?: number
 }
 export interface LiveActivityPushNotification {
   kind: 'liveactivity'
@@ -69,6 +75,8 @@ export interface LiveActivityPushNotification {
 export interface LiveActivityRegisterPayload extends WidgetPushRegisterPayload {
   activityId: string
   sessionId: string
+  /** Binds an activity to one goal; a replacement goal needs a new activityId. */
+  goalId?: string
 }
 export interface LiveActivityUnregisterPayload { activityId: string }
 export type PushDelivery = PushNotification | WidgetPushNotification | LiveActivityPushNotification
@@ -375,6 +383,18 @@ export interface ResumePayload { cursor: number }
  * a device token, and re-sent on every handshake so the bridge always holds a
  * fresh token plus the device's current per-category notification switches.
  */
+export interface NotificationPreferences {
+  soundEnabled: boolean
+  quietHours?: {
+    enabled: boolean
+    /** Local wall-clock minutes from midnight, 0–1439; equal endpoints mean all day. */
+    startMinutes: number
+    endMinutes: number
+    /** IANA time zone; evaluated at delivery time including DST. */
+    timeZone: string
+  }
+}
+
 export interface PushRegisterPayload {
   /** Hex APNs device token (32–512 hex chars). */
   deviceToken: string
@@ -382,6 +402,8 @@ export interface PushRegisterPayload {
   environment: 'development' | 'production'
   /** Per-category opt-out mirror so server pushes respect in-app switches. */
   categories?: Record<string, boolean>
+  /** Capability goalNotifications; omitted retains the device's previous preferences. */
+  preferences?: NotificationPreferences
   /**
    * Distributor's shared enrollment secret, baked into distributed builds.
    * When present on an otherwise-unconfigured bridge, enables relay push
@@ -391,11 +413,15 @@ export interface PushRegisterPayload {
 }
 
 /** c2s.widget.push.register. Uses a separate WidgetKit token, not the alert token. */
-export type WidgetPushRegisterPayload = Omit<PushRegisterPayload, 'categories'>
+export type WidgetPushRegisterPayload = Omit<PushRegisterPayload, 'categories' | 'preferences'>
 
 // ---------- s2c payloads ----------
 
 export interface WelcomeCapabilities {
+  /** Authoritative goal summaries and goal-scoped Live Activities. Missing/false means unsupported. */
+  goalView?: boolean
+  /** Goal completion notices and c2s.push.register preferences are implemented by this bridge. */
+  goalNotifications?: boolean
   /** 会话命令目录、执行、权限与原生日志导出入口。缺省不支持。 */
   commands?: boolean
   /** 输入框 `@` 引用候选：c2s.session.references 可用（文件或会话引用至少一类）。缺省不支持。 */
@@ -559,7 +585,23 @@ export interface SessionTodoItem {
   status: SessionTodoStatus
 }
 
+export interface SessionGoal {
+  id: string
+  revision: number
+  objective: string
+  phase: 'active' | 'paused' | 'blocked' | 'complete'
+  /** Process-local eligibility, independent of durable phase or session running status. */
+  activation?: 'armed' | 'disarmed'
+  roundsStarted: number
+  maxGoalRounds: number
+  createdAt: number
+  updatedAt: number
+  blockedReason?: { code: string; message: string }
+}
+
 export interface SessionSummary {
+  /** Omitted when unsupported/unknown; null explicitly clears a previously projected goal. */
+  goal?: SessionGoal | null
   id: string
   title: string
   status: SessionStatus
@@ -811,7 +853,7 @@ export interface SessionEventPayload {
   data: SessionEventData
 }
 
-export type NotifyCategory = 'turn.completed' | 'approval.required' | 'question.asked' | 'session.error'
+export type NotifyCategory = 'turn.completed' | 'goal.completed' | 'approval.required' | 'question.asked' | 'session.error'
 
 export interface NotifyPayload {
   /** Stable paired Host audience, absent on older bridges. */
@@ -833,6 +875,8 @@ export interface NotifyPayload {
  * an APNs token and no live WebSocket.
  */
 export interface PushNotification {
+  /** Absent preserves legacy default sound; false omits aps.sound in either transport. */
+  soundEnabled?: boolean
   hostAudience?: string
   notificationId: string
   category: NotifyCategory

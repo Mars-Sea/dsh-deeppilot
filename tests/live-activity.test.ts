@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -5,10 +6,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DeviceStore } from '../src/token.ts'
 import { createTestIdentity, registerTestIdentity } from './auth-fixture.ts'
-import { liveActivityState, LiveActivityPushManager } from '../src/live-activity.ts'
+import { liveActivityEnded, liveActivityState, LiveActivityPushManager } from '../src/live-activity.ts'
 import { apnsPayload, pushHeaders } from '../src/apns.ts'
 import { registryRowFor, validatePayload } from '../src/wire-registry.ts'
-import type { LiveActivityPushNotification, SessionSummary } from '../src/protocol.ts'
+import type { LiveActivityPushNotification, SessionGoal, SessionSummary } from '../src/protocol.ts'
 
 const session: SessionSummary = { workspaceLabel: null, id: 's', title: 'Work', status: 'running', lastActivityTs: 1,
   todos: { done: 1, total: 3 }, todoItems: [{ content: 'Next', status: 'pending' }, { content: 'Now', status: 'in_progress' }],
@@ -27,6 +28,26 @@ test('activity projection preserves partial completion and current task', () => 
   assert.equal(Array.from(liveActivityState({ ...session, title: '😀'.repeat(200) }).title).length, 100)
 })
 
+const goal: SessionGoal = { id: 'g', revision: 2, objective: 'Ship the goal UI', phase: 'active', activation: 'armed',
+  roundsStarted: 1, maxGoalRounds: 8, createdAt: 1_000, updatedAt: 2_000 }
+const withGoal = (patch: Partial<SessionGoal> = {}): SessionSummary => ({ ...session, goal: { ...goal, ...patch } })
+
+test('goal projection follows the phase table shared with the iOS content state and the Relay validator', () => {
+  const read = (name: string) => JSON.parse(readFileSync(new URL('./fixtures/' + name, import.meta.url), 'utf8'))
+  const goals = read('session-goal.json') as Record<string, SessionGoal>
+  const { cases } = read('live-activity-goal-phases.json') as { cases: { name: string; goal: string; status: SessionSummary['status']
+    pendingApproval: boolean; pendingQuestion: boolean; phase: string; ended: boolean }[] }
+  assert.equal(cases.length > 0, true)
+  for (const c of cases) {
+    const state = liveActivityState({ ...session, status: c.status, pendingApproval: c.pendingApproval,
+      pendingQuestion: c.pendingQuestion, goal: goals[c.goal]! })
+    assert.equal(state.phase, c.phase, c.name)
+    assert.equal(liveActivityEnded(state), c.ended, c.name)
+    assert.equal(state.goalPhase, goals[c.goal]!.phase, c.name)
+  }
+  assert.equal(liveActivityState(withGoal()).goalRounds, 1)
+})
+
 test('activity wire format uses dedicated APNs topic and strict registration shape', () => {
   const notification: LiveActivityPushNotification = { kind: 'liveactivity', timestamp: 100, event: 'update', contentState: liveActivityState(session) }
   assert.deepEqual(apnsPayload(notification), { aps: { timestamp: 100, event: 'update', 'content-state': notification.contentState, 'stale-date': 280 } })
@@ -38,6 +59,8 @@ test('activity wire format uses dedicated APNs topic and strict registration sha
   assert.equal(validatePayload(register, p).ok, true)
   assert.equal(validatePayload(register, { ...p, environment: 'wrong' }).ok, false)
   assert.equal(validatePayload(register, { ...p, deviceToken: 'bad' }).ok, false)
+  assert.equal(validatePayload(register, { ...p, goalId: 'g' }).ok, true)
+  assert.equal(validatePayload(register, { ...p, goalId: 'x'.repeat(129) }).ok, false)
   // 注销帧要求 activityId，缺省即拒。
   assert.equal(validatePayload(registryRowFor('c2s.liveActivity.unregister')!, {}).ok, false)
   assert.equal(validatePayload(registryRowFor('c2s.liveActivity.unregister')!, { activityId: 'a' }).ok, true)
@@ -96,6 +119,80 @@ test('ordinary conversations cannot keep activities running, including approval 
   assert.equal(liveActivityState({ ...ordinary, pendingQuestion: true }).phase, 'unavailable')
   assert.equal(liveActivityState({ ...ordinary, todos: { done: 0, total: 0 } }).phase, 'unavailable')
   assert.equal(liveActivityState({ ...ordinary, todoItems: [{ content: 'Check', status: 'pending' }] }).total, 1)
+})
+
+test('goal activities survive idle turns and pauses, then end cleanly when the goal changes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'live-goal-'))
+  const store = await DeviceStore.load(join(dir, 'devices.json'))
+  const identity = createTestIdentity()
+  registerTestIdentity(store, identity)
+  const registration = { activityId: 'goal-activity', sessionId: 's', goalId: 'g', token: 'a'.repeat(64),
+    environment: 'development' as const, updatedAt: Date.now(), expiresAt: Date.now() + 100_000 }
+  store.setLiveActivity(identity.deviceId, registration)
+  const deliveries: LiveActivityPushNotification[] = []
+  const manager = new LiveActivityPushManager(() => store, async (_token, _env, n) => { deliveries.push(n); return { outcome: 'sent' } })
+  try {
+    manager.changed([{ ...withGoal(), todos: null, todoItems: null, status: 'idle' }]); await manager.flush()
+    assert.equal(deliveries.at(-1)?.event, 'update')
+    assert.equal(deliveries.at(-1)?.contentState.phase, 'running')
+    manager.changed([{ ...withGoal({ phase: 'paused' }), status: 'idle' }]); await manager.flush()
+    assert.equal(deliveries.at(-1)?.event, 'update')
+    assert.equal(deliveries.at(-1)?.contentState.phase, 'unavailable')
+    manager.changed([{ ...session }]); await manager.flush() // unknown goal hydration must not terminate
+    assert.equal(deliveries.length, 2)
+    manager.changed([withGoal({ id: 'g-next' })]); await manager.flush()
+    assert.equal(deliveries.at(-1)?.event, 'end')
+    assert.deepEqual(deliveries.at(-1)?.contentState, liveActivityState())
+    store.setLiveActivity(identity.deviceId, { ...registration, endedState: undefined, activityId: 'next-activity', goalId: 'g-next', token: 'b'.repeat(64) })
+    manager.changed([withGoal({ id: 'g-next' })]); await manager.flush()
+    assert.equal(deliveries.at(-1)?.event, 'update')
+    assert.equal(deliveries.at(-1)?.contentState.goalId, 'g-next')
+    manager.changed([withGoal({ id: 'g-next', phase: 'complete' })]); await manager.flush()
+    manager.changed([withGoal({ id: 'g-next' })]); await manager.flush()
+    assert.equal(deliveries.at(-1)?.event, 'end')
+  } finally { manager.dispose(); await store.drain(); await rm(dir, { recursive: true, force: true }) }
+})
+
+test('registration does not infer a goal for old clients and enforces immutable activity goal identity', async () => {
+  const register = registryRowFor('c2s.liveActivity.register')!
+  const record: any = { deviceId: 'device', scopes: ['sessions.read', 'notifications.register', 'interactions.respond'] }
+  let generation = 0
+  const errors: string[] = []
+  const ctx = {
+    deviceId: 'device', get liveActivityGeneration() { return generation },
+    nextLiveActivityGeneration: () => ++generation, setPendingLiveActivityId: () => {},
+    devices: { authorized: () => record, setLiveActivity: (_id: string, value: unknown) => { record.liveActivity = value } },
+    bridge: { listSessions: () => [withGoal()], refreshLiveActivities: () => {}, capabilities: { push: true } },
+    send: () => {}, fail: (code: string) => { errors.push(code) },
+  }
+  const payload = { activityId: 'a', sessionId: 's', deviceToken: 'a'.repeat(64), environment: 'production' }
+  await register.handle(ctx as never, payload)
+  assert.equal(record.liveActivity.goalId, undefined)
+  await register.handle(ctx as never, { ...payload, goalId: 'g' })
+  assert.equal(errors.at(-1), 'E_PROTOCOL')
+  await register.handle(ctx as never, { ...payload, activityId: 'b', goalId: 'g' })
+  assert.equal(record.liveActivity.goalId, 'g')
+  await register.handle(ctx as never, { ...payload, activityId: 'b' })
+  assert.equal(record.liveActivity.goalId, 'g', 'reconnect retains the established goal binding')
+  await register.handle(ctx as never, { ...payload, activityId: 'c', goalId: 'missing' })
+  assert.equal(errors.at(-1), 'E_NOT_FOUND')
+})
+
+test('legacy registrations remain checklist/turn scoped even when the session has a goal', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'live-legacy-goal-'))
+  const store = await DeviceStore.load(join(dir, 'devices.json'))
+  const identity = createTestIdentity()
+  registerTestIdentity(store, identity)
+  store.setLiveActivity(identity.deviceId, { activityId: 'legacy', sessionId: 's', token: 'a'.repeat(64),
+    environment: 'development', updatedAt: Date.now(), expiresAt: Date.now() + 100_000 })
+  const deliveries: LiveActivityPushNotification[] = []
+  const manager = new LiveActivityPushManager(() => store, async (_token, _env, n) => { deliveries.push(n); return { outcome: 'sent' } })
+  try {
+    manager.changed([withGoal()]); await manager.flush()
+    assert.equal(deliveries[0]?.contentState.goalId, undefined)
+    manager.changed([{ ...withGoal(), status: 'idle' }]); await manager.flush()
+    assert.equal(deliveries.at(-1)?.event, 'end')
+  } finally { manager.dispose(); await store.drain(); await rm(dir, { recursive: true, force: true }) }
 })
 
 test('clearing todos ends background activity and adding them again cannot revive it', async () => {

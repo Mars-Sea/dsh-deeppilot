@@ -380,6 +380,10 @@ interface HostSchedulePatch {
   active?: boolean;
 }
 interface WelcomeCapabilities {
+  /** Authoritative goal summaries and goal-scoped Live Activities. Missing/false means unsupported. */
+  goalView?: boolean;
+  /** Goal completion notices and c2s.push.register preferences are implemented by this bridge. */
+  goalNotifications?: boolean;
   /** 会话命令目录、执行、权限与原生日志导出入口。缺省不支持。 */
   commands?: boolean;
   /** 输入框 `@` 引用候选：c2s.session.references 可用（文件或会话引用至少一类）。缺省不支持。 */
@@ -515,7 +519,25 @@ interface SessionTodoItem {
   content: string;
   status: SessionTodoStatus;
 }
+interface SessionGoal {
+  id: string;
+  revision: number;
+  objective: string;
+  phase: 'active' | 'paused' | 'blocked' | 'complete';
+  /** Process-local eligibility, independent of durable phase or session running status. */
+  activation?: 'armed' | 'disarmed';
+  roundsStarted: number;
+  maxGoalRounds: number;
+  createdAt: number;
+  updatedAt: number;
+  blockedReason?: {
+    code: string;
+    message: string;
+  };
+}
 interface SessionSummary {
+  /** Omitted when unsupported/unknown; null explicitly clears a previously projected goal. */
+  goal?: SessionGoal | null;
   id: string;
   title: string;
   status: SessionStatus;
@@ -626,13 +648,15 @@ interface SkillSummary {
   description: string;
   modelInvocable: boolean;
 }
-type NotifyCategory = 'turn.completed' | 'approval.required' | 'question.asked' | 'session.error';
+type NotifyCategory = 'turn.completed' | 'goal.completed' | 'approval.required' | 'question.asked' | 'session.error';
 /**
  * One offline-push-worthy event (same facts as s2c.notify / pending frames,
  * projected for APNs). The bridge fans these out to paired devices that hold
  * an APNs token and no live WebSocket.
  */
 interface PushNotification {
+  /** Absent preserves legacy default sound; false omits aps.sound in either transport. */
+  soundEnabled?: boolean;
   hostAudience?: string;
   notificationId: string;
   category: NotifyCategory;
@@ -1159,6 +1183,8 @@ interface MuxFrameLike {
   sessionId?: string;
   event?: SessionEventLike;
   key?: string;
+  /** Host projection watermark for ordering live changes against asynchronous baselines. */
+  seq?: number;
   value?: unknown;
   approvalId?: string;
   callId?: string;
@@ -1179,6 +1205,8 @@ interface ApiStreamItemLike {
   payload: MuxFrameLike;
 }
 interface ApiProxyLike {
+  /** Host has registered the goal summary projection and its passive baseline/live feed. */
+  readonly goalViewAvailable?: boolean;
   /** 真实宿主反射声明了助手流帧时才为 true；旧代理缺省关闭。 */
   readonly assistantStreamAvailable?: boolean;
   commands?: CommandsApiLike;
@@ -1334,6 +1362,7 @@ export declare class HostBridge {
   private readonly log?;
   readonly id: number;
   private summaries;
+  private readonly goals;
   /**
    * 列表推送节流（连接传输第二批 P5）。每个会话最近一次推出去的摘要指纹，
    * 用来丢掉内容完全相同的重复推送；只改了 `stats` 的变化按 SUMMARY_STATS_THROTTLE_MS

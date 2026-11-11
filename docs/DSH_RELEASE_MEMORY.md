@@ -5,6 +5,45 @@
 > move the lower bound, at each `0.x` minor boundary, or when a host inside the
 > range breaks at runtime.
 
+## Optional goal projection compatibility decision (2026-11-10)
+
+- **Scope:** issue #46 adds a phone-side goal view, goal-scoped Live Activities
+  and goal-completion notices. The Bridge reads the Host's `goal` session
+  projection and the process-local `goal/activation-changed` event; both are
+  optional and accessed through `ctx.get(...)`, never through `inject`.
+- **Static evidence:** the installed `@deepseek-ai/dsh-goal` declarations define
+  `SessionProjectionMap.goal` as `GoalProjection | null` with a durable
+  `GoalSnapshot` (`id`, `revision`, `objective`, `phase`, `maxGoalRounds`,
+  optional `blockedReason`) plus `roundsStarted`, `createdAt`, `updatedAt`.
+  `GoalActivationChanged` carries `{ sessionId, goal?: { id, revision,
+  activation } }`. Context7's Cordis documentation confirms `ctx.get(name)`
+  returns `undefined` for an absent service and does not create an injection
+  requirement; no live Host smoke test was run for this change.
+- **Install/runtime risk:** no declaration change is required. `goalView` is computed
+  from `sessionProjections.summaryKeys().has('goal')` plus a working
+  `onChanged` hook and `session.projections`; absent or throwing services leave
+  the bit false. `goalNotifications` is a Bridge-owned invariant. No peer,
+  `engines.dsh`, lockfile, or package version changes were made. A host without
+  the goal service omits `SessionSummary.goal`, and old iOS clients ignore the
+  new optional fields/capabilities.
+- **Phone-protocol risk:** additive v2 optional fields only. `goal` is omitted
+  for unsupported/unknown and `null` for an explicit clear; neither generates a
+  completion notice. Summaries replace previous summaries, so clients hide a
+  goal absent from a new summary. Unknown `phase`/`activation` strings degrade
+  to unknown rather than failing the whole summary. `goal.completed` and
+  `c2s.push.register.preferences` are advertised by `goalNotifications`;
+  `c2s.liveActivity.register.goalId` is optional and new registrations without it
+  retain legacy checklist-only behavior. Existing bindings survive token rotation.
+  Relay validation was extended in lockstep, so deploy order remains
+  Relay → plugin → App.
+- **Verification:** plugin unit tests and typecheck pass, including optional
+  Host services, projection hydration failure, ordered activation, completion
+  deduplication, legacy ActivityKit registration, and preference filtering.
+  Generated bundles and config-schema checks accompany the change. Live APNs,
+  Dynamic Island, Funnel background recovery and a Host that mounts the goal
+  service still require end-to-end acceptance; offline tests do not establish
+  delivery or recovery latency on a physical phone.
+
 ## Runtime break — image read-back since `dsh-v0.2.2-alpha.2` (2026-11-06)
 
 - **Symptom (issue #42):** every conversation image (tool results and the
@@ -2434,5 +2473,23 @@ result.error / restore.error:
 **本轮代码修复（B）。** `src/plugin-update.ts` 的 `restore` 分支改为以 `listBundles()` 实际安装版本为权威，`restore.application` 降为辅助判据；`tests/plugin-update.test.ts` 同步期望并新增「实际版本未回到旧版仍判 `failed`」。单测 21 通过 / 0 失败，全量 766 通过 / 0 失败，`typecheck` 通过。真机验证：同一宿主 journal 终态由 `failed` 变为 `rolled-back`（「目标安装失败，宿主已自动恢复旧版本」）。
 
 **上游渠道。** `deepseek-ai/deepseek-harness` 的 `hasIssuesEnabled=false`、`hasDiscussionsEnabled=true`；README:45 指定 bug report 走 GitHub Discussions。已按用户确认的措辞发布 [discussion #12510](https://github.com/deepseek-ai/deepseek-harness/discussions/12510)（`q-a`/`Q&A` 分类，2026-11-07，作者 `Mars-Sea`）；英文正文与中文核对说明留在 [UPSTREAM_DISCUSSION-plugin-update-hmr.md](UPSTREAM_DISCUSSION-plugin-update-hmr.md)，脱敏后的提交正文在 `.verify-plugin-update/discussion-body.md`。线上标题、分类与正文长度已复核。等待上游答复，不承诺修复时限。
+
+## 2026-11-11 — 按上游建议复测：三组对照确认「仅 HMR 在线替换失败」
+
+**上游回复。** PerryLink 于 2026-11-09 确认了 remove→install 窗口机制，引用 `plugin-manager/src/index.ts:713`（`updateBundle`）与 `:756`（`removeBundle`）、`packages/host/directory-picker-auto/README.md:40`，并指出无 HMR 时 `updateBundle` 走 `:749` 分支直接覆盖安装。他建议用确切 bundle 测一次无 HMR 路径，再判断是「更新路径有问题」还是「该 patch 无法在任何更新中存活」。
+
+**复测（全新隔离 `DSH_HOME`，三 profile，均 `--from-default-profile web`，均安装 registry spec `dsh-deeppilot@0.9.15`，目标 `0.9.19`＝当时 `latest`）。** 已核对 `0.9.19` 的 `cordis.patch.yml` 与 `0.9.15` 逐字相同，旧写法未改。
+
+| # | profile | HMR | 路径 | 结果 |
+|---|---|---|---|---|
+| 1 | `pu-hmr` | 开 | `updateBundle` | `application:'failed'`, `stage:'enable'`，重复 `directoryPicker`；`restore` 同错；journal `failed`，profile 停 `0.9.15` |
+| 2 | `pu-nohmr` | 关（`hmr` 行 `disabled: true`） | `updateBundle` | progress `restart-required`；磁盘 `0.9.19`；重启后 `serverVersion 0.9.19`、journal `done`、`s2c.directory.listing` 正常 |
+| 3 | `pu-cli` | 开但宿主停机 | `dsh plugin --profile <p> add dsh-deeppilot@0.9.19` | 直接 `0.9.19`，启动无激活告警，`s2c.directory.listing` 正常 |
+
+**结论。** 属「HMR 在线替换路径问题」，不是「该 patch 无法在任何更新中存活」：非 HMR 的两条路径都能应用更新，且 `disabled` + `insert` 组合在更新后完好存活（目录列举仍由 browse 后端提供）。仅 HMR 的 remove→install 窗口破坏它。
+
+**追问与发布。** 回复已发 [discussioncomment-19532694](https://github.com/deepseek-ai/deepseek-harness/discussions/12510#discussioncomment-19532694)（2026-11-11T01:25:09Z，3217 字符），提两点：① `updateBundle` 是否规划 compose-before-remove / delta apply，若否则建议在 `plugin-manager` README 标注「带 `disabled` 行的 bundle 在 HMR 下只能冷更新」；② 若在线替换本质上不支持此类 bundle，能否返回 `restart-required` 而非 `failed` + 回滚（客户端已有该状态，改动非破坏性）。英文正文与中文核对说明见 [UPSTREAM_DISCUSSION-12510-reply2.md](UPSTREAM_DISCUSSION-12510-reply2.md)，提交正文存 `.verify-perrylink/reply-body.md`。
+
+**待办。** 等待上游对上述两点的答复；若采纳 `restart-required` 方案，我方 `src/plugin-update.ts` 与 `PROTOCOL.md` 的 phase 映射需再对一次。
 
 **遗留。** ① 仓库 `lib/` 未重建（按用户选择只在隔离副本构建），发布前需 `npm run build` 并提交 `lib/`；② 启用 HMR 的 profile 上手机端一键更新仍会失败，需上游修复 `updateBundle` 原子性，或用户在该 profile 的 `cordis.patch.yml` 禁用 `hmr` 行（代价：配置改动不再热重载、更新后需重启）；③ 真机、Funnel、无 HMR 路径在官方默认 profile 上的验收仍缺；④ `docs/技能提示对接说明.md`、`docs/移动端命令对接说明.md` 的 `dsh-plugin-manager` 清单仍是 0.2.1 口径，未重盘。

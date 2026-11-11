@@ -1,4 +1,5 @@
-import type { LiveActivityState } from './protocol.ts'
+import type { LiveActivityState, NotificationPreferences } from './protocol.ts'
+import { isNotificationPreferences, notificationPreferences } from './notification-preferences.ts'
 import { MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
 import { formatLogLine } from './diagnostics.ts'
 import { randomBytes } from 'node:crypto'
@@ -72,11 +73,13 @@ export interface DeviceApnsInfo {
   updatedAt: number
   /** Per-category opt-out mirror; absent keys mean enabled. */
   categories?: Record<string, boolean>
+  preferences?: NotificationPreferences
 }
 
 export interface LiveActivityRegistration extends DeviceApnsInfo {
   activityId: string
   sessionId: string
+  goalId?: string
   expiresAt: number
   endedState?: LiveActivityState
 }
@@ -285,6 +288,7 @@ export class DeviceStore {
     environment: ApnsEnvironment,
     categories: Record<string, boolean> | undefined,
     now: number,
+    preferences?: NotificationPreferences,
   ): void {
     const normalized = token.toLowerCase()
     if (!isValidApnsToken(normalized)) return
@@ -299,11 +303,14 @@ export class DeviceStore {
       if (Object.keys(clean).length > 0) next.categories = clean
     }
     const current = record.apns
+    const preference = preferences ?? current?.preferences
+    if (isNotificationPreferences(preference)) next.preferences = notificationPreferences(preference)
     if (
       current &&
       current.token === next.token &&
       current.environment === next.environment &&
-      JSON.stringify(current.categories ?? {}) === JSON.stringify(next.categories ?? {})
+      JSON.stringify(current.categories ?? {}) === JSON.stringify(next.categories ?? {}) &&
+      JSON.stringify(current.preferences) === JSON.stringify(next.preferences)
     ) {
       return
     }
@@ -324,7 +331,10 @@ export class DeviceStore {
     const record = this.authorized(deviceId)
     if (!record || !isValidApnsToken(registration.token)) return
     const old = record.liveActivity
-    // Rotation/reconnect cannot extend a round or erase its terminal state.
+    // An ActivityKit activity cannot change its session/goal identity on reconnect.
+    if (old?.activityId === registration.activityId &&
+        (old.sessionId !== registration.sessionId || old.goalId !== registration.goalId)) return
+    // Rotation/reconnect cannot extend a round/goal or erase its terminal state.
     record.liveActivity = old?.activityId === registration.activityId
       ? { ...registration, expiresAt: old.expiresAt, endedState: old.endedState }
       : registration

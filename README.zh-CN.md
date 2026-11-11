@@ -20,8 +20,10 @@
 - 在 iPhone 查看项目、会话、历史记录和 Agent 实时输出；
 - 打开会话时实时显示助手正文与思考，断线后以正式历史恢复，不把半截输出当成完整答复；
 - 导出完整 ZIP 日志归档；宿主提供相应能力时，也可分享 Markdown 对话正文；
-- 在 App 检查插件更新，明确确认后安装兼容版本。宿主负责热替换和失败回滚；
-  未启用热重载时，App 明确提示需要重启 DSH；
+- 在 App 检查插件更新，明确确认后安装兼容版本。宿主负责安装与失败回滚；
+  启用 HMR（热重载）时，本次更新会因目录选择后端的组合冲突被宿主回滚，
+  插件不会损坏（见下方[已知限制](#已知限制启用-hmr-时无法在线更新)）；
+  未启用 HMR 或停机更新时，更新成功并提示需要重启 DSH；
 - 发送提示词、切换模型、创建会话，并处理审批与提问；
 - 使用 5 分钟有效的单次配对码与设备级 P-256 密钥；iPhone 真机私钥保存在
   Secure Enclave；
@@ -89,6 +91,32 @@ dsh plugin --profile web remove dsh-deeppilot
 ```
 
 更新后请重启 DSH。卸载 npm 包不会删除 `$DSH_HOME/deeppilot/` 下的本地数据。
+
+<a id="已知限制启用-hmr-时无法在线更新"></a>
+### 已知限制：启用 HMR 时无法在线更新
+
+DSH 默认启用 HMR（热重载）。它的插件更新走「先卸载再安装」，中间态会让本插件的
+目录选择 patch 与宿主的 `directory-picker-auto` 重复注册同一个服务，宿主因此把
+整次更新判为失败并回滚。手机端会显示「已回滚」，**插件不会损坏，已安装版本保持
+可用**。原因与上游进展见
+[deepseek-ai/deepseek-harness#12510](https://github.com/deepseek-ai/deepseek-harness/discussions/12510)。
+
+当前可选两种更新方式：
+
+- **推荐：停机更新**。关掉 DSH 后执行
+  `dsh plugin --profile web add dsh-deeppilot@<目标版本>`，再启动；
+  这次包变更不经过任何组合中间态，启动时一次性组合新版本。
+  用上面 `update` 命令也可以，但同样需要重启。
+- **或：为该 profile 禁用 HMR 后在 App 内一键更新**。在 profile 的
+  `cordis.patch.yml` 加入：
+
+  ```yaml
+  - id: hmr
+    disabled: true
+  ```
+
+  之后手机端更新会走「覆盖安装 + 提示重启」，更新成功后重启即可。
+  代价是该 profile 的配置改动不再热重载。
 
 ## 发布说明（维护者）
 

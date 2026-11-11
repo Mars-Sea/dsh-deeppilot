@@ -115,7 +115,7 @@ export function pushScopeFor(type: string, payload?: unknown): DeviceScope | und
   if (type === 's2c.notify') {
     const category = (payload as { category?: unknown } | undefined)?.category
     if (category === 'approval.required' || category === 'question.asked') return 'interactions.respond'
-    if (category === 'turn.completed' || category === 'session.error') return 'sessions.read'
+    if (category === 'turn.completed' || category === 'goal.completed' || category === 'session.error') return 'sessions.read'
   }
   return undefined
 }

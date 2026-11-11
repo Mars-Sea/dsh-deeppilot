@@ -24,8 +24,12 @@ Host on your own computer and does not replace or modify the DSH Web UI.
 - Export a full ZIP log archive, or share the conversation body as Markdown when
   the Host provides that optional route.
 - Check plugin updates from the app and install an explicitly confirmed compatible
-  version. The Host handles hot replacement and rollback; without hot reload the
-  app reports that a DSH restart is required.
+  version. The Host handles installation and rollback. With HMR enabled the update
+  is rolled back by the Host because of a directory-picker composition conflict
+  and the plugin stays intact (see
+  [known limitation](#known-limitation-no-in-place-update-with-hmr)); without HMR,
+  or when updating while stopped, the update succeeds and reports that a DSH
+  restart is required.
 - Send prompts, switch models, create sessions, and answer approvals/questions.
 - Pair with a five-minute single-use code and a per-device P-256 key; physical
   iPhones keep the private key in Secure Enclave.
@@ -110,6 +114,36 @@ dsh plugin --profile web remove dsh-deeppilot
 
 Restart DSH after updating. Uninstalling the package does not delete the local
 DeepPilot state under `$DSH_HOME/deeppilot/`.
+
+<a id="known-limitation-no-in-place-update-with-hmr"></a>
+### Known limitation: no in-place update while HMR is enabled
+
+DSH enables HMR (hot reload) by default. Its plugin update removes the installed
+package before installing the target, and that intermediate composition makes this
+plugin's directory-picker patch and the host's `directory-picker-auto` register the
+same service twice. The Host therefore fails the whole update and rolls it back. The
+app reports a rollback; **the plugin is not damaged and the installed version stays
+usable**. Background and upstream status:
+[deepseek-ai/deepseek-harness#12510](https://github.com/deepseek-ai/deepseek-harness/discussions/12510).
+
+Two options today:
+
+- **Recommended: update while DSH is stopped.** Quit DSH, run
+  `dsh plugin --profile web add dsh-deeppilot@<target-version>`, then start it again.
+  That package change never enters a composition window, so the next boot composes
+  the new version once. The `update` command above also works but still needs a restart.
+- **Or: disable HMR for that profile and update from the app.** Add the following to
+  the profile's `cordis.patch.yml`:
+
+  ```yaml
+  - id: hmr
+    disabled: true
+  ```
+
+  The app update then takes the "install over the running version and ask for a
+  restart" path. The cost is that profile configuration changes are no longer hot
+  reloaded.
+
 
 ## Publishing (maintainers)
 
