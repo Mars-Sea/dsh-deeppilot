@@ -166,7 +166,7 @@ const DOMAIN_TABLES: Record<ErrorDomain, Readonly<Record<string, WireErrorCode>>
     // 客户端以下一帧 s2c.session.queue 为准。
     'session/queue-item-not-found': 'E_NOT_FOUND',
     // 当前轮已结束，或该项已在转向区：项通常仍在队列里，自动重试同样不会成功。
-    // 用专用码而不是 E_NOT_FOUND，见 app-private ADR-0011 第 5 条。
+    // 用专用码而不是 E_NOT_FOUND，见 deeppilot-ios ADR-0011 第 5 条。
     'session/steer-unavailable': 'E_STEER_UNAVAILABLE',
     // 子代理会话由父会话路由占用：沿用会话域的映射。
     'session/agent-busy': 'E_BUSY',

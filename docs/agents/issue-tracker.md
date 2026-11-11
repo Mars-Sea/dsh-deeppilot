@@ -2,7 +2,7 @@
 
 本仓库的 issue 与需求规格都放在 GitHub Issues（`Mars-Sea/dsh-deeppilot`，**公开仓库**）。所有操作统一用 `gh` CLI。
 
-公开 issue 任何人可见：不得写入私有 iOS 仓库的路径、代码、未公开计划，以及 `docs/adr/` 里的私有决策内容。纯 iOS 端的问题放私有 iOS 仓库（在 `../app-private` 里操作）。
+公开 issue 任何人可见：不得写入私有 iOS 仓库的路径、代码、未公开计划，以及 `docs/adr/` 里的私有决策内容。纯 iOS 端的问题放私有 iOS 仓库（在 `../deeppilot-ios` 里操作）。
 
 ## 约定
 

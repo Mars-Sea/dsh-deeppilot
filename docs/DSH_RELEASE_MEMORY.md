@@ -1048,7 +1048,7 @@
      `PROTOCOL.md`, `docs/DEEPPILOT_FEATURE_PLAN.md`, and the schedule-service
      comment in `src/dsh-api-proxy.ts` now state that; the private app still
      ships `error.scheduleUnsupported` and `schedule.unsupported` copy telling
-     the user to enable it (`app-private/ios/L10nFragments/schedule.json` and the
+     the user to enable it (`deeppilot-ios/ios/L10nFragments/schedule.json` and the
      generated `zh-Hans.lproj` / `en.lproj` string tables). **iOS copy still
      open** — it belongs to the private repository and to its own release flow.
   3. ~~`subagent_session` is unmapped.~~ **Resolved 2026-10-03:** mapped to

@@ -2,7 +2,7 @@
 // contract for the protocol-v2 authentication proof (PROTOCOL.md, auth.prove).
 //
 // Both the TypeScript Host (tests/auth-vectors.test.ts) and the iOS app
-// (app-private/ios/Tests/AuthVectorTests.swift) read this file, so the
+// (deeppilot-ios/ios/Tests/AuthVectorTests.swift) read this file, so the
 // canonical string and the signature encoding cannot drift apart silently.
 //
 // The file holds two independent signers over the same canonical strings:

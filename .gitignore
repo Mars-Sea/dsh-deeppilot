@@ -24,6 +24,6 @@ devices.json
 # file — it must never be staged.
 .dsh-smoke-home/
 # Local ADRs (decision records), not part of the published repository: they
-# cross-reference the private iOS checkout (`../app-private/...`), which readers
+# cross-reference the private iOS checkout (`../deeppilot-ios/...`), which readers
 # of this public repository cannot resolve. Keep them on disk, never in a commit.
 docs/adr/
