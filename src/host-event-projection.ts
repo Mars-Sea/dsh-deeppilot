@@ -110,12 +110,12 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
       };
     }
     case 'tool/result': {
-      const data = event.data as { callId?: string; error?: unknown; message?: { content?: unknown } } | undefined;
-      const ok = data?.error === undefined;
+      const { callId, failed, message } = toolResultOf(event.data);
+      const ok = !failed;
       const result = limitMessageProjection({
         seq: event.seq, role: 'tool', ts: tsOf(event),
-        tool: { name: 'result', state: ok ? 'ok' : 'error', summary: ok ? summarizeResult(data?.message?.content) : '失败' },
-        ...(ok ? attachmentProjection(data?.message) : {}),
+        tool: { name: 'result', state: ok ? 'ok' : 'error', summary: ok ? summarizeResult(message?.content) : '失败' },
+        ...(ok ? attachmentProjection(message) : {}),
       });
       return {
         kind: 'tool.end',
@@ -123,12 +123,26 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
           seq: result.seq, role: result.role, ts: result.ts, ok,
           summary: result.tool?.summary,
           ...(result.attachments ? { attachments: result.attachments } : {}),
-          ...(data?.callId ? { callId: String(data.callId) } : {}),
+          ...(callId ? { callId } : {}),
         }
       };
     }
     default:
       return null;
+  }
+}
+
+/** Native results carry identity and failure on message; retain older Host fields. */
+function toolResultOf(value: unknown) {
+  const data = value as {
+    callId?: string
+    error?: unknown
+    message?: { toolCallId?: string; isError?: boolean; content?: unknown }
+  } | undefined
+  return {
+    callId: data?.message?.toolCallId || data?.callId,
+    failed: data?.message?.isError === true || data?.error !== undefined,
+    message: data?.message,
   }
 }
 
@@ -468,9 +482,9 @@ export function eventImageRefs(event: SessionEventLike): HostImageRef[] {
   let message: unknown
   if (event.type === 'user/message') message = event.data
   else if (event.type === 'tool/result') {
-    const data = event.data as { error?: unknown; message?: unknown } | undefined
-    if (data?.error !== undefined) return []
-    message = data?.message
+    const result = toolResultOf(event.data)
+    if (result.failed) return []
+    message = result.message
   } else return []
   if (!message || typeof message !== 'object') return []
   // user/message 外层是 {turn, step, message}，tool/result 已经是 message 本身。
@@ -558,7 +572,7 @@ const PATTERN_TARGET_TOOLS = new Set(['grep', 'glob'])
 const WEB_TARGET_TOOLS = new Set(['web_fetch', 'web_search'])
 /** 协作类工具：对象是另一个智能体或后台任务，按工具各取一个能认出对象的参数。 */
 const TEXT_TARGET_KEYS: Record<string, readonly string[]> = {
-  send_message: ['target', 'agent_id'],
+  send_message: ['agent', 'target', 'agent_id'],
   spawn_teammate: ['name'],
   subagent: ['description'],
   job_output: ['job_id'],
@@ -818,18 +832,16 @@ export function projectHistory(
         break;
       }
       case 'tool/result': {
-        const data = event.data as { callId?: string; message?: { content?: unknown }; error?: unknown } | undefined;
-        const callId = data?.callId ? String(data.callId) : undefined;
+        const { callId, failed, message } = toolResultOf(event.data);
         const target = callId ? toolByCall.get(callId) : undefined;
-        const failed = data?.error !== undefined;
-        const summary = failed ? '失败' : summarizeResult(data?.message?.content);
+        const summary = failed ? '失败' : summarizeResult(message?.content);
         // A tool result may carry images as well as text — browser and
         // computer-use backends return screenshots this way. `summarizeResult`
         // covers only the textual part, so project the binary blocks as
         // attachments too; otherwise the phone renders a text-only summary and
         // the image is silently dropped. The durable attachmentId is what lets
         // the client read the bytes back through c2s.session.attachment.
-        const attachments = failed ? {} : attachmentProjection(data?.message);
+        const attachments = failed ? {} : attachmentProjection(message);
         if (target?.tool) {
           target.tool = { ...target.tool, state: failed ? 'error' : 'ok', summary };
           if (attachments.attachments) Object.assign(target, attachments);

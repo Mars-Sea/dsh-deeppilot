@@ -33,6 +33,27 @@ test('toolTargetOf：规则表内的工具按类别归一化，参数名不外�
   assert.deepEqual(toolTargetOf('job_output', args({ job_id: 'job-7' })), { kind: 'text', value: 'job-7' })
 })
 
+test('named send_message targets survive live projection and result merging alongside older arguments', () => {
+  for (const targetArgs of [
+    { agent: 'reviewer' },
+    { target: 'reviewer' },
+    { agent_id: 'reviewer' },
+    { agent: 'reviewer', target: 'stale-target', agent_id: 'stale-id' },
+  ]) {
+    const call = { type: 'tool/call', seq: 1, data: { name: 'send_message', callId: 'message-1', arguments: args({ ...targetArgs, message: 'hello' }) } }
+    const target = { kind: 'text', value: 'reviewer' }
+    assert.deepEqual(toolTargetOf('send_message', call.data.arguments), target)
+    assert.deepEqual((projectEvent('s1', call)!.data.tool as { target?: unknown }).target, target)
+    const history = projectHistory([
+      { event: call },
+      { event: { type: 'tool/result', seq: 2, data: { message: { toolCallId: 'message-1', content: 'delivered' } } } },
+    ])
+    assert.equal(history.length, 1)
+    assert.equal(history[0]!.tool?.state, 'ok')
+    assert.deepEqual(history[0]!.tool?.target, target)
+  }
+})
+
 test('toolTargetOf：规则表外、坏参数、缺参数一律不附带', () => {
   assert.equal(toolTargetOf('todo_write', args({ todos: [] })), undefined)
   assert.equal(toolTargetOf('ask_user_question', args({ questions: [] })), undefined)
