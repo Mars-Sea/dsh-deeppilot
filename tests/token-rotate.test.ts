@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -28,6 +28,54 @@ test('device registry is capped and refuses silent identity eviction', async () 
     assert.deepEqual(store.list().map((row) => row.deviceId), rows.map((row) => row.deviceId))
   } finally {
     await store.drain()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a full registry reclaims the oldest revoked device, never an active one', async () => {
+  const dir = await makeTempDir()
+  const store = await DeviceStore.load(join(dir, 'devices.json'))
+  try {
+    const ids: string[] = []
+    for (let i = 0; i < MAX_DEVICES; i++) {
+      const identity = createTestIdentity()
+      ids.push(store.register({ publicKey: identity.publicKey, deviceName: `Phone ${i}`, appVersion: '0.1.0' }, i + 1).deviceId)
+    }
+    const newcomer = createTestIdentity()
+    assert.equal(store.hasRoomFor('not-registered'), false)
+    assert.equal(store.hasRoomFor(ids[0]!), true, 'an existing row can always pair again')
+    store.revoke(ids[5]!, 2_000)
+    store.revoke(ids[9]!, 1_000)
+    assert.equal(store.hasRoomFor('not-registered'), true)
+    const added = store.register({ publicKey: newcomer.publicKey, deviceName: 'New', appVersion: '0.1.0' }, 3_000)
+    const after = store.list().map((row) => row.deviceId)
+    assert.equal(after.length, MAX_DEVICES)
+    assert.equal(after.includes(ids[9]!), false, 'the oldest revocation made way')
+    assert.equal(after.includes(ids[5]!), true)
+    assert.equal(after.includes(added.deviceId), true)
+    assert.equal(store.statusOf(ids[5]!), 'revoked')
+  } finally {
+    await store.drain()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('an unreadable registry fails the load; a corrupt one is set aside', async () => {
+  const dir = await makeTempDir()
+  try {
+    const unreadable = join(dir, 'unreadable.json')
+    await mkdir(unreadable)
+    await assert.rejects(DeviceStore.load(unreadable), /device registry unreadable/)
+
+    const corrupt = join(dir, 'devices.json')
+    await writeFile(corrupt, '{"version":2,"devices":[{"deviceId":"abc"')
+    const store = await DeviceStore.load(corrupt)
+    assert.deepEqual(store.list(), [])
+    const kept = (await readdir(dir)).filter((name) => name.startsWith('devices.json.corrupt-'))
+    assert.equal(kept.length, 1)
+    assert.equal(await readFile(join(dir, kept[0]!), 'utf8'), '{"version":2,"devices":[{"deviceId":"abc"')
+    await store.drain()
+  } finally {
     await rm(dir, { recursive: true, force: true })
   }
 })

@@ -121,8 +121,9 @@ export const MAX_DEVICES = 64
 
 /**
  * Paired-device registry persisted as one JSON document. Whole-document
- * writes (serialized, never interleaved); a corrupt file falls back to an
- * empty registry rather than failing the plugin.
+ * writes (serialized, never interleaved); a corrupt file is set aside and the
+ * registry starts empty, while an unreadable one fails the load so it is never
+ * overwritten.
  */
 export class DeviceStore {
   private devices = new Map<string, DeviceRecord>()
@@ -137,10 +138,20 @@ export class DeviceStore {
 
   static async load(filePath: string): Promise<DeviceStore> {
     const store = new DeviceStore(filePath)
+    const full = expandHome(filePath)
+    let text: string
     try {
-      const raw = JSON.parse(await readFile(expandHome(filePath), 'utf8')) as {
-        devices?: DeviceRecord[]
-      }
+      text = await readFile(full, 'utf8')
+    } catch (error) {
+      // First run on this home: nothing registered yet — normal.
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return store
+      // 文件存在却读不出来（权限、句柄耗尽、磁盘错误）多半是暂时的。从空表启动的话，
+      // 下一次写入会覆盖仍然完好的注册表，全部配对随之丢失；所以这里抛错，
+      // 由调用方让桥接层降级，文件保持原样。
+      throw new Error('device registry unreadable: ' + String(error))
+    }
+    try {
+      const raw = JSON.parse(text) as { devices?: DeviceRecord[] }
       let upgraded = 0
       for (const rec of raw.devices ?? []) {
         if (typeof rec.deviceId !== 'string') continue
@@ -158,15 +169,15 @@ export class DeviceStore {
         void store.flush()
       }
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException)?.code
-      if (code === 'ENOENT') {
-        // First run on this home: nothing registered yet — normal.
-      } else {
-        // A truncated/corrupt registry silently wiping pairings and push
-        // registrations would be indistinguishable from "never registered".
-        // Make data loss loud so the cause (crash mid-write, disk, …) shows.
-        console.log(formatLogLine('warn', 'device registry unreadable, starting empty: ' + String(error)))
-      }
+      // A truncated/corrupt registry silently wiping pairings and push
+      // registrations would be indistinguishable from "never registered".
+      // Make data loss loud, and keep the damaged file: the next write would
+      // otherwise replace the only copy that could still be repaired by hand.
+      store.devices.clear()
+      const backup = `${full}.corrupt-${Date.now()}`
+      const kept = await rename(full, backup).then(() => true, () => false)
+      console.log(formatLogLine('warn', 'device registry corrupt, starting empty'
+        + (kept ? ' (previous file kept at ' + backup + ')' : '') + ': ' + String(error)))
     }
     return store
   }
@@ -178,7 +189,7 @@ export class DeviceStore {
   ): DeviceRecord {
     const deviceId = deviceIdForPublicKey(record.publicKey)
     const existing = this.devices.get(deviceId)
-    if (!existing && this.devices.size >= MAX_DEVICES) {
+    if (!existing && this.devices.size >= MAX_DEVICES && !this.evictOldestRevoked()) {
       throw new Error('device registry is full')
     }
     const next: DeviceRecord = {
@@ -200,6 +211,33 @@ export class DeviceStore {
     this.devices.set(deviceId, next)
     void this.flush()
     return structuredClone(next)
+  }
+
+  /**
+   * Whether `register` would accept this device: it already has a row (active
+   * or revoked), there is a free row, or a revoked row can be reclaimed.
+   */
+  hasRoomFor(deviceId: string): boolean {
+    if (this.devices.has(deviceId) || this.devices.size < MAX_DEVICES) return true
+    for (const record of this.devices.values()) if (record.revokedAt !== undefined) return true
+    return false
+  }
+
+  /**
+   * Revoked rows are kept so a later attempt is reported as "revoked" rather
+   * than "unknown", but they must not occupy the registry forever: once it is
+   * full, the oldest revocation makes way for a new pairing. Active devices
+   * are never evicted.
+   */
+  private evictOldestRevoked(): boolean {
+    let oldest: DeviceRecord | undefined
+    for (const record of this.devices.values()) {
+      if (record.revokedAt === undefined) continue
+      if (oldest === undefined || record.revokedAt < oldest.revokedAt!) oldest = record
+    }
+    if (oldest === undefined) return false
+    this.devices.delete(oldest.deviceId)
+    return true
   }
 
   /** Return an active cryptographic identity. */

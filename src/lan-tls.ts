@@ -42,7 +42,8 @@ export function spkiFingerprint(certPem: string): string {
  * Load the LAN listener's TLS identity from `dir`, creating or repairing it
  * as needed. The private key is the durable identity: it is created once and
  * reused for every subsequent certificate, so pinned devices survive
- * certificate renewals. Only a missing or unreadable key forces a new one.
+ * certificate renewals. Only a missing or malformed key forces a new one; a key
+ * file that exists but cannot be read aborts the load instead of replacing it.
  */
 export async function loadOrCreateLanTlsIdentity(dir: string, now: number = Date.now()): Promise<LanTlsIdentity> {
   await mkdir(dir, { recursive: true, mode: 0o700 })
@@ -50,13 +51,21 @@ export async function loadOrCreateLanTlsIdentity(dir: string, now: number = Date
   const certPath = join(dir, LAN_TLS_CERT_FILE)
 
   let key = await readPem(keyPath, (error) => {
-    // 读失败（非 ENOENT）会被下面当成「密钥缺失」直接重建：已配对设备的
-    // 固定指纹随即失效、必须重新配对。这个后果必须可见，否则用户只会看到
-    // 手机突然不认证书，而电脑端毫无线索。
-    console.log(formatLogLine('warn', 'LAN TLS private key unreadable, regenerating identity: ' + describeFileError(error)))
+    // 读失败（非 ENOENT：权限、句柄耗尽、磁盘错误）多半是暂时的。此时重建会覆盖
+    // 仍然完好的密钥，已配对设备的固定指纹随即永久失效；所以这里中止加载，
+    // 局域网监听本次不启动，下一次协调再试，密钥文件保持原样。
+    throw new Error('LAN TLS private key unreadable, keeping the existing identity: ' + describeFileError(error))
   })
   let regenerated = false
   if (key === undefined || !validPrivateKey(key)) {
+    if (key !== undefined) {
+      // 文件读到了但内容不是 EC 私钥：无法挽回，只能重建。先把原文件改名留存，
+      // 并留一行日志——否则用户只会看到手机突然不认证书，而电脑端毫无线索。
+      const backup = `${keyPath}.corrupt-${now}`
+      const kept = await rename(keyPath, backup).then(() => true, () => false)
+      console.log(formatLogLine('warn', 'LAN TLS private key is not a valid EC key, regenerating identity'
+        + (kept ? ' (previous file kept at ' + backup + ')' : '')))
+    }
     regenerated = true
     key = undefined
   }
@@ -96,8 +105,8 @@ async function readPem(path: string, onError?: (error: unknown) => void): Promis
     return text.trim().length > 0 ? text : undefined
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-    // 非 ENOENT 的读取失败交给调用方留痕；随后仍按「文件缺失」重建身份，
-    // 保证插件能起来。错误消息只含路径与 errno，不含密钥内容。
+    // 非 ENOENT 的读取失败交给调用方处置：私钥抛错中止，证书留痕后按缺失重签。
+    // 错误消息只含路径与 errno，不含密钥内容。
     onError?.(error)
     return undefined
   }

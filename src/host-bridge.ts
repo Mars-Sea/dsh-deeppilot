@@ -65,6 +65,7 @@ import { hostFailureOf, wireCodeFor, wireErrorOf, type WireErrorCode } from './w
 import { formatLogLine } from './diagnostics.ts'
 import { AssistantStream, type AssistantStreamDelta } from './assistant-stream.ts'
 import { ImageRefIndex } from './image-ref-index.ts'
+import { mentionsEndpoint } from './preview-policy.ts'
 
 export {
   MAX_MESSAGE_PROJECTION_BYTES,
@@ -1249,7 +1250,7 @@ export class HostBridge {
         if (!response.result || !response.result.ok) return scanned === 0 ? null : false;
         const events = response.result.value.events ?? [];
         if (events.length === 0) return false;
-        if (JSON.stringify(events).includes(needle)) return true;
+        if (mentionsEndpoint(JSON.stringify(events), needle)) return true;
         scanned += events.length;
         // 下一页从本页最早的 seq 往前取；seq 不前进（宿主边界异常）时停止，防止死循环。
         const oldest = Math.min(...events.map((row) => row.event.seq));

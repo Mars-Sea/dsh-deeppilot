@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createPublicKey, X509Certificate } from 'node:crypto'
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { connect } from 'node:tls'
@@ -85,6 +85,29 @@ test('a missing or corrupt private key regenerates the identity and reports it',
   // The certificate on disk must now match the new key.
   const onDisk = await readFile(join(dir, LAN_TLS_CERT_FILE), 'utf8')
   assert.equal(spkiFingerprint(onDisk), regenerated.fingerprint)
+  // The damaged file is set aside, not destroyed.
+  const kept = (await readdir(dir)).filter((name) => name.startsWith(LAN_TLS_KEY_FILE + '.corrupt-'))
+  assert.equal(kept.length, 1)
+  assert.equal(await readFile(join(dir, kept[0]!), 'utf8'), 'not a key\n')
+})
+
+test('a private key that exists but cannot be read aborts the load and is left untouched', async () => {
+  const dir = await freshDir()
+  const first = await loadOrCreateLanTlsIdentity(dir)
+  const keyPath = join(dir, LAN_TLS_KEY_FILE)
+  const keyPem = await readFile(keyPath, 'utf8')
+  // A directory in the key's place makes readFile fail with EISDIR on every
+  // platform and for every user (chmod would not stop root in CI).
+  await rm(keyPath)
+  await mkdir(keyPath)
+  await assert.rejects(loadOrCreateLanTlsIdentity(dir), /private key unreadable/)
+  assert.equal((await stat(keyPath)).isDirectory(), true, 'nothing was written over the key path')
+  // Once the file is readable again the same identity comes back.
+  await rm(keyPath, { recursive: true })
+  await writeFile(keyPath, keyPem, { mode: 0o600 })
+  const again = await loadOrCreateLanTlsIdentity(dir)
+  assert.equal(again.regenerated, false)
+  assert.equal(again.fingerprint, first.fingerprint)
 })
 
 test('spkiFingerprint hashes the SubjectPublicKeyInfo, not the whole certificate', async () => {

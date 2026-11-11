@@ -15,7 +15,8 @@ prove who it is, and the only way back is to pair again.
 | Situation | Host | Phone |
 | --- | --- | --- |
 | File deleted, or the data directory is new | Starts with no devices and logs no error: a missing file is indistinguishable from a first run. The start-up line `device registry loaded from ...: 0 device(s), 0 push registration(s)` is the tell. | Every phone is refused with close code `4401` and shows "pairing is no longer valid". |
-| File unreadable (truncated, disk error) | Logs `[deeppilot] device registry unreadable, starting empty: ...` at start-up, then reports `0 device(s)` and behaves as above. | Same. |
+| File damaged (truncated, not valid JSON) | Logs `[deeppilot] device registry corrupt, starting empty (previous file kept at ...devices-v2.json.corrupt-<timestamp>): ...` at start-up, then reports `0 device(s)` and behaves as above. The damaged file is renamed, not overwritten. | Same. |
+| File present but cannot be read (permissions, disk error) | Logs `auth material unavailable, bridge degraded: Error: device registry unreadable: ...` and leaves the file untouched. Pairing and connections answer `503` until the cause is fixed and the plugin restarts. | Cannot connect; the pairing itself is still valid. |
 | A single device deleted in the settings page | That one device is refused; others are unaffected. | Same message on that phone only. |
 
 The phone cannot tell these cases apart: `4401` is also what a revoked device
@@ -27,9 +28,10 @@ revocation.
 1. **Stop DeepSeek Harness first.** The plugin reads the registry once at start-up
    and rewrites it from memory afterwards, so an edit made while it runs is
    overwritten.
-2. **Copy the damaged file aside** (`cp devices-v2.json devices-v2.json.bad`) if
-   it exists. The first successful pairing writes a fresh registry over it, and
-   a truncated file may still contain recoverable entries.
+2. **Keep the damaged file.** The plugin renames a registry it cannot parse to
+   `devices-v2.json.corrupt-<timestamp>` before starting empty; a truncated file
+   may still contain recoverable entries. If you find a damaged
+   `devices-v2.json` that was not renamed, copy it aside yourself.
 3. **Never delete `host-id`.** It is the stable Host identity (`audience`) that
    every phone has stored. A new `host-id` invalidates every pairing even if the
    registry is restored. If `host-id` itself is malformed the plugin refuses to

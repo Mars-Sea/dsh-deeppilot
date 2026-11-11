@@ -65,3 +65,21 @@ export function isReservedPreviewPort(port: number, reserved: Iterable<number>):
   for (const value of reserved) if (value === port) return true
   return false
 }
+
+/**
+ * `text` 里是否出现过完整的 `<hostname>:<port>`（`mention`）。
+ *
+ * 为什么不能直接找子串：`127.0.0.1:80` 是 `127.0.0.1:8080` 的前缀，会话里提到 8080
+ * 不等于提到过 80。端口后面紧跟数字的出现一律不算，继续往后找。
+ */
+export function mentionsEndpoint(text: string, mention: string): boolean {
+  if (mention.length === 0) return false
+  let at = text.indexOf(mention)
+  while (at !== -1) {
+    const next = text.charCodeAt(at + mention.length)
+    // NaN（已到末尾）与非数字都算端口结束。
+    if (!(next >= 48 && next <= 57)) return true
+    at = text.indexOf(mention, at + 1)
+  }
+  return false
+}

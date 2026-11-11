@@ -114,6 +114,19 @@ function alertPayload(notification: PushNotification): Record<string, unknown> {
   }
 }
 
+/**
+ * `pushHeaders` plus the default expiry. Stale approvals arriving hours later
+ * are worse than none, so every push expires after an hour — unless its kind
+ * sets a shorter lifetime of its own (Live Activity updates: 180 s), which
+ * must win: the default goes first and `pushHeaders` overrides it.
+ */
+export function deliveryHeaders(bundleId: string, notification: PushDelivery, now = Date.now()): Record<string, string> {
+  return {
+    'apns-expiration': String(Math.floor(now / 1000) + 3600),
+    ...pushHeaders(bundleId, notification),
+  }
+}
+
 /** One delivery request: the notify projection plus its target device token.
  * The environment comes from the device's own registration (its build kind),
  * so one client serves both sandbox and production devices. */
@@ -232,9 +245,7 @@ export class ApnsClient {
           [':method']: 'POST',
           [':path']: '/3/device/' + deviceToken,
           authorization: 'bearer ' + token,
-          ...pushHeaders(this.opts.bundleId, notification),
-          // Stale approvals arriving hours later are worse than none.
-          'apns-expiration': String(Math.floor(Date.now() / 1000) + 3600),
+          ...deliveryHeaders(this.opts.bundleId, notification),
           'content-type': 'application/json',
           'content-length': String(Buffer.byteLength(body)),
         })

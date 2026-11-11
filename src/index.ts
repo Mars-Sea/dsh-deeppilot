@@ -16,7 +16,7 @@ import { DshApiProxy, type DshInteractionKind } from './dsh-api-proxy.ts'
 import { applyReportRemote } from './report-remote.ts'
 import type { DeepPilotReport } from './report-wire.ts'
 import type { WelcomeRoutes } from './protocol.ts'
-import { DeviceStore, MAX_DEVICES, bridgeDataDir, deviceDisplayName, ensurePrivateBridgeDataDir, expandHome, migrateLegacyBridgeDataDir } from './token.ts'
+import { DeviceStore, bridgeDataDir, deviceDisplayName, ensurePrivateBridgeDataDir, expandHome, migrateLegacyBridgeDataDir } from './token.ts'
 import type { ApnsEnvironment } from './token.ts'
 import {
   PairingCodeManager,
@@ -480,7 +480,7 @@ export function apply(ctx: Context, options: unknown): void {
       const deviceName = sanitizeDeviceField(raw.deviceName, MAX_DEVICE_NAME_CHARS) || 'unknown'
       const appVersion = sanitizeDeviceField(raw.appVersion, MAX_APP_VERSION_CHARS) || 'unknown'
       const deviceId = deviceIdForPublicKey(publicKey)
-      if (devices.list().length >= MAX_DEVICES && devices.authorized(deviceId) === undefined) {
+      if (!devices.hasRoomFor(deviceId)) {
         reportPairRejected('registry-full')
         res.statusCode = 409
         res.end(JSON.stringify({ ok: false, error: 'device registry is full' }))

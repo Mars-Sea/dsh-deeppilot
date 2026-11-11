@@ -315,3 +315,16 @@ test('sessionMentions 向前翻页查找，读取失败返回 null，翻到头�
   assert.equal(await bridge.sessionMentions('s', 'localhost:5173', 150), false, '超过扫描上限即停')
   assert.equal(await bridge.sessionMentions('broken', 'x'), null)
 })
+
+test('sessionMentions 只认完整端口：提到 5173 不等于提到 517 或 51', async () => {
+  const proxy = makeProxy('unused')
+  ;(proxy.sessions as any).history = async () => ({
+    result: { ok: true, value: { events: [{ event: { seq: 1, type: 'message', payload: { text: 'open http://localhost:5173/ and 127.0.0.1:8080' } } }], hasMore: false } },
+  })
+  const bridge = new HostBridge(proxy, 100)
+  assert.equal(await bridge.sessionMentions('s', 'localhost:5173'), true)
+  assert.equal(await bridge.sessionMentions('s', 'localhost:517'), false)
+  assert.equal(await bridge.sessionMentions('s', 'localhost:51'), false)
+  assert.equal(await bridge.sessionMentions('s', '127.0.0.1:8080'), true, '端口在文本末尾也算')
+  assert.equal(await bridge.sessionMentions('s', '127.0.0.1:80'), false)
+})

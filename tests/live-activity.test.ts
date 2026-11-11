@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { DeviceStore } from '../src/token.ts'
 import { createTestIdentity, registerTestIdentity } from './auth-fixture.ts'
 import { liveActivityEnded, liveActivityState, LiveActivityPushManager } from '../src/live-activity.ts'
-import { apnsPayload, pushHeaders } from '../src/apns.ts'
+import { apnsPayload, deliveryHeaders, pushHeaders } from '../src/apns.ts'
 import { registryRowFor, validatePayload } from '../src/wire-registry.ts'
 import type { LiveActivityPushNotification, SessionGoal, SessionSummary } from '../src/protocol.ts'
 
@@ -216,4 +216,13 @@ test('clearing todos ends background activity and adding them again cannot reviv
   } finally {
     manager.dispose(); await store.drain(); await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('the one-hour default expiry never overrides a Live Activity update\'s own 180 s lifetime', () => {
+  const now = 1_800_000_000_000
+  const timestamp = Math.floor(now / 1000)
+  const update = { kind: 'liveactivity', event: 'update', timestamp, contentState: { title: 't', task: '', done: 0, total: 1, phase: 'running' } } as LiveActivityPushNotification
+  assert.equal(deliveryHeaders('dev.example.app', update, now)['apns-expiration'], String(timestamp + 180))
+  // Kinds without a lifetime of their own keep the default.
+  assert.equal(deliveryHeaders('dev.example.app', { kind: 'widget' }, now)['apns-expiration'], String(timestamp + 3600))
 })

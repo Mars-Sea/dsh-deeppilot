@@ -13,7 +13,8 @@
 | 情形 | 电脑端 | 手机端 |
 | --- | --- | --- |
 | 文件被删，或数据目录是新的 | 以空设备列表启动，不报错：缺文件与首次运行无法区分。启动日志里的 `device registry loaded from ...: 0 device(s), 0 push registration(s)` 就是线索 | 所有手机被关闭码 `4401` 拒绝，提示"配对已失效" |
-| 文件不可读（被截断、磁盘错误） | 启动时记一条 `[deeppilot] device registry unreadable, starting empty: ...`，随后报告 `0 device(s)`，之后同上 | 同上 |
+| 文件损坏（被截断、不是合法 JSON） | 启动时记一条 `[deeppilot] device registry corrupt, starting empty (previous file kept at ...devices-v2.json.corrupt-<时间戳>): ...`，随后报告 `0 device(s)`，之后同上。损坏的文件会被改名保留，不会被覆盖 | 同上 |
+| 文件存在但读不出来（权限、磁盘错误） | 记一条 `auth material unavailable, bridge degraded: Error: device registry unreadable: ...`，文件保持原样。排除原因并重启插件之前，配对与连接一律返回 `503` | 无法连接，但配对本身仍然有效 |
 | 在设置页只删除了一台设备 | 仅该设备被拒绝，其余不受影响 | 仅该手机出现同样提示 |
 
 手机无法区分这几种情形：被吊销的设备拿到的同样是 `4401`。如果所有手机同时失败，先怀疑
@@ -23,8 +24,9 @@
 
 1. **先停止 DeepSeek Harness。**插件只在启动时读一次注册表，之后按内存内容重写文件，
    运行中手工修改会被覆盖。
-2. **把损坏的文件另存一份**（`cp devices-v2.json devices-v2.json.bad`）。第一次成功配对
-   会用新内容覆盖它，而被截断的文件里也许还有可挽回的条目。
+2. **保留损坏的文件。**插件解析不了注册表时，会先把它改名为
+   `devices-v2.json.corrupt-<时间戳>` 再以空表启动；被截断的文件里也许还有可挽回的条目。
+   如果发现一个损坏却没被改名的 `devices-v2.json`，请自己另存一份。
 3. **不要删除 `host-id`。**它是所有手机都保存着的 Host 身份（`audience`）；换了新的
    `host-id`，即便注册表恢复了，所有配对也都作废。如果 `host-id` 本身格式损坏，插件会
    拒绝启动，请从备份恢复，而不是删除。
