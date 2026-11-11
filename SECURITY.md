@@ -20,12 +20,14 @@ Do not open a public issue containing pairing codes, APNs device tokens, provide
 - Losing `devices-v2.json`, `host-id` or `lan-tls/` makes every affected phone pair again; see [docs/DEVICE_REGISTRY_RECOVERY.md](./docs/DEVICE_REGISTRY_RECOVERY.md) for what to back up and how to recover.
 - The independent LAN listener (default port `3098`) is TLS-only: the plugin serves a self-signed EC P-256 certificate, and the app pins its SPKI fingerprint delivered inside the pairing QR. There is no trust-on-first-use; a regenerated key forces re-pairing. The private key lives owner-only under `$DSH_HOME/deeppilot/lan-tls/`. Never forward the LAN port to the public Internet; public access should use Funnel HTTPS/WSS.
 - The LAN listener and Funnel helper publish only `/phone`, `/phone/pair`, and `/phone/health`, never the complete DSH Web UI.
+- Local preview forwards raw TCP from a loopback port on the phone to the same port on the computer. A port is opened only when the session's messages mention that exact `host:port` (or through the separate, default-off host-web switch). While a preview is open, other apps on the same phone can reach that loopback port: iOS does not isolate loopback between apps. The app stops listening when the preview closes; treat a previewed dev server as reachable by anything running on the phone meanwhile.
 - Logs must never include pairing codes, key material, APNs tokens, or message bodies.
 
 ## Online attack controls
 
 - The Funnel helper allows at most 60 requests per source per minute and 600 globally. Concurrent WebSockets per public source are configurable from 1 to 16 and default to 8.
 - The Node bridge independently allows at most 12 anonymous authentication or pairing attempts per source per minute, 120 globally, and two concurrent unauthenticated WebSockets per source.
+- Of the 16 concurrent phone connections, at most 8 may be unauthenticated at once, so anonymous sources cannot hold every slot and lock paired devices out.
 - Five failures within ten minutes block that source for 15 minutes. A blocked request receives HTTP 429 with `Retry-After`.
 - The bridge ignores caller-supplied forwarding headers on non-loopback sockets.
 - Audit logs use process-local salted hashes, preventing stable source/device correlation across restarts.

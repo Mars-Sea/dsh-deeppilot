@@ -111,6 +111,8 @@ export class PreviewTunnel {
   private readonly streams = new Map<number, PreviewStream>()
   /** 已授权端口 → 实际连接地址；连接关闭即作废。 */
   private readonly grants = new Map<number, PortGrant>()
+  /** 已通过上限检查、正在连接电脑上服务的 open 数；与 streams 一起计入通道上限。 */
+  private opening = 0
   private flushTimer: NodeJS.Timeout | undefined
   private disposed = false
 
@@ -178,8 +180,15 @@ export class PreviewTunnel {
       if (denial !== undefined) return this.fail(id, 'E_FORBIDDEN', denial, 'host web access is not allowed')
     }
     if (this.streams.has(streamId)) return this.fail(id, 'E_PROTOCOL', 'duplicate-stream', `stream ${streamId} in use`)
-    if (this.streams.size >= PREVIEW_MAX_STREAMS) return this.fail(id, 'E_BUSY', 'too-many-streams', 'too many preview streams')
-    const socket = await this.connectFirst(grant.connectHosts, port)
+    // 连接是异步的：只数已建成的通道，并发 open 会全部通过检查再一起建成。
+    if (this.streams.size + this.opening >= PREVIEW_MAX_STREAMS) return this.fail(id, 'E_BUSY', 'too-many-streams', 'too many preview streams')
+    this.opening += 1
+    let socket: Socket | undefined
+    try {
+      socket = await this.connectFirst(grant.connectHosts, port)
+    } finally {
+      this.opening -= 1
+    }
     if (socket === undefined) return this.fail(id, 'E_NOT_FOUND', 'connect-refused', `nothing listening on port ${port}`)
     // 连接期间可能已被关闭或重复占用（并发 open 同一 id）：后到的一条直接放弃。
     if (this.disposed || this.streams.has(streamId)) {

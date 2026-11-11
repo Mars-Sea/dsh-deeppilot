@@ -143,7 +143,9 @@ export const sessionRows: readonly WireFrameRow[] = [
   {
     type: 'c2s.directory.list',
     stage: 'authenticated',
-    scopes: READ,
+    // 浏览电脑上的任意目录、在电脑上弹出系统选择器，都只为「添加项目」服务，
+    // 与 c2s.workspace.create 同权限；只读设备不应能枚举整台电脑的目录。
+    scopes: MANAGE,
     doc: 'PROTOCOL.md c2s.directory.list',
     validate: (payload) => {
       const checked = payloadObject(payload)
@@ -165,7 +167,9 @@ export const sessionRows: readonly WireFrameRow[] = [
   {
     type: 'c2s.directory.pick',
     stage: 'authenticated',
-    scopes: READ,
+    // 浏览电脑上的任意目录、在电脑上弹出系统选择器，都只为「添加项目」服务，
+    // 与 c2s.workspace.create 同权限；只读设备不应能枚举整台电脑的目录。
+    scopes: MANAGE,
     doc: 'PROTOCOL.md c2s.directory.pick',
     validate: (payload) => payloadObject(payload),
     handle: async (ctx) => {

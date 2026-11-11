@@ -626,7 +626,7 @@ tool.end / turn.start / turn.end；其余 kind 为兼容 Host 后续事件投影
 }] } }
 ```
 
-添加项目时优先使用 Host 的远程目录浏览能力。`path` 缺省时从 Host 用户主目录开始；客户端只能回传 Host 给出的绝对路径，不自行拼接路径：
+添加项目时优先使用 Host 的远程目录浏览能力。`c2s.directory.list` 与 `c2s.directory.pick` 需要权限 `sessions.manage`（与 `c2s.workspace.create` 相同；0.9.20 及更早只要求 `sessions.read`）。`path` 缺省时从 Host 用户主目录开始；客户端只能回传 Host 给出的绝对路径，不自行拼接路径：
 
 ```json
 { "type": "c2s.directory.list", "id": "d-1", "payload": { "path": "/Users/sea/Development" } }

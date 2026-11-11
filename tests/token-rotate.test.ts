@@ -106,6 +106,25 @@ test('device scopes update and revocation fail closed', async () => {
   }
 })
 
+test('a custom name that cannot be written is rolled back and reported', async () => {
+  const dir = await makeTempDir()
+  try {
+    const path = join(dir, 'devices-v2.json')
+    const store = await DeviceStore.load(path)
+    const identity = createTestIdentity()
+    const paired = store.register({ publicKey: identity.publicKey, deviceName: 'iPhone', appVersion: '1.0' }, 1)
+    await store.drain()
+    // A directory in the registry's place makes the atomic rename fail.
+    await rm(path)
+    await mkdir(path)
+    await assert.rejects(store.setCustomName(paired.deviceId, '工作手机'), /device registry write failed/)
+    assert.equal(store.list()[0]?.customName, undefined, 'the unsaved name is not kept in memory')
+    assert.deepEqual((await readdir(dir)).filter((name) => name.endsWith('.tmp')), [], 'no temp file is left behind')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('custom device names persist, survive reconnects, and can be cleared', async () => {
   const dir = await makeTempDir()
   try {

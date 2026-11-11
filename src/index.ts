@@ -78,6 +78,12 @@ type SubContext = {
 const SERVER_VERSION = readOwnPackageVersion()
 const MAX_CLIENT_CONNECTIONS = 16
 /**
+ * 尚未认证的连接（含正在升级的）最多占用的名额。未认证连接与已认证连接共用
+ * MAX_CLIENT_CONNECTIONS；不设这条线时，经 Funnel 的匿名来源各占 2 条、每条最长
+ * 35 秒，8 个来源就能占满全部名额，把已配对的手机挡在外面。留一半给已认证设备。
+ */
+const MAX_UNAUTHENTICATED_CONNECTIONS = 8
+/**
  * Single-frame bound. Covers the protocol maximum (4 × 8 MB base64 images
  * plus prompt text) with headroom while keeping an unauthenticated client's
  * pre-hello buffering far below ws's 100 MiB default.
@@ -546,6 +552,12 @@ export function apply(ctx: Context, options: unknown): void {
         }
         if (connections.size + pendingUpgrades >= MAX_CLIENT_CONNECTIONS) {
           reject(429, 'too many connections')
+          return
+        }
+        let unauthenticated = pendingUpgrades
+        for (const connection of connections) if (connection.connectedDeviceId === undefined) unauthenticated += 1
+        if (unauthenticated >= MAX_UNAUTHENTICATED_CONNECTIONS) {
+          reject(429, 'too many unauthenticated connections')
           return
         }
         pendingUpgrades += 1

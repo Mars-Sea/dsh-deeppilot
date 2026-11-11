@@ -3,7 +3,7 @@ import { isNotificationPreferences, notificationPreferences } from './notificati
 import { MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
 import { formatLogLine } from './diagnostics.ts'
 import { randomBytes } from 'node:crypto'
-import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import {
@@ -282,12 +282,12 @@ export class DeviceStore {
     const previous = record.customName
     if (normalized === '') delete record.customName
     else record.customName = normalized
-    try {
-      await this.flush()
-    } catch (error) {
+    // flush 自己不抛错（写失败只记日志），成败看返回值：没落盘就撤回内存里的改动，
+    // 否则设置页显示改名成功，重启后名字却变回去。
+    if (!(await this.flush())) {
       if (previous === undefined) delete record.customName
       else record.customName = previous
-      throw error
+      throw new Error('device registry write failed')
     }
     return deviceDisplayName(record)
   }
@@ -440,11 +440,10 @@ export class DeviceStore {
   }
 
   /** Serialized so concurrent touches can never interleave half-written JSON. */
-  private flush(): Promise<void> {
+  private flush(): Promise<boolean> {
     const next = this.flushTail.then(() => this.writeFile())
-    this.flushTail = next.catch(() => {
-      // 真正的写失败已由 writeFile 自己的 catch 记录（含节流）。
-    })
+    // writeFile 不抛错：失败由它自己记录（含节流）并以 false 返回。
+    this.flushTail = next.then(() => {})
     return next
   }
 
@@ -453,7 +452,8 @@ export class DeviceStore {
     await this.flushTail
   }
 
-  private async writeFile(): Promise<void> {
+  /** Returns whether the registry reached the disk. Never throws. */
+  private async writeFile(): Promise<boolean> {
     const full = expandHome(this.filePath)
     const body = JSON.stringify(
       { version: 2, devices: this.list() },
@@ -466,13 +466,20 @@ export class DeviceStore {
       // behind, which load() treats as corrupt and drops ENTIRELY — losing
       // pairings and push registrations on every unlucky shutdown.
       const temp = `${full}.${randomBytes(6).toString('hex')}.tmp`
-      await writeFile(temp, body + '\n', { mode: 0o600 })
-      await rename(temp, full)
+      try {
+        await writeFile(temp, body + '\n', { mode: 0o600 })
+        await rename(temp, full)
+      } catch (error) {
+        await unlink(temp).catch(() => {})
+        throw error
+      }
+      return true
     } catch (error) {
       // best-effort persistence; the bridge still works without it.
       // 但失败本身必须留一行：注册表静默不落盘时，重启后配对消失会被
       // 误认为「设备自己掉了」，真正原因（磁盘 / 权限）只有这里可见。
       this.logWriteFailure(error)
+      return false
     }
   }
 

@@ -387,6 +387,21 @@ test('上行超窗口或超单帧上限按 flow-control 关闭', async () => {
   }
 })
 
+test('并发 open 也受通道上限约束', async () => {
+  const tcp = await listen(createNetServer(() => {}))
+  const h = makeTunnel()
+  try {
+    await h.tunnel.authorize('a', 's', `http://127.0.0.1:${tcp.port}/`)
+    // 不逐条等待：全部 open 在任何一条连上之前就已发出。
+    await Promise.all(Array.from({ length: PREVIEW_MAX_STREAMS + 8 }, (_, i) => h.tunnel.open('o', i + 1, tcp.port)))
+    assert.equal(h.tunnel.streamCount, PREVIEW_MAX_STREAMS)
+    assert.equal(h.errors().filter((f) => f.payload.reason === 'too-many-streams').length, 8)
+  } finally {
+    h.tunnel.dispose()
+    await tcp.close()
+  }
+})
+
 test('通道上限与重复 id', async () => {
   const tcp = await listen(createNetServer(() => {}))
   const h = makeTunnel()

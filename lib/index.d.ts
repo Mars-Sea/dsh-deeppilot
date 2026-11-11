@@ -1540,6 +1540,11 @@ export declare class HostBridge {
     hasMore: boolean;
   } | null>;
   /**
+   * 宿主调用抛出的意外错误。原文可能带着电脑上的路径或堆栈，只进电脑端日志；
+   * 手机只收到一句固定文案（宿主以结果形式返回的业务错误另走 wireErrorOf，不经这里）。
+   */
+  private internalFailure;
+  /**
    * 本机预览准入（PROTOCOL.md「本机预览扩展」）：会话最近 `maxMessages` 条消息里是否
    * 出现过 `needle`（形如 `127.0.0.1:4720`）。
    *

@@ -109,3 +109,11 @@ test('c2s.session.references 帧：回显 sessionId 与 query，失败按桥接�
   await row.handle(context, { sessionId: 's', query: '' })
   assert.deepEqual(sent.pop(), { type: 'error', payload: 'E_UNSUPPORTED', message: '当前主机不支持引用文件或会话' })
 })
+
+test('浏览电脑目录与弹出系统选择器需要 sessions.manage，只读设备被拒', () => {
+  for (const type of ['c2s.directory.list', 'c2s.directory.pick']) {
+    const row = registryRowFor(type)!
+    assert.equal(scopeRejection(row, new Set(['sessions.read']))?.code, 'E_FORBIDDEN', type)
+    assert.equal(scopeRejection(row, new Set(['sessions.manage'])), undefined, type)
+  }
+})

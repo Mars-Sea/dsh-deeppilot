@@ -1226,6 +1226,15 @@ export class HostBridge {
   }
 
   /**
+   * 宿主调用抛出的意外错误。原文可能带着电脑上的路径或堆栈，只进电脑端日志；
+   * 手机只收到一句固定文案（宿主以结果形式返回的业务错误另走 wireErrorOf，不经这里）。
+   */
+  private internalFailure(error: unknown): { ok: false; code: 'E_INTERNAL'; message: string } {
+    this.log?.('host call failed: ' + String(error).slice(0, 300))
+    return { ok: false, code: 'E_INTERNAL', message: 'internal error; see the DSH log on the computer' }
+  }
+
+  /**
    * 本机预览准入（PROTOCOL.md「本机预览扩展」）：会话最近 `maxMessages` 条消息里是否
    * 出现过 `needle`（形如 `127.0.0.1:4720`）。
    *
@@ -1393,7 +1402,7 @@ export class HostBridge {
       if (!response.result.ok) return wireErrorOf('model', response.result.error)
       return { ok: true, value: projectSessionModels(response.result.value) }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -1419,7 +1428,7 @@ export class HostBridge {
       if (!response.result.ok) return wireErrorOf('model', response.result.error)
       return { ok: true, value: { ...response.result.value.selected } }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -1443,7 +1452,7 @@ export class HostBridge {
       }
       return { ok: true, value: acceptedTitle }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -1469,7 +1478,7 @@ export class HostBridge {
       this.record('s2c.sessions.delta', { upserted: [], removedIds: [sessionId] })
       return { ok: true, value: true }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -1494,7 +1503,7 @@ export class HostBridge {
       await this.refreshSummaries()
       return { ok: true, value: true }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -1520,7 +1529,7 @@ export class HostBridge {
       if (!response.result.ok) return wireErrorOf('queue', response.result.error)
       return { ok: true, value: { sessionId, itemId } }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -1538,7 +1547,7 @@ export class HostBridge {
       if (!response.result.ok) return wireErrorOf('session', response.result.error)
       return { ok: true, value: true }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -1555,7 +1564,7 @@ export class HostBridge {
       if (!response.result.ok) return wireErrorOf('session', response.result.error)
       return { ok: true, value: (response.result.value.items ?? []).map(projectWorkspace) }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -1579,7 +1588,7 @@ export class HostBridge {
         value: { workspace: projectWorkspace(response.result.value.workspace), created: response.result.value.created === true },
       }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -1597,7 +1606,7 @@ export class HostBridge {
       if (!response.result.ok) return wireErrorOf('session', response.result.error)
       return { ok: true, value: response.result.value }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -1615,7 +1624,7 @@ export class HostBridge {
       if (!response.result.ok) return wireErrorOf('session', response.result.error)
       return { ok: true, value: response.result.value.path }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -1693,7 +1702,7 @@ export class HostBridge {
       if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
       return { ok: true, value: response.result.value.tasks }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -1957,7 +1966,7 @@ export class HostBridge {
       if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
       return { ok: true, value: response.result.value.history }
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) }
+      return this.internalFailure(error)
     }
   }
 
@@ -2193,7 +2202,7 @@ export class HostBridge {
       this.userReceiptSeq += 1;
       return { ok: true, value: this.userReceiptSeq };
     } catch (error) {
-      return { ok: false, code: 'E_INTERNAL', message: String(error) };
+      return this.internalFailure(error);
     }
   }
 
