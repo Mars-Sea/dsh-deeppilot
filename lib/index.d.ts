@@ -535,6 +535,32 @@ interface SessionGoal {
     message: string;
   };
 }
+/**
+ * Context-window occupancy mirrored from the Host's `contextPressure` and
+ * `contextBreakdown` projections (dsh-token-meter). Every field is optional:
+ * a value is present only when the Host reported it, and an absent value is
+ * unknown, never zero. Only sessions the Bridge has opened or seen change
+ * carry it — the session list itself does not include these projections.
+ */
+interface SessionContextUsage {
+  /** Provider-reported prompt size of the most recent request. */
+  pressureTokens?: number;
+  /** Host estimate of the next request's prompt size. */
+  projectedTokens?: number;
+  /** Newest recorded route capacity. */
+  contextWindow?: number;
+  /** Heuristic composition of the next request. The three figures do not sum
+   * to `projectedTokens` and must be presented as approximate shares only. */
+  breakdown?: {
+    systemTokens: number;
+    toolsTokens: number;
+    messageTokens: number;
+  };
+  /** True when the capacity changed after the last usage sample (typically a
+   * model switch): the sample and the capacity belong to different routes, so
+   * clients must not derive an occupancy ratio from them. */
+  capacityChanged?: boolean;
+}
 interface SessionSummary {
   /** Omitted when unsupported/unknown; null explicitly clears a previously projected goal. */
   goal?: SessionGoal | null;
@@ -555,6 +581,10 @@ interface SessionSummary {
   /** Optional cumulative usage stats (see SessionUsageStats); hosts without
    * the stats projections omit it, and clients must tolerate its absence. */
   stats?: SessionUsageStats | null;
+  /** Optional context-window occupancy (see SessionContextUsage). Absent for
+   * hosts without the token-meter projections and for sessions the Bridge has
+   * not opened; clients must tolerate its absence. */
+  context?: SessionContextUsage | null;
   workspaceLabel: string | null;
   workspaceId?: string | null;
   workspacePath?: string | null;
@@ -1363,6 +1393,9 @@ export declare class HostBridge {
   readonly id: number;
   private summaries;
   private readonly goals;
+  /** 上下文占用不在会话列表的投影里，只来自单会话基线和实时变化；列表刷新会重建摘要，
+   * 所以单独记住，重建后再挂回去。 */
+  private readonly contexts;
   /**
    * 列表推送节流（连接传输第二批 P5）。每个会话最近一次推出去的摘要指纹，
    * 用来丢掉内容完全相同的重复推送；只改了 `stats` 的变化按 SUMMARY_STATS_THROTTLE_MS

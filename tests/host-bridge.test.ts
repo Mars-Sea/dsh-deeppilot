@@ -10,6 +10,7 @@ import {
   projectHistory,
   projectEvent,
   unwrapStreamItem,
+  mergeContextUsage,
 } from '../src/host-bridge.ts'
 import type { ApiProxyLike, BridgeSink, MuxFrameLike } from '../src/host-bridge.ts'
 
@@ -1632,6 +1633,63 @@ test('session summaries carry usage stats from both stats projections', async ()
     inputTokens: 0, outputTokens: 30100, cacheReadTokens: 1200000, cacheWriteTokens: 2000,
   })
   bridge.dispose()
+})
+
+test('context usage arrives through projections and survives a list refresh', async () => {
+  const { proxy } = makeFakeProxy()
+  proxy.sessions.list = async () => ({ result: { ok: true, value: { items: [
+    { sessionId: 'session-context', updatedAt: 300, running: true, blank: false, projections: { values: { title: '上下文会话' } } },
+  ] } } })
+  const bridge = new HostBridge(proxy, 100)
+  bridge.start()
+  const collected: Array<{ type: string; payload: any }> = []
+  bridge.addSink(makeSink(collected))
+  await new Promise((r) => setTimeout(r, 20))
+  const latest = () => [...collected].reverse().find((f) => f.type === 's2c.sessions.delta')!
+    .payload.upserted.find((s: any) => s.id === 'session-context')
+
+  // The session list never carries these projections.
+  assert.equal(latest().context, undefined)
+
+  ;(bridge as any).applyProjection('session-context', 'contextPressure',
+    { pressureTokens: 80000, projectedTokens: 82000, contextWindow: 128000 }, 'baseline', 10)
+  ;(bridge as any).applyProjection('session-context', 'contextBreakdown',
+    { systemTokens: 5000, toolsTokens: 9000, messageTokens: 60000 }, 'baseline', 10)
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual((bridge as any).summaries.get('session-context').context, {
+    pressureTokens: 80000, projectedTokens: 82000, contextWindow: 128000,
+    breakdown: { systemTokens: 5000, toolsTokens: 9000, messageTokens: 60000 },
+  })
+
+  // A list refresh rebuilds every summary from rows that lack the projections.
+  await bridge.refreshSummaries()
+  assert.equal((bridge as any).summaries.get('session-context').context.contextWindow, 128000)
+  bridge.dispose()
+})
+
+test('context usage keeps unknown figures unknown and flags a capacity change', () => {
+  const pressure = mergeContextUsage(undefined, 'contextPressure', { pressureTokens: 80000, contextWindow: 128000 })
+  assert.deepEqual(pressure, { pressureTokens: 80000, contextWindow: 128000 })
+
+  // Capacity moved while the usage sample did not: different routes.
+  const switched = mergeContextUsage(pressure, 'contextPressure', { pressureTokens: 80000, contextWindow: 200000 })
+  assert.deepEqual(switched, { pressureTokens: 80000, contextWindow: 200000, capacityChanged: true })
+  // The flag survives an unrelated breakdown update …
+  const withBreakdown = mergeContextUsage(switched, 'contextBreakdown', { systemTokens: 1, toolsTokens: 2, messageTokens: 3 })
+  assert.equal(withBreakdown?.capacityChanged, true)
+  // … and a new usage sample clears it.
+  const fresh = mergeContextUsage(withBreakdown, 'contextPressure', { pressureTokens: 91000, contextWindow: 200000 })
+  assert.deepEqual(fresh, {
+    pressureTokens: 91000, contextWindow: 200000, breakdown: { systemTokens: 1, toolsTokens: 2, messageTokens: 3 },
+  })
+
+  // Invalid or missing figures stay unknown instead of becoming 0.
+  assert.deepEqual(
+    mergeContextUsage(undefined, 'contextPressure', { pressureTokens: -1, projectedTokens: 'x', contextWindow: 1.5 }),
+    undefined,
+  )
+  assert.equal(mergeContextUsage(fresh, 'contextBreakdown', { systemTokens: 1, toolsTokens: 2 })?.breakdown, undefined)
+  assert.equal(mergeContextUsage({ contextWindow: 128000 }, 'contextPressure', null), undefined)
 })
 
 test('opening a session refreshes the 0.1.7 projection baseline', async () => {

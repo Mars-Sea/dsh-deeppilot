@@ -599,6 +599,29 @@ export interface SessionGoal {
   blockedReason?: { code: string; message: string }
 }
 
+/**
+ * Context-window occupancy mirrored from the Host's `contextPressure` and
+ * `contextBreakdown` projections (dsh-token-meter). Every field is optional:
+ * a value is present only when the Host reported it, and an absent value is
+ * unknown, never zero. Only sessions the Bridge has opened or seen change
+ * carry it — the session list itself does not include these projections.
+ */
+export interface SessionContextUsage {
+  /** Provider-reported prompt size of the most recent request. */
+  pressureTokens?: number
+  /** Host estimate of the next request's prompt size. */
+  projectedTokens?: number
+  /** Newest recorded route capacity. */
+  contextWindow?: number
+  /** Heuristic composition of the next request. The three figures do not sum
+   * to `projectedTokens` and must be presented as approximate shares only. */
+  breakdown?: { systemTokens: number; toolsTokens: number; messageTokens: number }
+  /** True when the capacity changed after the last usage sample (typically a
+   * model switch): the sample and the capacity belong to different routes, so
+   * clients must not derive an occupancy ratio from them. */
+  capacityChanged?: boolean
+}
+
 export interface SessionSummary {
   /** Omitted when unsupported/unknown; null explicitly clears a previously projected goal. */
   goal?: SessionGoal | null
@@ -616,6 +639,10 @@ export interface SessionSummary {
   /** Optional cumulative usage stats (see SessionUsageStats); hosts without
    * the stats projections omit it, and clients must tolerate its absence. */
   stats?: SessionUsageStats | null
+  /** Optional context-window occupancy (see SessionContextUsage). Absent for
+   * hosts without the token-meter projections and for sessions the Bridge has
+   * not opened; clients must tolerate its absence. */
+  context?: SessionContextUsage | null
   workspaceLabel: string | null
   workspaceId?: string | null
   workspacePath?: string | null

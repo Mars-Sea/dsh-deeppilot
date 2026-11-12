@@ -8,7 +8,7 @@ import {
 import { randomUUID } from 'node:crypto'
 import { notificationPlainText } from './notification-text.ts'
 import { GoalProjectionTracker } from './goal-projection.ts'
-import type { Envelope, MessageProjection, NotifyCategory, PendingSnapshotPayload, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus, SessionQueueItem, SessionUsageStats, WelcomeCapabilities } from './protocol.ts'
+import type { Envelope, MessageProjection, NotifyCategory, PendingSnapshotPayload, PushNotification, SessionEventKind, SessionSummary, SessionTodoItem, SessionTodoStatus, SessionContextUsage, SessionQueueItem, SessionUsageStats, WelcomeCapabilities } from './protocol.ts'
 import {
   isSubagentRow,
   unwrapStreamItem,
@@ -133,6 +133,9 @@ export class HostBridge {
   readonly id = ++BRIDGE_SEQ;
   private summaries = new Map<string, SessionSummary>()
   private readonly goals = new GoalProjectionTracker()
+  /** 上下文占用不在会话列表的投影里，只来自单会话基线和实时变化；列表刷新会重建摘要，
+   * 所以单独记住，重建后再挂回去。 */
+  private readonly contexts = new Map<string, SessionContextUsage>()
   /**
    * 列表推送节流（连接传输第二批 P5）。每个会话最近一次推出去的摘要指纹，
    * 用来丢掉内容完全相同的重复推送；只改了 `stats` 的变化按 SUMMARY_STATS_THROTTLE_MS
@@ -811,6 +814,8 @@ export class HostBridge {
         this.goals.apply(row.sessionId, row.projections?.values?.goal, 'baseline', row.projections?.asOfSeq);
         const goal = this.goals.get(row.sessionId);
         if (goal !== undefined) summary.goal = goal;
+        const context = this.contexts.get(row.sessionId);
+        if (context !== undefined) summary.context = context;
         if (!row.running && this.failedSessionIds.has(row.sessionId)) {
           summary.status = 'error';
         }
@@ -968,6 +973,16 @@ export class HostBridge {
       });
       return;
     }
+    if (key === 'contextPressure' || key === 'contextBreakdown') {
+      const next = mergeContextUsage(this.contexts.get(sessionId), key, value);
+      if (next === undefined) this.contexts.delete(sessionId);
+      else this.contexts.set(sessionId, next);
+      if (!row) return;
+      if (next === undefined) delete row.context;
+      else row.context = next;
+      this.pushSummary(row);
+      return;
+    }
     if (!row) return;
     if (key === 'title') {
       row.title = typeof value === 'string' ? value : '';
@@ -1015,7 +1030,8 @@ export class HostBridge {
     const previous = this.summaryPushed.get(row.id)
     // 内容与上次推出的完全相同：多个来源（状态、投影、活动）同一时刻各推一次时常见。
     if (previous?.full === full) return
-    const withoutStats = JSON.stringify({ ...row, stats: undefined })
+    // 上下文占用与累计用量一样每步都变，归入同一个节流窗口。
+    const withoutStats = JSON.stringify({ ...row, stats: undefined, context: undefined })
     const now = Date.now()
     const statsOnly = previous !== undefined && previous.withoutStats === withoutStats
     if (statsOnly && now - previous.at < SUMMARY_STATS_THROTTLE_MS) {
@@ -1048,12 +1064,13 @@ export class HostBridge {
     }
     this.summaryPushed.set(row.id, {
       full: JSON.stringify(row),
-      withoutStats: JSON.stringify({ ...row, stats: undefined }),
+      withoutStats: JSON.stringify({ ...row, stats: undefined, context: undefined }),
       at: Date.now(),
     })
   }
 
   private forgetSummaryPush(sessionId: string): void {
+    this.contexts.delete(sessionId)
     const pending = this.summaryStatsTimers.get(sessionId)
     if (pending !== undefined) clearTimeout(pending)
     this.summaryStatsTimers.delete(sessionId)
@@ -2434,6 +2451,55 @@ function usageCounter(value: unknown): number {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.floor(n);
+}
+
+/** A context figure is either a provable non-negative safe integer or unknown;
+ * unlike the cumulative counters it never degrades to 0. */
+function contextCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** Fold one `contextPressure` / `contextBreakdown` projection value into the
+ * session's wire context usage; undefined when nothing readable remains. Each
+ * key replaces only its own fields, so a pressure-only or breakdown-only Host
+ * still shows what it has. */
+export function mergeContextUsage(
+  previous: SessionContextUsage | undefined,
+  key: 'contextPressure' | 'contextBreakdown',
+  value: unknown,
+): SessionContextUsage | undefined {
+  const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const next: SessionContextUsage = {};
+  if (key === 'contextPressure') {
+    const pressureTokens = contextCount(raw.pressureTokens);
+    const projectedTokens = contextCount(raw.projectedTokens);
+    const contextWindow = contextCount(raw.contextWindow);
+    if (pressureTokens !== undefined) next.pressureTokens = pressureTokens;
+    if (projectedTokens !== undefined) next.projectedTokens = projectedTokens;
+    if (contextWindow !== undefined) next.contextWindow = contextWindow;
+    if (previous?.breakdown) next.breakdown = previous.breakdown;
+    // The three pressure fields are independent last-wins values. A capacity
+    // that moves while the usage sample stays put means the route changed
+    // after that sample; a new sample clears the doubt.
+    const sampleChanged = pressureTokens !== previous?.pressureTokens;
+    const capacityMoved = previous?.contextWindow !== undefined && contextWindow !== undefined &&
+      contextWindow !== previous.contextWindow;
+    if (!sampleChanged && pressureTokens !== undefined && (capacityMoved || previous?.capacityChanged === true)) {
+      next.capacityChanged = true;
+    }
+  } else {
+    if (previous?.pressureTokens !== undefined) next.pressureTokens = previous.pressureTokens;
+    if (previous?.projectedTokens !== undefined) next.projectedTokens = previous.projectedTokens;
+    if (previous?.contextWindow !== undefined) next.contextWindow = previous.contextWindow;
+    if (previous?.capacityChanged === true) next.capacityChanged = true;
+    const systemTokens = contextCount(raw.systemTokens);
+    const toolsTokens = contextCount(raw.toolsTokens);
+    const messageTokens = contextCount(raw.messageTokens);
+    if (systemTokens !== undefined && toolsTokens !== undefined && messageTokens !== undefined) {
+      next.breakdown = { systemTokens, toolsTokens, messageTokens };
+    }
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 const SESSION_STATS_COUNTERS = [
