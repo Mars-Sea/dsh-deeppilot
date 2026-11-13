@@ -2509,3 +2509,14 @@ result.error / restore.error:
 **待办。** 等待上游对上述两点的答复；若采纳 `restart-required` 方案，我方 `src/plugin-update.ts` 与 `PROTOCOL.md` 的 phase 映射需再对一次。
 
 **遗留。** ① 仓库 `lib/` 未重建（按用户选择只在隔离副本构建），发布前需 `npm run build` 并提交 `lib/`；② 启用 HMR 的 profile 上手机端一键更新仍会失败，需上游修复 `updateBundle` 原子性，或用户在该 profile 的 `cordis.patch.yml` 禁用 `hmr` 行（代价：配置改动不再热重载、更新后需重启）；③ 真机、Funnel、无 HMR 路径在官方默认 profile 上的验收仍缺；④ `docs/技能提示对接说明.md`、`docs/移动端命令对接说明.md` 的 `dsh-plugin-manager` 清单仍是 0.2.1 口径，未重盘。
+
+## 2026-11-11 — #12510 材料完整审核与证据边界更正
+
+本节更正前述记录及未发布草稿中的过度推论；不覆盖历史已发布原文。本轮为文档/源码证据审核，没有新增宿主运行复测。完整发现见 [UPSTREAM_12510_AUDIT.md](UPSTREAM_12510_AUDIT.md)。
+
+- **证据与版本。** 错误码摘录来自 `0.9.15 → 0.9.16` 的 rc.1 验证记录；`0.9.19` 三组对照另列，不能拼成原始完整 JSON。此前原始运行文件当前不在工作区，不再承诺提供完整附件。本轮重新下载三版 npm tarball，确认 patch 的 SHA-256 均为 `8dfa5c56c668b9a6996303b8615e584d25127188ad7e5982c1b42e8d5e5818c1`。
+- **安装面。** 没有调整兼容范围、依赖或发布版本。固定上游 `e8f7b93a344964de3dca1ace9e72b6e4d6de87cb` 的源码只能证明其实现路径，不等于在该提交或新版宿主做过运行验收。`incompatible-version` 可由更新预检返回，也有安装后校验路径，不能说总是在任何 pnpm 之前抛出。
+- **运行面。** `operation-error`、`stage: enable` 和重复服务文本只说明激活碰撞，不能证明它必定临时、只由 remove 窗口造成，或任意目标重启后可用。撤回上一轮“廉价检测即可转成 restart-required”的建议；需明确目标落盘、选择状态、剩余运行状态和安全待重启条件。静态 patch compose 不等于执行动态 service 注册的碰撞预检。
+- **恢复状态。** 旧版本回到磁盘、客户端 `rolled-back` 标签、宿主运行激活健康是三个不同结论。原 restore 仍报告激活失败，不能据磁盘版保证“插件不会损坏/所有服务保持可用”，也不能反向断言整个运行实例不可用。场景 2/3 的重启后目录功能有记录，场景 1 完整运行恢复未验收。此前用 warning 文案描述判定不够准确：app-boot 重组合的激活检查将该诊断抛为异常，plugin-manager 捕获后返回失败。
+- **手机协议。** 没有修改协议或 phase 映射；客户端已有 `restart-required` 不代表宿主可安全将任意 enable 失败改报该状态。宿主恢复逻辑最终装回旧版时，只改客户端状态会误导目标版本的重启预期。
+- **跟进。** PerryLink 最新回复只要求补充 `ManagementError` code，明确不代表项目，不能解读为“上游决定不修”。[补码回复](UPSTREAM_DISCUSSION-12510-reply3.md) 已收紧为事实与纠正；[issue 形态草稿](UPSTREAM_ISSUE-DRAFT-updateBundle-hmr.md) 已换回实测包与版本，限定环境和证据。用户随后授权按推荐执行，精简英文回复已发布到现有讨论（[discussioncomment-19543727](https://github.com/deepseek-ai/deepseek-harness/discussions/12510#discussioncomment-19543727)，作者 `Mars-Sea`，2026-11-11T14:33:05Z / 北京时间 22:33:05）。已读取线上正文并与本地逐字核对（仅忽略末尾换行差异）；完整 issue 材料仍保留本地，未新增讨论、提交 issue 或上传附件。
