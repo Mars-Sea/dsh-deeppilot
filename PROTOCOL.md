@@ -342,6 +342,10 @@ SessionSummary：
     "inputTokens": 169000, "outputTokens": 29700,
     "cacheReadTokens": 1131000, "cacheWriteTokens": 0
   },
+  "context": {
+    "pressureTokens": 80000, "projectedTokens": 82000, "contextWindow": 128000,
+    "breakdown": { "systemTokens": 5000, "toolsTokens": 9000, "messageTokens": 60000 }
+  },
   "workspaceLabel": "deeppilot-demo",
   "workspaceId": "workspace-…",
   "workspacePath": "/Users/sea/Development/deeppilot-demo",
@@ -374,6 +378,23 @@ cacheWriteTokens)`；输入总量 = `inputTokens + cacheReadTokens + cacheWriteT
 该字段为可选字段：未安装统计 projection 的旧版 Host 或尚未产生任何统计的会话
 会缺省或为 null，客户端必须容忍并回退。
 
+`context` 为上下文窗口占用，由 Bridge 镜像 Host 的 `contextPressure` 与 `contextBreakdown`
+两个 projection（dsh-token-meter）。可选字段，其内部每个字段也都可选：出现即 Host 已报告，
+缺失表示未知，**不得当作 0**。
+
+- `pressureTokens`：供应商报告的最近一次请求的 prompt 规模（未缓存输入 + 缓存读 + 缓存写）。
+- `projectedTokens`：Host 估算的下一次请求的 prompt 规模；压缩后会立即回落。
+- `contextWindow`：最近记录的路由容量。
+- `breakdown`：下一次请求的估算构成 `{systemTokens, toolsTokens, messageTokens}`，三项齐全才下发。
+  三项使用固定密度估算，**相加不等于** `projectedTokens`，只能作为构成比例展示。
+- `capacityChanged`：为 true 表示容量在最近一次用量样本之后发生了变化（通常是切换了模型），
+  样本与容量不属于同一路由，客户端不得据此计算占用比例；下一次用量样本到达后该标记消失。
+  这是 Bridge 依据两个值的先后变化作出的判断：换到容量相同的另一模型时不会置位。
+
+占用比例由客户端计算：`(projectedTokens ?? pressureTokens) / contextWindow`，可以超过 1。
+这两个 projection 不在会话列表里，所以只有 Bridge 打开过（`c2s.session.open`）或收到过实时变化的
+会话才带 `context`；其余会话缺省，不代表占用为零。
+
 `goal` 为可选的当前目标投影（`goalView` 能力）：省略表示 Bridge 不支持或尚未取得权威值，
 `null` 表示目标已被清除。两者客户端都必须容忍，且不能据此生成完成通知。SessionSummary 是完整替换，
 新摘要缺省 `goal` 时客户端也不再展示上一份摘要中的目标；Bridge 在权威来源尚未返回时自行保留已知值。字段形状：
@@ -405,7 +426,7 @@ cacheWriteTokens)`；输入总量 = `inputTokens + cacheReadTokens + cacheWriteT
 { "type": "s2c.sessions.delta", "payload": { "upserted": [SessionSummary], "removedIds": [] } }
 ```
 
-推送节流：同一会话内容完全相同的摘要不重复推送；只有 `stats` 变化的推送，同一会话 5 秒内最多一次（窗口结束时推出最新值），状态、标题、任务清单、待处理标记、`activity` 的变化立即推送并带上当时最新的 `stats`。客户端不应依赖 `stats` 逐步实时到达。
+推送节流：同一会话内容完全相同的摘要不重复推送；只有 `stats` 或 `context` 变化的推送，同一会话 5 秒内最多一次（窗口结束时推出最新值），状态、标题、任务清单、待处理标记、`activity` 的变化立即推送并带上当时最新的 `stats` 与 `context`。客户端不应依赖这两者逐步实时到达。
 
 会话与项目均按 `lastActivityTs` 从新到旧展示；项目使用项目内最新会话时间排序。归档后 Bridge 必须把该会话放入 `removedIds`，不得继续出现在普通列表。
 
