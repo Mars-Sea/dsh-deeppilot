@@ -90,14 +90,16 @@ test('exposes and ships localized Plugin Manager metadata', async () => {
 
 /**
  * DSH 0.2.2 的插件详情页按语言链读取 `locale/<lang>.json` 的 `meta.detail`，
- * 找不到才退回包根 README。中文宿主因此显示中文 README，而不是英文版。
+ * 找不到才退回包根 README。这里指向 `docs/DETAIL*.md`，插件页因此显示面向用户的
+ * 详情文档，而不是整份 README。
  * 宿主规则（`@deepseek-ai/dsh-plugin-detail` 的 `detailPath`）：以 `/` 分隔、
  * 相对包根、以 `.md`/`.markdown` 结尾，无空段、`.`、`..`、反斜杠或 URL scheme；
  * 写错或文件不存在时宿主报 `invalid`，且**不会**退回 README，所以这里严格对齐。
+ * 文档必须位于包的子目录中：根目录文档旁边的图片不会被发布。
  * 旧宿主不认识 `meta.detail`，只按字段名取 title/description，多出的键被忽略。
  */
 test('locale meta.detail names a packaged Markdown document per language', async () => {
-  const expected: Record<string, string> = { en: 'README.md', zh: 'README.zh-CN.md' }
+  const expected: Record<string, string> = { en: 'docs/DETAIL.md', zh: 'docs/DETAIL.zh.md' }
   for (const [lang, doc] of Object.entries(expected)) {
     const raw = await readFile(new URL(`../locale/${lang}.json`, import.meta.url), 'utf8')
     const detail = (JSON.parse(raw) as { meta?: { detail?: unknown } }).meta?.detail
@@ -109,7 +111,29 @@ test('locale meta.detail names a packaged Markdown document per language', async
       path.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..'),
       `${lang} detail stays inside the package root`,
     )
+    assert.ok(path.includes('/'), `${lang} detail sits in a subdirectory, so its images are published`)
     assert.ok(packageJson.files?.includes(path) === true, `files lists ${path}`)
     assert.ok((await stat(new URL(`../${path}`, import.meta.url))).isFile(), `${path} exists`)
+  }
+})
+
+/**
+ * 详情文档只放一张功能配图，路径相对文档自身（宿主按 `detailImage` 解析）。
+ * 图片必须随包发布，否则插件页会显示破图；这里同时守住"每份文档恰好一张图"，
+ * 因为详情页是单图版式，不是画廊。
+ */
+test('each detail document references one packaged feature image', async () => {
+  for (const doc of ['docs/DETAIL.md', 'docs/DETAIL.zh.md']) {
+    const markdown = await readFile(new URL(`../${doc}`, import.meta.url), 'utf8')
+    const images = [...markdown.matchAll(/^!\[([^\]]*)\]\(([^)\s]+)\)$/gmu)]
+    assert.equal(images.length, 1, `${doc} carries exactly one image line`)
+    const [, alt, destination] = images[0] as RegExpMatchArray
+    assert.ok((alt ?? '').trim().length > 0, `${doc} image has alternative text`)
+    assert.ok(!/^[a-z][a-z0-9+.-]*:/i.test(destination as string), `${doc} image path is relative`)
+    const imagePath = `${doc.slice(0, doc.lastIndexOf('/'))}/${destination as string}`
+    assert.ok(packageJson.files?.includes(imagePath) === true, `files lists ${imagePath}`)
+    const info = await stat(new URL(`../${imagePath}`, import.meta.url))
+    assert.ok(info.isFile(), `${imagePath} exists`)
+    assert.ok(info.size <= 1024 * 1024, `${imagePath} stays within 1 MiB`)
   }
 })

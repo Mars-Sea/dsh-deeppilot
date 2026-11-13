@@ -2,6 +2,6 @@
   "meta": {
     "title": "DeepPilot",
     "description": "Connect your iPhone to DeepSeek Harness (DSH) on this computer (protocol v2).",
-    "detail": "README.md"
+    "detail": "docs/DETAIL.md"
   }
 }
