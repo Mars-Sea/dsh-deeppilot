@@ -74,12 +74,20 @@ export interface LoadedKey {
   key: KeyObject
 }
 
+/**
+ * Lifetime of a Live Activity update: its stale date and its APNs expiry. The
+ * host re-sends an unchanged ongoing state every `LIVE_ACTIVITY_HEARTBEAT_MS`
+ * (4 min), so the card only turns stale after about three missed heartbeats.
+ * Mirrored by the Relay (`relay/src/apns-forwarder.js`) and the iOS app.
+ */
+export const LIVE_ACTIVITY_STALE_SECONDS = 720
+
 /** Pure payload builder so tests can assert the wire format without sockets. */
 export function apnsPayload(notification: PushDelivery): Record<string, unknown> {
   if ('kind' in notification && notification.kind === 'liveactivity') return { aps: {
     timestamp: notification.timestamp, event: notification.event,
     'content-state': notification.contentState,
-    ...(notification.event === 'end' ? { 'dismissal-date': notification.timestamp + 300 } : { 'stale-date': notification.timestamp + 180 }),
+    ...(notification.event === 'end' ? { 'dismissal-date': notification.timestamp + 300 } : { 'stale-date': notification.timestamp + LIVE_ACTIVITY_STALE_SECONDS }),
   } }
   if ('kind' in notification && notification.kind === 'widget') return { aps: { 'content-changed': true } }
   const alert = notification as PushNotification
@@ -117,7 +125,7 @@ function alertPayload(notification: PushNotification): Record<string, unknown> {
 /**
  * `pushHeaders` plus the default expiry. Stale approvals arriving hours later
  * are worse than none, so every push expires after an hour — unless its kind
- * sets a shorter lifetime of its own (Live Activity updates: 180 s), which
+ * sets a shorter lifetime of its own (Live Activity updates: `LIVE_ACTIVITY_STALE_SECONDS`), which
  * must win: the default goes first and `pushHeaders` overrides it.
  */
 export function deliveryHeaders(bundleId: string, notification: PushDelivery, now = Date.now()): Record<string, string> {
@@ -139,7 +147,7 @@ export function pushHeaders(bundleId: string, notification: PushDelivery): Recor
   if ('kind' in notification && notification.kind === 'liveactivity') return {
     'apns-topic': bundleId + '.push-type.liveactivity',
     'apns-push-type': 'liveactivity', 'apns-priority': notification.event === 'end' ? '10' : '5',
-    'apns-expiration': String(notification.timestamp + 180),
+    'apns-expiration': String(notification.timestamp + LIVE_ACTIVITY_STALE_SECONDS),
   }
   if ('kind' in notification && notification.kind === 'widget') {
     return {

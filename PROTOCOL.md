@@ -1249,8 +1249,12 @@ for goal status labels and fall back to `phase` for legacy activities. Deploy
 order: Relay, then plugin, then App; an App that predates `failed` shows an
 untranslated label. End does not imply all todos completed.
 APNs uses the main app topic suffixed `.push-type.liveactivity`, push type
-`liveactivity`, and `aps.content-state`. Updates have a 180-second stale date;
-end events dismiss after 300 seconds. Bursts coalesce with a 15-second minimum
+`liveactivity`, and `aps.content-state`. Updates have a 720-second stale date
+and the same APNs expiry; while an activity is ongoing (no `end` sent) the host
+re-sends its unchanged state at least every 240 seconds as a heartbeat, so the
+activity only turns stale after about three missed heartbeats — that is, when
+the host is unreachable, not merely idle. Terminal `end` events are never
+repeated and dismiss after 300 seconds. Bursts coalesce with a 15-second minimum
 interval; failed sends retry while the registration remains valid. There is
 no push-to-start and no continuous network connection inside the activity.
 

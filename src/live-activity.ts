@@ -43,18 +43,37 @@ function stateForRegistration(session: SessionSummary | undefined, goalId?: stri
   return liveActivityState(goalId || !session ? session : { ...session, goal: undefined })
 }
 
+/**
+ * An ongoing activity whose state has not changed is re-sent this often, so its
+ * stale date (`LIVE_ACTIVITY_STALE_SECONDS`, 12 min) only lapses after about
+ * three missed heartbeats — i.e. when the host really is unreachable, not when a
+ * long tool call simply leaves the projection unchanged.
+ */
+export const LIVE_ACTIVITY_HEARTBEAT_MS = 240_000
+
 /** Persist terminal state before coalescing so a rapid next round cannot revive an activity. */
 export class LiveActivityPushManager {
   private latest = new Map<string, SessionSummary>()
-  private sent = new Map<string, string>()
+  private sent = new Map<string, { fingerprint: string; at: number }>()
+  /** No heartbeat before the first session snapshot: an empty map would project every activity as unavailable. */
+  private primed = false
   private readonly scheduler: WidgetPushScheduler
+  private readonly heartbeat: ReturnType<typeof setInterval>
   constructor(
     private readonly devices: () => DeviceStore | undefined,
     private readonly send: (token: string, environment: 'development' | 'production', notification: LiveActivityPushNotification) => Promise<ApnsSendResult>,
     intervalMs = 15_000,
-  ) { this.scheduler = new WidgetPushScheduler(() => this.flush(), intervalMs) }
+    private readonly heartbeatMs = LIVE_ACTIVITY_HEARTBEAT_MS,
+    private readonly now: () => number = Date.now,
+  ) {
+    this.scheduler = new WidgetPushScheduler(() => this.flush(), intervalMs)
+    // Check at a quarter of the heartbeat so a due resend is at most ~25% late.
+    this.heartbeat = setInterval(() => { if (this.primed) this.scheduler.changed() }, Math.max(1_000, heartbeatMs / 4))
+    this.heartbeat.unref()
+  }
 
   changed(sessions: SessionSummary[]): void {
+    this.primed = true
     this.latest = new Map(sessions.map(session => [session.id, session]))
     for (const device of this.devices()?.list() ?? []) {
       const r = device.liveActivity
@@ -83,15 +102,17 @@ export class LiveActivityPushManager {
       const state = r.endedState ?? stateForRegistration(this.latest.get(r.sessionId), r.goalId)
       if (!state) continue
       const fingerprint = JSON.stringify(state)
-      if (this.sent.get(key) === fingerprint) continue
+      const previous = this.sent.get(key)
+      // Terminal tombstones are sent once; an ongoing unchanged state is re-sent as a heartbeat.
+      if (previous?.fingerprint === fingerprint && (r.endedState || this.now() - previous.at < this.heartbeatMs)) continue
       // Never send a queued registration after it has rotated or been removed.
       if (devices.authorized(device.deviceId)?.liveActivity?.token !== r.token) continue
       const result = await this.send(r.token, r.environment, {
         kind: 'liveactivity', event: r.endedState ? 'end' : 'update',
-        timestamp: Math.floor(Date.now() / 1000), contentState: state,
+        timestamp: Math.floor(this.now() / 1000), contentState: state,
       }).catch((): ApnsSendResult => ({ outcome: 'failed' }))
       if (result.outcome === 'sent') {
-        this.sent.set(key, fingerprint)
+        this.sent.set(key, { fingerprint, at: this.now() })
         // Retain the terminal tombstone until expiry/unregister: reconnect and token rotation cannot restart this round.
       } else if (result.outcome === 'invalid-token') {
         devices.clearLiveActivity(device.deviceId, r.activityId, r.token)
@@ -101,5 +122,8 @@ export class LiveActivityPushManager {
     }
     for (const key of this.sent.keys()) if (!valid.has(key)) this.sent.delete(key)
   }
-  dispose(): void { this.scheduler.dispose() }
+  dispose(): void {
+    clearInterval(this.heartbeat)
+    this.scheduler.dispose()
+  }
 }

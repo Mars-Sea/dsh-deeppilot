@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DeviceStore } from '../src/token.ts'
 import { createTestIdentity, registerTestIdentity } from './auth-fixture.ts'
-import { liveActivityEnded, liveActivityState, LiveActivityPushManager } from '../src/live-activity.ts'
-import { apnsPayload, deliveryHeaders, pushHeaders } from '../src/apns.ts'
+import { LIVE_ACTIVITY_HEARTBEAT_MS, liveActivityEnded, liveActivityState, LiveActivityPushManager } from '../src/live-activity.ts'
+import { apnsPayload, deliveryHeaders, LIVE_ACTIVITY_STALE_SECONDS, pushHeaders } from '../src/apns.ts'
 import { registryRowFor, validatePayload } from '../src/wire-registry.ts'
 import type { LiveActivityPushNotification, SessionGoal, SessionSummary } from '../src/protocol.ts'
 
@@ -50,7 +50,7 @@ test('goal projection follows the phase table shared with the iOS content state 
 
 test('activity wire format uses dedicated APNs topic and strict registration shape', () => {
   const notification: LiveActivityPushNotification = { kind: 'liveactivity', timestamp: 100, event: 'update', contentState: liveActivityState(session) }
-  assert.deepEqual(apnsPayload(notification), { aps: { timestamp: 100, event: 'update', 'content-state': notification.contentState, 'stale-date': 280 } })
+  assert.deepEqual(apnsPayload(notification), { aps: { timestamp: 100, event: 'update', 'content-state': notification.contentState, 'stale-date': 820 } })
   assert.equal(pushHeaders('dev.test', notification)['apns-topic'], 'dev.test.push-type.liveactivity')
   assert.equal(pushHeaders('dev.test', notification)['apns-push-type'], 'liveactivity')
   assert.equal((apnsPayload({ ...notification, event: 'end' }).aps as any)['dismissal-date'], 400)
@@ -218,11 +218,66 @@ test('clearing todos ends background activity and adding them again cannot reviv
   }
 })
 
-test('the one-hour default expiry never overrides a Live Activity update\'s own 180 s lifetime', () => {
+test('the one-hour default expiry never overrides a Live Activity update\'s own 720 s lifetime', () => {
   const now = 1_800_000_000_000
   const timestamp = Math.floor(now / 1000)
   const update = { kind: 'liveactivity', event: 'update', timestamp, contentState: { title: 't', task: '', done: 0, total: 1, phase: 'running' } } as LiveActivityPushNotification
-  assert.equal(deliveryHeaders('dev.example.app', update, now)['apns-expiration'], String(timestamp + 180))
+  assert.equal(deliveryHeaders('dev.example.app', update, now)['apns-expiration'], String(timestamp + 720))
   // Kinds without a lifetime of their own keep the default.
   assert.equal(deliveryHeaders('dev.example.app', { kind: 'widget' }, now)['apns-expiration'], String(timestamp + 3600))
+})
+
+test('an unchanged ongoing activity is re-sent as a heartbeat well inside its stale window, a terminal one never', async () => {
+  // Three heartbeats fit in one stale window, so a single delayed low-priority push cannot turn the card stale.
+  assert.ok(LIVE_ACTIVITY_HEARTBEAT_MS * 3 <= LIVE_ACTIVITY_STALE_SECONDS * 1000)
+  const dir = await mkdtemp(join(tmpdir(), 'live-heartbeat-'))
+  const store = await DeviceStore.load(join(dir, 'devices.json'))
+  const identity = createTestIdentity()
+  registerTestIdentity(store, identity)
+  let now = Date.now()
+  store.setLiveActivity(identity.deviceId, { activityId: 'a', sessionId: 's', token: 'a'.repeat(64),
+    environment: 'development', updatedAt: now, expiresAt: now + 100_000_000 })
+  const deliveries: LiveActivityPushNotification[] = []
+  const manager = new LiveActivityPushManager(() => store, async (_token, _env, n) => { deliveries.push(n); return { outcome: 'sent' } },
+    15_000, LIVE_ACTIVITY_HEARTBEAT_MS, () => now)
+  try {
+    manager.changed([session]); await manager.flush()
+    assert.equal(deliveries.length, 1)
+    now += LIVE_ACTIVITY_HEARTBEAT_MS - 1
+    await manager.flush()
+    assert.equal(deliveries.length, 1, 'no resend before the heartbeat is due')
+    now += 1
+    await manager.flush()
+    assert.equal(deliveries.length, 2, 'unchanged state is re-sent once due')
+    assert.equal(deliveries[1]?.event, 'update')
+    assert.deepEqual(deliveries[1]?.contentState, deliveries[0]?.contentState)
+    assert.equal(deliveries[1]?.timestamp, Math.floor(now / 1000), 'a heartbeat carries a fresh timestamp, so a fresh stale date')
+    await manager.flush()
+    assert.equal(deliveries.length, 2, 'the heartbeat clock restarts after each send')
+    manager.changed([{ ...session, status: 'idle' }]); await manager.flush()
+    assert.equal(deliveries.at(-1)?.event, 'end')
+    now += LIVE_ACTIVITY_HEARTBEAT_MS * 10
+    await manager.flush()
+    assert.equal(deliveries.length, 3, 'a terminal tombstone is never repeated')
+  } finally {
+    manager.dispose(); await store.drain(); await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('no heartbeat before the first session snapshot', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'live-unprimed-'))
+  const store = await DeviceStore.load(join(dir, 'devices.json'))
+  const identity = createTestIdentity()
+  registerTestIdentity(store, identity)
+  store.setLiveActivity(identity.deviceId, { activityId: 'a', sessionId: 's', token: 'a'.repeat(64),
+    environment: 'development', updatedAt: Date.now(), expiresAt: Date.now() + 100_000 })
+  let sends = 0
+  // A 4 ms heartbeat checks every second (the floor); wait past it without any changed() call.
+  const manager = new LiveActivityPushManager(() => store, async () => { sends += 1; return { outcome: 'sent' } }, 15_000, 4)
+  try {
+    await new Promise(resolve => setTimeout(resolve, 1_200))
+    assert.equal(sends, 0)
+  } finally {
+    manager.dispose(); await store.drain(); await rm(dir, { recursive: true, force: true })
+  }
 })
