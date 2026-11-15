@@ -1,0 +1,84 @@
+{
+  "kind": "recovered-verification-summary",
+  "date": "2026-11-16",
+  "timezone": "Asia/Shanghai",
+  "implementationCommit": "96b74e8",
+  "runtime": { "dsh": "0.2.2-rc.3", "pnpm": "11.28.5" },
+  "evidenceStatus": {
+    "positiveResults": "Recovered from the verification agent's collected tool output; not the original raw JSON.",
+    "finalJob": "bash-c6e3177449d64ef9",
+    "finalJobExitCode": 0,
+    "originalFinalJsonRetained": false,
+    "originalFinalJsonLoss": "System temporary directory and historical job result were no longer available after session continuation.",
+    "negativeControl": "Duplicate-service diagnostic and failed restore were read from retained first-run raw evidence. Other positive results from that first run are excluded because of repository self-reference pollution."
+  },
+  "positiveCases": [
+    {
+      "case": "old-to-fixed",
+      "from": "0.9.23",
+      "to": "0.9.24-hmrtest.1",
+      "processExitCode": 0,
+      "checksPassed": 19,
+      "checksTotal": 19,
+      "updateApplication": "applied",
+      "restoreInvoked": false,
+      "runtimeVersions": ["0.9.23", "0.9.24-hmrtest.1"]
+    },
+    {
+      "case": "fixed-next",
+      "from": "0.9.24-hmrtest.1",
+      "to": "0.9.24-hmrtest.2",
+      "processExitCode": 0,
+      "checksPassed": 36,
+      "checksTotal": 36,
+      "updateApplication": "applied",
+      "restoreInvoked": false,
+      "runtimeVersions": ["0.9.24-hmrtest.1", "0.9.24-hmrtest.2"],
+      "officialPickerAndControllerOriginalObjectsPreserved": ["update", "disable", "enable", "remove"],
+      "reenabledRuntimeVersion": "0.9.24-hmrtest.2",
+      "phoneTransportReleasedOnRemove": true
+    }
+  ],
+  "verifiedPhoneOperations": [
+    "WSS P-256 challenge/prove authentication and reconnection",
+    "Temporary fixture directory listing, hidden directory and ordinary-file filtering",
+    "Create workspace from browsed directory and repeat creation idempotently",
+    "Workspace list contains the adopted canonical directory path",
+    "Read-only device denied directory enumeration",
+    "Read-only device denied OS picker before invocation"
+  ],
+  "negativeControl": {
+    "from": "0.9.23",
+    "targetUsesOriginalPickerPatch": true,
+    "result": { "application": "failed", "stage": "enable", "errorCode": "operation-error" },
+    "restore": { "application": "failed", "stage": "enable", "errorCode": "operation-error" },
+    "diagnostic": "service \"directoryPicker\" has been registered at <NativeDirectoryPicker>"
+  },
+  "positiveArtifactSha256": {
+    "0.9.23": "83aac790ed8f416fb4b6227792473a27946650bc622de51e0ce006d3db3c94bf",
+    "0.9.24-hmrtest.1": "fb96e70b74fd5544c5bf8a359c394bc3b9f64d74600017b36c618a4cf9d4ef05",
+    "0.9.24-hmrtest.2": "a9b0a30a8aa72260c6bb8d93b3647e684804496c2a69ca5e8706b0838f95b334"
+  },
+  "automatedRegression": {
+    "locale": "en_US.UTF-8",
+    "testFileConcurrency": 4,
+    "total": 879,
+    "passed": 877,
+    "failed": 0,
+    "skipped": 1,
+    "existingTodo": 1,
+    "directoryModuleAndRpc": "19/19",
+    "focusedRegression": "47/47",
+    "typecheck": "passed",
+    "build": "passed",
+    "configSchemaHost": "0.2.1-rc.5",
+    "configSchema": "passed"
+  },
+  "limits": [
+    "Isolated real Host and real package manager; no Desktop-window or physical-phone UI test.",
+    "Worker listeners were restricted to loopback and temporary ports for this test.",
+    "Native OS dialog, Windows filesystem, Funnel and APNs were not exercised.",
+    "AbortSignal helper behavior is verified; per-phone disconnect cancellation was not added.",
+    "No publishing, pushing or changes to personal profiles."
+  ]
+}

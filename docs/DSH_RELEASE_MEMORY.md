@@ -2530,3 +2530,12 @@ result.error / restore.error:
 - **手机协议。** v2 追加 fileDeliverables/turnChanges/workspaceFiles/generationContinuation/goalManagement 可选能力；iOS 同步模型与界面。旧客户端可忽略新字段/通知；Android 源码忽略未知 JSON 字段，未知帧仍按游标前进，本轮未新增 Android 原生入口，也未做 Android 运行验收。正文瞬时响应不重放，资源变化通知遵守 sessions.read 与会话关注过滤。
 - **发布边界。** 已作为 0.9.23 发布（版本号、`package-lock.json` 根条目、apply 基线快照、`docs/RELEASE_NOTES-0.9.23.md` 同步更新）。没有修改个人 Host、没有真机验收。详细契约在 PROTOCOL.md；签名模拟器/真实隔离 Host/系统分享租期等不得由单测或编译代替。
 - **发布面不变项。** 兼容声明保持滚动范围，helper 未重建，`bin/` 无变化；`lib/` 重新生成且不内嵌版本号，因此仅清单与快照随版本变化。
+
+## 2026-11-16 — 独立手机目录浏览与 HMR 回归（测试分支，未发布）
+
+- **安装面。** 分支 `fix/independent-phone-directory-browser` 不再禁用宿主 `directory-picker` 或插入另一组官方 browse Host/Client；bundle 只声明 DeepPilot 自身行。兼容范围、版本号、依赖、配置 schema 和 helper 均未更改，Host 构建产物已重建。最低支持 DSH `0.2.1-rc.5` 的配置 schema 检查通过。日常仓库路径恢复 `main`；测试分支位于独立 worktree，避免后续构建通过日常 Web 的开发链接加载。
+- **运行面。** `apiProxy.host.listDirectory` 改为插件内部只读枚举，不注册全局 `directoryPicker`；保持目录路径、隐藏项、符号链接、面包屑、排序、1000 项截断及取消清理规则。`pickDirectory` 保留可选原生控制器调用并逐次取当前服务。电脑端恢复 DSH 自己的 native/browse 交互选择，这是预期行为变化。
+- **自动化验证。** 新增模块/RPC 19 项通过，相关定向 47 项通过；全量在 `en_US.UTF-8`、文件并发上限 4 下为 877 pass / 0 fail / 1 skip / 1 既有 TODO（共 879）。两项默认中文 locale 下的 i18n 失败已在原始 `f2a7b11` 复现；一次高并发 helper 时间窗口失败在有界并发后消失，未改动这些既有代码。类型检查、构建、Client requires、schema 和打包预览通过，独立复核未发现本次差异的阻断问题。
+- **真实宿主验证。** 使用 DSH `0.2.2-rc.3`、一次性 loopback registry、仓库外的独立 profile 与合成手机身份，运行正式 `pluginManager.updateBundle`。旧 patch 控制组复现 `enable/operation-error` 与重复 `directoryPicker`，restore 激活亦失败。旧版迁移到修复版及修复版之间的后续更新已返回 applied，运行版本和真实 WSS 的目录/工作区/权限调用符合目标；最终包管理器对照结果和可复核摘要见 [完整报告](DIRECTORY_BROWSER_HMR_TEST.md)。这些是隔离宿主验证，不等于在用户 Desktop 窗口或真实手机做过界面验收。
+- **手机协议。** v2 帧与字段未变，目录 RPC 仍要求设备认证和 `sessions.manage`，与会话文件 `files.browse` 开关独立。没有修改 iOS/Android、配对流程或跨端 fixtures；原生选择取消仍返回 null，缺少能力仍为 E_UNSUPPORTED。传入 AbortSignal 的清理已测，不将其扩展表述为手机断连即时取消。
+- **边界。** 尚未发布、推送或合并；不扩大到所有插件或所有 DSH 版本的 HMR 保证。Windows 实机、原生弹窗、手机界面、Funnel/APNs 未验收。既有 iOS workspace.create 失败反馈缺口单列在报告中，未归因本变更。
