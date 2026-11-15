@@ -2522,10 +2522,11 @@ result.error / restore.error:
 - **跟进。** PerryLink 最新回复只要求补充 `ManagementError` code，明确不代表项目，不能解读为“上游决定不修”。[补码回复](UPSTREAM_DISCUSSION-12510-reply3.md) 已收紧为事实与纠正；[issue 形态草稿](UPSTREAM_ISSUE-DRAFT-updateBundle-hmr.md) 已换回实测包与版本，限定环境和证据。用户随后授权按推荐执行，精简英文回复已发布到现有讨论（[discussioncomment-19543727](https://github.com/deepseek-ai/deepseek-harness/discussions/12510#discussioncomment-19543727)，作者 `Mars-Sea`，2026-11-11T14:33:05Z / 北京时间 22:33:05）。已读取线上正文并与本地逐字核对（仅忽略末尾换行差异）；完整 issue 材料仍保留本地，未新增讨论、提交 issue 或上传附件。
 
 
-## 2026-11-14 — 会话资源与原生控制可选扩展（未发布）
+## 2026-11-14 — 会话资源与原生控制可选扩展（已随 0.9.23 发布）
 
 - **安装面。** 保持 `>=0.2.1-rc.5 <0.3.0-0` 滚动范围，不升级最低版本，不增加运行时上游包依赖，不更改 helper。新能力按当前服务形状探测，缺席时关闭对应功能。
 - **源码证据。** 设计固定核对 `dsh-v0.2.2-rc.3` 的 deliverables、workspaceChanges、workspaceFiles、sessionController.resolveAgent、conversationContinuation、Agent.runMaintenance 与 goals；工作区 rc.2 源码另用于交叉验证，不能把它当 rc.3 的运行实测。continue 仅在公开反射包含权威 projection 且方法齐备时可用，方法维护锁内同步核对 ending/inbox 后入队原生 retry。目标原生方法同步 CAS，create 同步比较后调用。
 - **运行面。** 新模块单测验证有界手动读取、会话/设备/连接隔离、根约束、版本变化、取消、SHA256、过期差异与重复写保护。结构替身不证明实际 Host 反射或文件提供方行为；真实隔离 Host 联调另行验收。目录浏览默认关闭，设置热更新；文件内容不进入持久日志/缓存/通知，临时 Host 快照仅为一次读取。
 - **手机协议。** v2 追加 fileDeliverables/turnChanges/workspaceFiles/generationContinuation/goalManagement 可选能力；iOS 同步模型与界面。旧客户端可忽略新字段/通知；Android 源码忽略未知 JSON 字段，未知帧仍按游标前进，本轮未新增 Android 原生入口，也未做 Android 运行验收。正文瞬时响应不重放，资源变化通知遵守 sessions.read 与会话关注过滤。
-- **发布边界。** 尚未发布、没有修改个人 Host、没有真机验收。详细契约在 PROTOCOL.md；签名模拟器/真实隔离 Host/系统分享租期等不得由单测或编译代替。
+- **发布边界。** 已作为 0.9.23 发布（版本号、`package-lock.json` 根条目、apply 基线快照、`docs/RELEASE_NOTES-0.9.23.md` 同步更新）。没有修改个人 Host、没有真机验收。详细契约在 PROTOCOL.md；签名模拟器/真实隔离 Host/系统分享租期等不得由单测或编译代替。
+- **发布面不变项。** 兼容声明保持滚动范围，helper 未重建，`bin/` 无变化；`lib/` 重新生成且不内嵌版本号，因此仅清单与快照随版本变化。
