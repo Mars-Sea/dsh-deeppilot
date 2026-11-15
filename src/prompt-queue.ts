@@ -63,6 +63,8 @@ function queueItemOf(message: InboxMessageLike, placement: SessionQueueItem['pla
   if (message === null || typeof message !== 'object' || typeof message.id !== 'string' || message.id.length === 0) {
     return undefined
   }
+  // Manual continuation has its own receipt, not a blank ordinary queued prompt.
+  if (message.source?.kind === 'retry' && Array.isArray(message.content) && message.content.length === 0) return undefined
   const texts: string[] = []
   let imageCount = 0
   let documentCount = 0

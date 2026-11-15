@@ -66,6 +66,7 @@ export interface SettingsPageProps {
   setDeepPilotRemoteConnectionLimit?: (limit: number) => Promise<unknown> | unknown
   setDeepPilotDebug?: (enabled: boolean) => unknown
   setDeepPilotPreview?: (enabled: boolean) => unknown
+  setDeepPilotFileBrowse?: (enabled: boolean) => unknown
   setDeepPilotHostWeb?: (enabled: boolean) => unknown
   /** 绑定的翻译函数；页面所有文案都经它。 */
   t: Translate
@@ -218,6 +219,7 @@ export function normalizeSettingsPageProps(raw: unknown): SettingsPageSurface {
     setDeepPilotRemoteConnectionLimit: isFn(source.setDeepPilotRemoteConnectionLimit) ? (source.setDeepPilotRemoteConnectionLimit as SettingsPageProps['setDeepPilotRemoteConnectionLimit']) : undefined,
     setDeepPilotDebug: isFn(source.setDeepPilotDebug) ? (source.setDeepPilotDebug as SettingsPageProps['setDeepPilotDebug']) : undefined,
     setDeepPilotPreview: isFn(source.setDeepPilotPreview) ? (source.setDeepPilotPreview as SettingsPageProps['setDeepPilotPreview']) : undefined,
+    setDeepPilotFileBrowse: isFn(source.setDeepPilotFileBrowse) ? (source.setDeepPilotFileBrowse as SettingsPageProps['setDeepPilotFileBrowse']) : undefined,
     setDeepPilotHostWeb: isFn(source.setDeepPilotHostWeb) ? (source.setDeepPilotHostWeb as SettingsPageProps['setDeepPilotHostWeb']) : undefined,
   }
 

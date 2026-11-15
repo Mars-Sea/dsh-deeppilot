@@ -92,6 +92,7 @@ export function isEnvelope(value: unknown): value is Envelope {
  * ring 的路径都会自动受到这里的 gate 约束，而不是静默全量广播。
  */
 const PUSH_SCOPE_BY_TYPE: Partial<Record<string, DeviceScope>> = {
+  's2c.session.resources.changed': 'sessions.read',
   's2c.session.event': 'sessions.read',
   's2c.session.delta': 'sessions.read',
   's2c.plugin.update.status': 'sessions.read',

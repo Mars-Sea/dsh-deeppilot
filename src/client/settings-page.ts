@@ -278,6 +278,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     hooks.previewEnabled = previewState.enabled
     hooks.previewSwitchReady = previewState.status === 'ready'
     hooks.hostWebEnabled = previewState.hostWeb
+    hooks.browseEnabled = previewState.browse === true
   }
   const hooks: {
     report: DeepPilotReport | null
@@ -293,6 +294,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     debugSwitchReady: boolean
     previewEnabled: boolean
     previewSwitchReady: boolean
+    browseEnabled: boolean
     hostWebEnabled: boolean
   } = {
     report: null, enabled: true, switchReady: false,
@@ -300,7 +302,7 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
     remoteEnabled: false, remoteSwitchReady: false,
     remoteConnectionLimit: DEFAULT_FUNNEL_CONNECTIONS_PER_SOURCE, remoteConnectionLimitReady: false,
     debugEnabled: false, debugSwitchReady: false,
-    previewEnabled: true, previewSwitchReady: false, hostWebEnabled: false,
+    previewEnabled: true, previewSwitchReady: false, hostWebEnabled: false, browseEnabled: false,
   }
   try {
     readHooks()
@@ -1071,6 +1073,17 @@ export function DeepPilotSettingsPage(rawProps: Record<string, any>): any {
               ),
             )),
           ), 'pbb-channelFull'),
+        ),
+        h('div', { className: 'pbb-channel' },
+          h('div', { className: 'pbb-row pbb-channelRow' },
+            settingsIcon('window'),
+            h('div', { className: 'pbb-controlText' },
+              h('span', { className: 'pbb-controlTitle' }, t(props.t, 'files.title')),
+              h('span', { className: 'pbb-controlDescription' }, t(props.t, 'files.description'))),
+            h(Switch, { checked: hooks.browseEnabled, label: t(props.t, 'files.title'),
+              disabled: !previewSwitchReady || props.setDeepPilotFileBrowse === undefined,
+              onChange: (next: boolean) => props.setDeepPilotFileBrowse?.(next) }),
+          ),
         ),
         // 本机预览开关（能力 localPreview）：与两条连接通道并列，作用于所有已配对手机。
         h('div', { className: 'pbb-channel' },

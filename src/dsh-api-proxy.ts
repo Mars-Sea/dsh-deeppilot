@@ -1,3 +1,4 @@
+import { DshSessionResources } from './session-resources.ts'
 /**
  * Adapter for the DSH rc.2 controller API.
  *
@@ -16,6 +17,7 @@ import {
 import { historyWindow, normalizePageLimit } from './host-event-projection.ts'
 import { DshCommandApi } from './command-api.ts'
 import { DshReferenceApi } from './reference-api.ts'
+import { DshSessionControls } from './session-controls.ts'
 import type { CommandsApiLike } from './host-api.ts'
 import type {
   ApiProxyLike,
@@ -164,6 +166,7 @@ interface DeferredInteraction {
 export type DshInteractionKind = 'approval' | 'question'
 
 export interface DshApiProxyOptions {
+  allowFileBrowse?: () => boolean
   /**
    * Decide whether the resident DeepPilot Remote Client represents a usable
    * phone surface. Returning false delegates only this Client delivery; API
@@ -174,6 +177,8 @@ export interface DshApiProxyOptions {
 
 /** Direct-controller adapter with the shape HostBridge consumes. */
 export class DshApiProxy implements ApiProxyLike {
+  readonly sessionControls: DshSessionControls
+  readonly resources: DshSessionResources
   /** Probe the Host's generated reflection, not this adapter's listener registration. */
   get assistantStreamAvailable(): boolean {
     const typert = this.ctx.get('typert') as {
@@ -291,6 +296,12 @@ export class DshApiProxy implements ApiProxyLike {
   private readonly shouldSurfaceInteraction: (kind: DshInteractionKind) => boolean
 
   constructor(private readonly ctx: Context, options: DshApiProxyOptions = {}) {
+    this.sessionControls = new DshSessionControls(ctx)
+    this.resources = new DshSessionResources(ctx, async (sessionId, beforeSeq, maxMessages) => {
+      const response = await this.sessions.history({ rpcId: randomUUID(), payload: { sessionId, beforeSeq, maxMessages } })
+      if (!response.result?.ok) throw new Error('Session resources unavailable')
+      return response.result.value
+    }, options.allowFileBrowse)
     this.commandApi = new DshCommandApi(ctx)
     this.referenceApi = new DshReferenceApi(ctx)
     const session = ctx.get('sessionController') as SessionControllerLike | undefined

@@ -288,7 +288,7 @@ export class BridgeConnection implements BridgeSink {
    */
   accepts(type: string, payload: unknown): boolean {
     if (this.watchedSessions === undefined) return true
-    if (type !== 's2c.session.event' && type !== 's2c.session.queue') return true
+    if (type !== 's2c.session.event' && type !== 's2c.session.queue' && type !== 's2c.session.resources.changed') return true
     const sessionId = (payload as { sessionId?: unknown } | undefined)?.sessionId
     if (typeof sessionId !== 'string') return true
     return this.openSessions.has(sessionId) ||
@@ -305,7 +305,7 @@ export class BridgeConnection implements BridgeSink {
     if (!this.accepts(type, payload)) return
     if (type === 's2c.notify') payload = { ...(payload as object), hostAudience: this.deps.audience }
     // 队列快照与会话事件一样要排在 tail 之后：打开期间到达的先进缓冲。
-    if (type === 's2c.session.event' || type === 's2c.session.queue') {
+    if (type === 's2c.session.event' || type === 's2c.session.queue' || type === 's2c.session.resources.changed') {
       const sessionId = (payload as { sessionId?: unknown } | undefined)?.sessionId
       if (typeof sessionId === 'string') {
         const buffered = this.openingSessionEvents.get(sessionId)

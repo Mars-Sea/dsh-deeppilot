@@ -13,6 +13,19 @@ import { WIRE_FRAME_ROWS, registryRowFor, validatePayload } from '../src/wire-re
 
 /** [帧类型, 载荷, 期望判定]；判定为 "accept" 或 "E_*: message"。 */
 const EXPECTATIONS: Array<[string, unknown, string]> = [
+  ["c2s.session.controls", {"sessionId": "s"}, "accept"],
+  ["c2s.session.continue", {"sessionId": "s", "clientRequestId": "1730000000000-11111111-1111-1111-1111-111111111111", "endingSeq": 7}, "accept"],
+  ["c2s.session.goal.manage", {"sessionId": "s", "clientRequestId": "1730000000000-11111111-1111-1111-1111-111111111111", "action": "create", "expectedGoal": null, "patch": {"objective": "pause"}}, "accept"],
+  ["c2s.session.control.status", {"sessionId": "s", "clientRequestId": "1730000000000-11111111-1111-1111-1111-111111111111"}, "accept"],
+  ["c2s.session.resources.list", {"sessionId": "s"}, "accept"],
+  ["c2s.session.changes.diff", {"sessionId": "s", "sourceSeq": 5, "fileIndex": 0}, "accept"],
+  ["c2s.workspace.files.list", {"sessionId": "s", "path": ""}, "accept"],
+  ["c2s.workspace.files.search", {"sessionId": "s", "query": "swift"}, "accept"],
+  ["c2s.file.stat", {"sessionId": "s", "ref": {"kind": "deliverable", "sourceSeq": 3, "fileIndex": 0}}, "accept"],
+  ["c2s.file.text", {"sessionId": "s", "ref": {"kind": "deliverable", "sourceSeq": 3, "fileIndex": 0}}, "accept"],
+  ["c2s.file.open", {"sessionId": "s", "transferId": "11111111-1111-1111-1111-111111111111", "ref": {"kind": "deliverable", "sourceSeq": 3, "fileIndex": 0}}, "accept"],
+  ["c2s.file.read", {"sessionId": "s", "transferId": "t", "offset": 0}, "accept"],
+  ["c2s.file.close", {"sessionId": "s", "transferId": "t"}, "accept"],
   ["c2s.session.commands", {"sessionId":"s"}, "accept"],
   ["c2s.session.permissions", {"sessionId":"s"}, "accept"],
   ["c2s.session.feedback", {"sessionId":"s","text":"备注"}, "accept"],

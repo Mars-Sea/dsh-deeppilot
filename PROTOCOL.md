@@ -1,5 +1,65 @@
 # DeepPilot Bridge Protocol — v2
 
+## 会话资源与只读文件扩展（v2，可选）
+
+`welcome.capabilities.fileDeliverables / turnChanges / workspaceFiles` 分别按 Host 文件、改动快照、目录搜索服务形状探测；缺省 false。旧客户端忽略新能力和资源变化通知，旧 Host 不显示新入口。`files.browse` 在电脑设置默认 false，可热更新；关闭后拒绝新的目录、搜索、项目文件读取及正在进行的项目文件下载。显式成果声明不依赖这个浏览开关。
+
+以下请求均要求 `sessions.read`，Widget 与 preview 连接禁止。每个请求均含 `sessionId`，响应为同 id 的瞬时帧，正文、diff 和文件块不进入重放环、磁盘缓存、通知或 Relay。唯一可重放的 `s2c.session.resources.changed {sessionId,sourceSeq}` 只表示需重新读取元信息，遵守关注集合和读取 scope。
+
+### c2s.session.resources.list
+
+`{sessionId,beforeSeq?,limit?}`：limit 默认 60，上限 120，按聊天历史窗口读取。回 `s2c.session.resources {sessionId,items,hasMore,nextBeforeSeq?}`。items 含 `{kind:"deliverables"|"changes",sourceSeq,turn,anchorSeq}`。成果附 `files:[{index,name,description?}]`（最多32）；改动附 `changes:[{index,path,added,deleted,binary?,oversized?}]`（最多500）、total/added/deleted/available/truncated。相同 turn 的改动选择最大 sourceSeq；跨页客户端也如此合并。单页元信息512KiB上限，继续游标不跳过被截断的事件。已知零改动省略；过期快照 available=false，不能重新生成当前 Git 差异冒充历史。
+
+### c2s.session.changes.diff
+
+`{sessionId,sourceSeq,fileIndex,offset?}`：验证本会话 workspace/changes 原事件。回 `s2c.session.changes.diff {sessionId,sourceSeq,fileIndex,path,kind,lines,nextOffset?,coarse?}`。kind 为 text/binary/oversized/expired；lines 为 `{kind:"added"|"removed"|"context"|"header",text,old?,new?,truncated?}`。一页最多300行、192KiB；行正文最多8192字符。offset 为展开后的行序号，按 nextOffset 手动继续；快照仅在 Host 会话生命周期内存在。
+
+### c2s.workspace.files.list
+### c2s.workspace.files.search
+
+list `{sessionId,rootRef?,path?,hidden?}`；search 另带非空 query（文件名/路径，上限1024字符）。回 `s2c.workspace.files {sessionId,rootRef,rootLabel,path,entries:[{name,path,kind,bytes?}],truncated,incomplete?,query?}`。根路径由 Host 会话决定，rootRef 为绑定设备/会话/规范化根目录及插件进程的不可伪造引用。只能提交根内相对路径；按 Host 文件提供方解析目标后再次核对根内约束。隐藏文件默认关闭，搜索遵守 gitignore，VCS元数据排除。最多500条；Host 没有游标时不能伪造下一页，truncated/incomplete 必须分别展示。
+
+### c2s.file.stat
+### c2s.file.text
+### c2s.file.open
+
+三者带 `ref`：`{kind:"deliverable",sourceSeq,fileIndex}` 或 `{kind:"workspace",rootRef,path}`。成果引用必须回读本会话正式 deliverables/presented 事件，只有其精确路径获授权（可在项目外）；不能直接提交任意绝对路径。项目引用受电脑开关与根内约束。文件读取只在用户点开后发起，元信息列表不会触发正文读取。
+
+stat 回 `s2c.file.info {sessionId,name,version,bytes?,mediaType}`。text 另带 `{offset?,version?}`（1起始行），回 `s2c.file.text {sessionId,name,version,bytes?,mediaType,offset,text,lines,eof}`；一页200行、256KiB，读取前后版本变化拒绝。
+
+open 另带客户端生成的 UUID `transferId`（取消时也能提前关闭），回 `s2c.file.manifest {sessionId,transferId,name,version,mediaType,bytes,sha256}`。Host 在有界内存中建立本次读取的不可变快照，前后核对源版本，最多32MiB、每设备1份、全 Host 2份；不写磁盘。打开有120秒期限；连接关闭、主动关闭、服务释放、120秒空闲均清理；超限或已变化必须明确失败。
+
+### c2s.file.read
+
+`{sessionId,transferId,offset,binary?}`，offset 0起始字节。校验设备、会话和原连接，按需回一帧 `s2c.file.chunk {transferId,offset}` 加二进制正文（最大256KiB），随后 `s2c.ack {sessionId,transferId,offset,bytes,eof}`。binary=true 且支持 binaryFrames 时走协议1.1二进制帧；否则 chunk 的 data 为 base64（原始最多48KiB）。客户端严格校验连续偏移、总字节数与 manifest SHA256 后才展示/分享文件；半成品不可报成功。
+
+### c2s.file.close
+
+`{sessionId,transferId}` 幂等关闭本设备/会话的准备或传输操作，回 s2c.ack。手机仅为当前预览或分享创建临时文件，系统读者释放后清理；取消、失败、切换实例清理，异常退出遗留在下次启动清理。无持久正文缓存，重新点开重新读取；“存储到文件”是用户显式导出。
+
+
+## 原生会话控制扩展
+
+可选能力 `generationContinuation` 与 `goalManagement` 独立协商，缺失均为不支持；沿用 v2 与设备现有 scopes，无须重新配对。以下请求均禁止 Widget/preview 连接。
+
+### c2s.session.controls
+
+`{sessionId}`，需要 `sessions.read`；回 `s2c.session.controls {sessionId, continuationEnding?}`。ending 为主机 `conversationContinuation` 的非负事件 seq；null 明确不可继续，字段缺失为未知/不支持。读取不激活 Agent。
+
+### c2s.session.continue
+
+需要 `sessions.read`、`prompt.send` 和 `generationContinuation`。请求 `{sessionId, endingSeq, clientRequestId}`；Bridge 在 Host 原生 maintenance 空闲准入中同步核对当前 ending、待输入并提交原生空内容 retry 消息。普通 sendPrompt 仍拒绝空内容；不生成空用户气泡，不消费手机草稿。
+
+### c2s.session.goal.manage
+
+需要 `sessions.read`、`prompt.send` 和 `goalManagement`。请求 `{sessionId, action, expectedGoal, patch?, clientRequestId}`。action 为 create/edit/pause/resume/clear。expectedGoal 是 `{id,revision}`；仅 create 可以为 null，表示期望没有目标。create/edit 的 patch 接收 objective（非空、最多 64 KiB 字符）和/或正安全整数 maxGoalRounds；create 必须有 objective。所有目标操作在取得官方 live Agent 后同步比较期望 ref，再调用 Host goal 域，避免旧编辑覆盖新目标。暂停/清除不等于取消当前回合；正文按结构化字符串处理，保留词没有特殊意义。
+
+### c2s.session.control.status
+
+`{sessionId,clientRequestId}`，需要 `sessions.read`、`prompt.send`；只查所属设备、会话的 durable journal，不重新执行操作。
+
+写操作和 status 均回 `s2c.session.control.receipt {sessionId,clientRequestId,status,code?,ref?}`。status 为 accepted/rejected/unknown/notFound/expired；accepted 仅确认操作受理，不代表模型完成；unknown 不得自动重发。请求编号采用现有带毫秒纪元前缀的 UUID，耐久 journal 不保存目标正文，只保留指纹、状态及目标 ref。同 id 改载荷被拒绝，重复原载荷不重复执行。
+
 状态：v2 唯一支持基线。所有帧均为 WebSocket **文本帧**，UTF-8 编码的 JSON。
 v2 不接受 v1 Bearer Token、`c2s.hello.auth` 或任何降级握手；升级后设备必须重新配对。
 

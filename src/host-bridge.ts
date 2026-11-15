@@ -1,3 +1,4 @@
+import { SessionControlCoordinator } from './session-controls.ts'
 import {
   openDispatchJournal,
   promptDeliveryCodec,
@@ -179,6 +180,8 @@ export class HostBridge {
   readonly promptDeliveries: DispatchJournal<{ sessionId: string; content: unknown }, DeliveryReceipt>
   readonly scheduleMutations: DispatchJournal<unknown, MutationDispatchResult<unknown>>
   readonly forkMutations: DispatchJournal<unknown, MutationDispatchResult<unknown>>
+  get sessionResources() { return this.apiProxy.resources }
+  readonly sessionControls: SessionControlCoordinator
 
   constructor(
     private readonly apiProxy: ApiProxyLike,
@@ -189,6 +192,8 @@ export class HostBridge {
     /** 三个 journal 的落盘失败诊断输出；缺省即静默。不打任何消息体。 */
     private readonly log?: (message: string) => void,
   ) {
+    this.sessionControls = new SessionControlCoordinator(() => this.apiProxy.sessionControls,
+      deliveryJournalPath === undefined ? undefined : deliveryJournalPath + '.controls', this.log)
     // 三个实例是同一个 module 的三次配置：条目方言由 codec 决定（prompt 回执 /
     // schedule 结果 / fork 结果带持久化 value），落盘路径各自独立、互不影响。
     // log 必须在**首次**构造时就带上：openDispatchJournal 是按 path+codec 身份
@@ -515,6 +520,7 @@ export class HostBridge {
   }
 
   dispose(): void {
+    this.apiProxy.resources?.dispose()
     if (this.disposed) return
     this.disposed = true
     this.abort.abort();
@@ -618,6 +624,7 @@ export class HostBridge {
         }
         const streamId = this.assistantStream.beforeEvent(sessionId, event);
         if (event.type === 'turn/end') this.assistantStream.abandon(sessionId);
+        if (['deliverables/presented', 'workspace/changes'].includes(event.type)) this.record('s2c.session.resources.changed', { sessionId, sourceSeq: event.seq });
         if (event.type === 'agent-preset/selected') {
           this.record('s2c.skills.changed', { sessionId });
         }

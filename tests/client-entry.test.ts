@@ -27,6 +27,7 @@ interface FormFace {
 
 interface HooksFace {
   hooks: Record<string, { getSnapshot(): unknown }>
+  setDeepPilotFileBrowse(value: boolean): void
   setDeepPilotEnabled(value: boolean): void
   setDeepPilotLocalPort(value: number): Promise<void>
 }
@@ -180,4 +181,20 @@ test('a host without configForms still activates the entry', async () => {
   assert.equal(fiber.state, ACTIVE)
   assert.deepEqual(missingServices(root, fiber), [])
   assert.deepEqual(faceOf(sections).hooks.deepPilotEnabled.getSnapshot(), { status: 'loading', enabled: true })
+})
+
+test('project-file browse defaults off, preserves sibling config and rolls back rejected writes', async () => {
+  for (const accepted of [true, false]) {
+    const { root, sections } = harness()
+    const form = fakeConfigForm({ files: { browse: false, future: 'keep' }, preview: { enabled: false } }, accepted)
+    root.provide('configForms', { get: () => form.face })
+    await loadEntry(root)
+    await settle()
+    const face = faceOf(sections)
+    assert.equal((face.hooks.deepPilotPreview.getSnapshot() as { browse: boolean }).browse, false)
+    face.setDeepPilotFileBrowse(true)
+    await settle()
+    assert.deepEqual(form.writes, [{ field: 'files', value: { browse: true, future: 'keep' } }])
+    assert.equal((face.hooks.deepPilotPreview.getSnapshot() as { browse: boolean }).browse, accepted)
+  }
 })

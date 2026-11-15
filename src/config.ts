@@ -28,6 +28,7 @@ export interface Config {
    * 本机预览（能力 localPreview）：允许已配对手机经预览连接查看电脑回环地址上、
    * 且在会话消息里出现过的网页。默认开启；关闭后新请求回 reason "disabled"。
    */
+  files?: { browse?: boolean }
   preview?: {
     enabled?: boolean
     /**
@@ -100,6 +101,9 @@ export const Config = z.object({
     enabled: true,
     port: DEFAULT_LOCAL_PORT,
   }).volatile(),
+  files: z.object({
+    browse: z.boolean().default(false).description('允许手机只读浏览和下载当前项目文件'),
+  }).default({ browse: false }).volatile(),
   preview: z.object({
     enabled: z.boolean().default(true)
       .description('允许手机预览本机网页：只限会话消息里出现过的本机地址'),

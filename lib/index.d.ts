@@ -30,6 +30,99 @@ interface ReferenceCandidates {
   files: ReferenceSource<FileReferenceItem>;
   sessions: ReferenceSource<SessionReferenceItem>;
 }
+/** Optional read-only resource vocabulary, mirrored by the native clients. */
+type RemoteFileRef = {
+  kind: 'deliverable';
+  sourceSeq: number;
+  fileIndex: number;
+} | {
+  kind: 'workspace';
+  rootRef: string;
+  path: string;
+};
+interface DeliveredFile {
+  index: number;
+  name: string;
+  description?: string;
+}
+interface ChangedFile {
+  index: number;
+  path: string;
+  added: number;
+  deleted: number;
+  binary?: boolean;
+  oversized?: boolean;
+}
+interface SessionResource {
+  kind: 'deliverables' | 'changes';
+  sourceSeq: number;
+  turn: number;
+  anchorSeq: number;
+  files?: DeliveredFile[];
+  changes?: ChangedFile[];
+  total?: number;
+  added?: number;
+  deleted?: number;
+  available?: boolean;
+  truncated?: boolean;
+}
+interface SessionResourcesPage {
+  sessionId: string;
+  items: SessionResource[];
+  hasMore: boolean;
+  nextBeforeSeq?: number;
+}
+interface RemoteFileInfo {
+  sessionId: string;
+  name: string;
+  version: string;
+  bytes?: number;
+  mediaType: string;
+}
+interface RemoteTextPage extends RemoteFileInfo {
+  offset: number;
+  text: string;
+  lines: number;
+  eof: boolean;
+}
+interface RemoteDirectoryEntry {
+  name: string;
+  path: string;
+  kind: 'file' | 'directory';
+  bytes?: number;
+}
+interface RemoteDirectory {
+  sessionId: string;
+  rootRef: string;
+  rootLabel: string;
+  path: string;
+  entries: RemoteDirectoryEntry[];
+  truncated: boolean;
+  incomplete?: boolean;
+  query?: string;
+}
+interface RemoteFileManifest extends RemoteFileInfo {
+  transferId: string;
+  bytes: number;
+  sha256: string;
+}
+interface RemoteDiffLine {
+  kind: 'added' | 'removed' | 'context' | 'header';
+  text: string;
+  old?: number;
+  new?: number;
+  truncated?: boolean;
+}
+interface RemoteDiffPage {
+  sessionId: string;
+  sourceSeq: number;
+  fileIndex: number;
+  path: string;
+  kind: 'text' | 'binary' | 'oversized' | 'expired';
+  lines: RemoteDiffLine[];
+  nextOffset?: number;
+  coarse?: boolean;
+}
 declare const DEVICE_SCOPES: readonly ['sessions.read', 'prompt.send', 'sessions.manage', 'interactions.respond', 'notifications.register', 'schedule.manage', 'preview.open', 'hostweb.open'];
 type DeviceScope = (typeof DEVICE_SCOPES)[number];
 /**
@@ -272,6 +365,42 @@ interface PermissionCatalog {
  * 不认识该字段的旧 Bridge 会忽略它并照常返回 ZIP，所以客户端必须先看能力位。
  */
 type SessionExportFormat = 'zip' | 'markdown';
+/** Optional native continuation/goal controls. Never accept empty ordinary prompts. */
+interface SessionControlState {
+  sessionId: string;
+  continuationEnding?: number | null;
+}
+interface GoalRef {
+  id: string;
+  revision: number;
+}
+type SessionControlRequest = {
+  sessionId: string;
+  action: 'continue';
+  endingSeq: number;
+  clientRequestId: string;
+} | {
+  sessionId: string;
+  action: 'create' | 'edit';
+  expectedGoal: GoalRef | null;
+  patch: {
+    objective?: string;
+    maxGoalRounds?: number;
+  };
+  clientRequestId: string;
+} | {
+  sessionId: string;
+  action: 'pause' | 'resume' | 'clear';
+  expectedGoal: GoalRef;
+  clientRequestId: string;
+};
+interface SessionControlReceipt {
+  sessionId: string;
+  clientRequestId: string;
+  status: 'accepted' | 'rejected' | 'unknown' | 'notFound' | 'expired';
+  code?: string;
+  ref?: GoalRef;
+}
 /** `at` 的本地日历写法；与 DSH `LocalAtInput` 一一对应。 */
 interface HostScheduleLocalAt {
   date: string;
@@ -380,6 +509,11 @@ interface HostSchedulePatch {
   active?: boolean;
 }
 interface WelcomeCapabilities {
+  fileDeliverables?: boolean;
+  turnChanges?: boolean;
+  workspaceFiles?: boolean;
+  generationContinuation?: boolean;
+  goalManagement?: boolean;
   /** Authoritative goal summaries and goal-scoped Live Activities. Missing/false means unsupported. */
   goalView?: boolean;
   /** Goal completion notices and c2s.push.register preferences are implemented by this bridge. */
@@ -734,6 +868,25 @@ interface PendingSnapshotPayload {
 type HostImageRef = Readonly<Record<string, unknown> & {
   attachmentId: string;
 }>;
+interface SessionControlsApi {
+  readonly continuationAvailable: boolean;
+  readonly goalManagementAvailable: boolean;
+  state(sessionId: string, signal: AbortSignal): Promise<SessionControlState>;
+  execute(request: SessionControlRequest, signal: AbortSignal): Promise<{
+    ref?: {
+      id: string;
+      revision: number;
+    };
+  }>;
+}
+declare class SessionControlCoordinator {
+  private readonly api;
+  private readonly journal;
+  constructor(api: () => SessionControlsApi | undefined, path?: string, log?: (message: string) => void);
+  state(sessionId: string, signal: AbortSignal): Promise<SessionControlState>;
+  status(deviceId: string, sessionId: string, id: string): SessionControlReceipt;
+  execute(deviceId: string, request: SessionControlRequest, signal: AbortSignal): Promise<SessionControlReceipt>;
+}
 interface CommandsApiLike {
   list(req: RpcRequestLike<{
     sessionId: string;
@@ -1235,6 +1388,8 @@ interface ApiStreamItemLike {
   payload: MuxFrameLike;
 }
 interface ApiProxyLike {
+  readonly resources?: DshSessionResources;
+  readonly sessionControls?: SessionControlsApi;
   /** Host has registered the goal summary projection and its passive baseline/live feed. */
   readonly goalViewAvailable?: boolean;
   /** 真实宿主反射声明了助手流帧时才为 true；旧代理缺省关闭。 */
@@ -1312,6 +1467,40 @@ interface PushOutlet {
    * notifications entirely.
    */
   isAvailable(): boolean;
+}
+/** Owns verified resource references and bounded one-operation file snapshots. No persistent cache. */
+declare class DshSessionResources {
+  private readonly ctx;
+  private readonly history;
+  private readonly browseEnabled;
+  private readonly secret;
+  private readonly transfers;
+  private readonly preparing;
+  private disposed;
+  constructor(ctx: Context, history: (sessionId: string, beforeSeq?: number, limit?: number) => Promise<HistoryResult>, browseEnabled?: () => boolean);
+  private service;
+  get filesAvailable(): boolean;
+  get workspaceAvailable(): boolean;
+  get changesAvailable(): boolean;
+  private assertBrowse;
+  private scope;
+  private root;
+  private event;
+  list(sessionId: string, beforeSeq: number | undefined, limit: number, signal: AbortSignal): Promise<SessionResourcesPage>;
+  directory(deviceId: string, sessionId: string, rootRef: string | undefined, path: string, query: string | undefined, hidden: boolean, signal: AbortSignal): Promise<RemoteDirectory>;
+  private target;
+  stat(deviceId: string, sessionId: string, ref: RemoteFileRef, signal: AbortSignal): Promise<RemoteFileInfo>;
+  text(deviceId: string, sessionId: string, ref: RemoteFileRef, offset: number, version: string | undefined, signal: AbortSignal): Promise<RemoteTextPage>;
+  open(deviceId: string, sessionId: string, ref: RemoteFileRef, signal: AbortSignal, transferId?: string): Promise<RemoteFileManifest>;
+  read(deviceId: string, sessionId: string, transferId: string, offset: number, signal: AbortSignal): {
+    data: Buffer;
+    offset: number;
+    eof: boolean;
+  };
+  close(deviceId: string, sessionId: string, transferId: string): void;
+  private sweep;
+  dispose(): void;
+  diff(sessionId: string, sourceSeq: number, fileIndex: number, offset: number, signal: AbortSignal): Promise<RemoteDiffPage>;
 }
 interface QuietCompletionResult {
   suppressed: boolean;
@@ -1438,6 +1627,8 @@ export declare class HostBridge {
   }, DeliveryReceipt>;
   readonly scheduleMutations: DispatchJournal<unknown, MutationDispatchResult<unknown>>;
   readonly forkMutations: DispatchJournal<unknown, MutationDispatchResult<unknown>>;
+  get sessionResources(): DshSessionResources | undefined;
+  readonly sessionControls: SessionControlCoordinator;
   constructor(apiProxy: ApiProxyLike, historyBufferMax?: number, deliveryJournalPath?: string, scheduleJournalPath?: string, forkJournalPath?: string,
   /** 三个 journal 的落盘失败诊断输出；缺省即静默。不打任何消息体。 */
   log?: ((message: string) => void) | undefined);
@@ -1756,6 +1947,9 @@ export interface Config {
    * 本机预览（能力 localPreview）：允许已配对手机经预览连接查看电脑回环地址上、
    * 且在会话消息里出现过的网页。默认开启；关闭后新请求回 reason "disabled"。
    */
+  files?: {
+    browse?: boolean;
+  };
   preview?: {
     enabled?: boolean;
     /**
@@ -1817,6 +2011,11 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     port: z<number, number, "defined">;
   }>>>, "volatile-defined">;
+  files: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+    browse: z<boolean, boolean, "defined">;
+  }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+    browse: z<boolean, boolean, "defined">;
+  }>>>, "volatile-defined">;
   preview: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     hostWeb: z<boolean, boolean, "defined">;
@@ -1875,6 +2074,11 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
   }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
     enabled: z<boolean, boolean, "defined">;
     port: z<number, number, "defined">;
+  }>>>, "volatile-defined">;
+  files: z<NoInfer<Schemastery.ObjectS<NoInfer<{
+    browse: z<boolean, boolean, "defined">;
+  }>>>, NoInfer<Schemastery.ObjectT<NoInfer<{
+    browse: z<boolean, boolean, "defined">;
   }>>>, "volatile-defined">;
   preview: z<NoInfer<Schemastery.ObjectS<NoInfer<{
     enabled: z<boolean, boolean, "defined">;

@@ -60,6 +60,7 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
       return null;
     }
     case 'user/message':
+      if (emptyRetry(event.data)) return null;
       return {
         kind: 'message.final',
         data: { ...limitMessageProjection({
@@ -294,6 +295,12 @@ function userMessageSource(data: unknown): Record<string, unknown> | undefined {
 export function userMessageSourceKind(data: unknown): string | undefined {
   const kind = userMessageSource(data)?.kind;
   return typeof kind === 'string' ? kind : undefined;
+}
+
+function emptyRetry(data: unknown): boolean {
+  const value = data as { content?: unknown; message?: { content?: unknown } } | undefined
+  const content = value?.message?.content ?? value?.content
+  return userMessageSourceKind(data) === 'retry' && Array.isArray(content) && content.length === 0
 }
 
 /** Wire role for one user/message payload. A payload without any readable
@@ -799,6 +806,7 @@ export function projectHistory(
       case 'system/message':
         break;
       case 'user/message':
+        if (emptyRetry(event.data)) break;
         messages.push({
           ...base,
           role: userRoleOf(event.data),

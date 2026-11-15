@@ -19,6 +19,11 @@ import type { WelcomeCapabilities } from './protocol.ts'
 
 /** 由宿主表达式挣得的位；表在 HOST_CAPABILITY_PROBES。 */
 export type ProbedCapability =
+  | 'fileDeliverables'
+  | 'turnChanges'
+  | 'workspaceFiles'
+  | 'generationContinuation'
+  | 'goalManagement'
   | 'models'
   | 'skills'
   | 'commands'
@@ -44,6 +49,11 @@ export function setPluginUpdateProbe(proxy: ApiProxyLike, probe: (() => boolean)
 
 /** 每位一行：Host 上必须存在的依赖。缺失即该位为 false，相关帧回 E_UNSUPPORTED。 */
 export const HOST_CAPABILITY_PROBES: Record<ProbedCapability, (proxy: ApiProxyLike) => boolean> = {
+  fileDeliverables: proxy => proxy.resources?.filesAvailable === true,
+  turnChanges: proxy => proxy.resources?.changesAvailable === true,
+  workspaceFiles: proxy => proxy.resources?.workspaceAvailable === true,
+  generationContinuation: proxy => proxy.sessionControls?.continuationAvailable === true,
+  goalManagement: proxy => proxy.goalViewAvailable === true && proxy.sessionControls?.goalManagementAvailable === true,
   // PROTOCOL.md：模型列表必须由 Host 的 session.models 动态提供。切换模型另由
   // c2s.session.selectModel 自己的探测兜底（缺 selectModel 时回 E_UNSUPPORTED）。
   models: (proxy) => typeof proxy.sessions.models === 'function',
@@ -128,6 +138,11 @@ export function capabilityBits(
   pushOutlet: PushOutlet | undefined,
 ): WelcomeCapabilities {
   return {
+    fileDeliverables: HOST_CAPABILITY_PROBES.fileDeliverables(proxy),
+    turnChanges: HOST_CAPABILITY_PROBES.turnChanges(proxy),
+    workspaceFiles: HOST_CAPABILITY_PROBES.workspaceFiles(proxy),
+    generationContinuation: HOST_CAPABILITY_PROBES.generationContinuation(proxy),
+    goalManagement: HOST_CAPABILITY_PROBES.goalManagement(proxy),
     historyPaging: true,
     replay: true,
     // 插件自身能力，不依赖宿主：导出块与附件可按请求改用二进制帧。

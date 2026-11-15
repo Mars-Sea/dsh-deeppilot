@@ -393,6 +393,8 @@ export function unwrapStreamItem(item: MuxFrameLike | ApiStreamItemLike): MuxFra
 }
 
 export interface ApiProxyLike {
+  readonly resources?: import('./session-resources.ts').DshSessionResources
+  readonly sessionControls?: import('./session-controls.ts').SessionControlsApi
   /** Host has registered the goal summary projection and its passive baseline/live feed. */
   readonly goalViewAvailable?: boolean
   /** 真实宿主反射声明了助手流帧时才为 true；旧代理缺省关闭。 */

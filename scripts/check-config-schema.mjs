@@ -110,7 +110,7 @@ try {
   }
   const isVolatile = (key) => props[key]?.['x-cordis']?.volatile === true
   // preview 于 0.9.18 加入：同样是设置页开关直接写、要求热生效的字段。
-  for (const key of ['enabled', 'local', 'remote', 'diagnostics', 'preview']) {
+  for (const key of ['enabled', 'local', 'remote', 'diagnostics', 'preview', 'files']) {
     if (!isVolatile(key)) {
       throw new Error(`${key} must be declared volatile so 0.1.7 settings writes are accepted`)
     }

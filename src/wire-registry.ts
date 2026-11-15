@@ -28,6 +28,16 @@ import type { PreviewTunnel } from './preview-tunnel.ts'
 
 /** 出站帧字面量：与入站共用一份词汇，record() 随后只接受这个子集。 */
 export type S2CType =
+  | 's2c.session.resources.changed'
+  | 's2c.session.resources'
+  | 's2c.session.changes.diff'
+  | 's2c.workspace.files'
+  | 's2c.file.info'
+  | 's2c.file.text'
+  | 's2c.file.manifest'
+  | 's2c.file.chunk'
+  | 's2c.session.controls'
+  | 's2c.session.control.receipt'
   | 's2c.ack'
   | 's2c.auth.challenge'
   | 's2c.directory.listing'
@@ -92,6 +102,19 @@ export type S2CType =
  * （历史上 requiredScope 为它留过一个无人使用的条目，见 G7）。
  */
 export type C2SType =
+  | 'c2s.session.resources.list'
+  | 'c2s.session.changes.diff'
+  | 'c2s.workspace.files.list'
+  | 'c2s.workspace.files.search'
+  | 'c2s.file.stat'
+  | 'c2s.file.text'
+  | 'c2s.file.open'
+  | 'c2s.file.read'
+  | 'c2s.file.close'
+  | 'c2s.session.controls'
+  | 'c2s.session.continue'
+  | 'c2s.session.goal.manage'
+  | 'c2s.session.control.status'
   | 'c2s.ping'
   | 'c2s.auth.prove'
   | 'c2s.sessions.list'
@@ -353,10 +376,14 @@ import { sessionRows } from './wire-session.ts'
 import { commandRows } from './wire-command.ts'
 import { pluginUpdateRows } from './wire-plugin-update.ts'
 import { previewRows } from './wire-preview.ts'
+import { resourceRows } from './wire-resources.ts'
+import { sessionControlRows } from './wire-session-control.ts'
 
 /** 全部入站行。装配是静态的：新增特性 module 必须在这里显式出现。 */
 export const WIRE_FRAME_ROWS: readonly WireFrameRow[] = [
   ...sessionRows,
+  ...sessionControlRows,
+  ...resourceRows,
   ...commandRows,
   ...pluginUpdateRows,
   ...scheduleRows,

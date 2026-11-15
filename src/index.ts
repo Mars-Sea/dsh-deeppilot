@@ -824,7 +824,7 @@ export function apply(ctx: Context, options: unknown): void {
       const apiCtx = sub as unknown as Context & SubContext
       let proxy: DshApiProxy
       try {
-        proxy = new DshApiProxy(apiCtx, { shouldSurfaceInteraction: hasPairedPhoneSurface })
+        proxy = new DshApiProxy(apiCtx, { shouldSurfaceInteraction: hasPairedPhoneSurface, allowFileBrowse: () => currentConfig().files?.browse === true })
       } catch (error) {
         log('DSH session bridge unavailable: ' + String(error), 'warn')
         return

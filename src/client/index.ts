@@ -83,6 +83,7 @@ export interface PreviewState {
   status: 'loading' | 'ready' | 'unavailable'
   enabled: boolean
   hostWeb: boolean
+  browse?: boolean
 }
 
 export interface LocalPortState {
@@ -398,17 +399,17 @@ export function apply(ctx: Context): void {
     if (scope === undefined) return
     const snap = scope.getSnapshot()
     if (snap.status === 'ready') {
-      previewStore.set({ status: 'ready', ...confirmedPreview(snap.value?.preview) })
+      previewStore.set({ status: 'ready', ...confirmedPreview(snap.value?.preview), browse: snap.value?.files?.browse === true })
     } else if (snap.status === 'unavailable') {
       previewStore.set({ status: 'unavailable', enabled: true, hostWeb: false })
     }
   }
   scopeAdoptions.push(adoptPreview)
-  const lastConfirmedPreview = (): { enabled: boolean; hostWeb: boolean } => {
+  const lastConfirmedPreview = (): { enabled: boolean; hostWeb: boolean; browse?: boolean } => {
     const snap = scope?.getSnapshot()
-    if (snap?.status === 'ready') return confirmedPreview(snap.value?.preview)
-    const { enabled, hostWeb } = previewStore.getSnapshot()
-    return { enabled, hostWeb }
+    if (snap?.status === 'ready') return { ...confirmedPreview(snap.value?.preview), browse: snap.value?.files?.browse === true }
+    const { enabled, hostWeb, browse } = previewStore.getSnapshot()
+    return { enabled, hostWeb, browse }
   }
   /** 两个开关同写 `preview` 对象：只改自己的键，其余键（含另一个开关）原样保留。 */
   const setPreviewKey = (key: 'enabled' | 'hostWeb', value: boolean): void => {
@@ -423,6 +424,14 @@ export function apply(ctx: Context): void {
   }
   const setDeepPilotPreview = (value: boolean): void => setPreviewKey('enabled', value)
   const setDeepPilotHostWeb = (value: boolean): void => setPreviewKey('hostWeb', value)
+
+  const setDeepPilotFileBrowse = (value: boolean): void => {
+    const previous = previewStore.getSnapshot()
+    previewStore.set({ ...previous, browse: value })
+    if (scope === undefined) return
+    const files = scope.getSnapshot().value?.files ?? {}
+    void scope.set('files', { ...files, browse: value }).catch(() => previewStore.set(previous))
+  }
 
   const remoteEnabledStore = createSnapshotStore<RemoteEnabledState>({ status: 'loading', enabled: false })
   const remoteConnectionLimitStore = createSnapshotStore<RemoteConnectionLimitState>({
@@ -533,6 +542,7 @@ export function apply(ctx: Context): void {
         setDeepPilotDebug,
         setDeepPilotPreview,
         setDeepPilotHostWeb,
+        setDeepPilotFileBrowse,
         // Bound translation function for the page. The page never imports
         // t() directly so it can be re-supplied if the host swaps the
         // locale face at runtime (a feature today; exercised in tests).

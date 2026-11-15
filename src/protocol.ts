@@ -1,3 +1,4 @@
+export type * from './resource-models.ts'
 /**
  * DeepPilot Bridge Protocol v2 — shared frame vocabulary (TypeScript face).
  * The normative spec is PROTOCOL.md at the repo root; this module
@@ -168,6 +169,20 @@ export interface SessionSelectModelPayload extends ModelSelection { sessionId: s
 export interface SessionRenamePayload { sessionId: string; title: string }
 export interface SessionArchivePayload { sessionId: string }
 export interface SessionCancelPayload { sessionId: string }
+/** Optional native continuation/goal controls. Never accept empty ordinary prompts. */
+export interface SessionControlState { sessionId: string; continuationEnding?: number | null }
+export interface GoalRef { id: string; revision: number }
+export type SessionControlRequest =
+  | { sessionId: string; action: 'continue'; endingSeq: number; clientRequestId: string }
+  | { sessionId: string; action: 'create' | 'edit'; expectedGoal: GoalRef | null; patch: { objective?: string; maxGoalRounds?: number }; clientRequestId: string }
+  | { sessionId: string; action: 'pause' | 'resume' | 'clear'; expectedGoal: GoalRef; clientRequestId: string }
+export interface SessionControlReceipt {
+  sessionId: string
+  clientRequestId: string
+  status: 'accepted' | 'rejected' | 'unknown' | 'notFound' | 'expired'
+  code?: string
+  ref?: GoalRef
+}
 export interface SessionCreatePayload { workspaceId?: string; cwd?: string }
 export interface SessionForkPayload { clientRequestId: string; sessionId: string; atSeq?: number }
 export interface SessionForkedPayload { clientRequestId: string; sourceSessionId: string; sessionId: string; atSeq?: number; replayed?: boolean }
@@ -418,6 +433,11 @@ export type WidgetPushRegisterPayload = Omit<PushRegisterPayload, 'categories' |
 // ---------- s2c payloads ----------
 
 export interface WelcomeCapabilities {
+  fileDeliverables?: boolean
+  turnChanges?: boolean
+  workspaceFiles?: boolean
+  generationContinuation?: boolean
+  goalManagement?: boolean
   /** Authoritative goal summaries and goal-scoped Live Activities. Missing/false means unsupported. */
   goalView?: boolean
   /** Goal completion notices and c2s.push.register preferences are implemented by this bridge. */

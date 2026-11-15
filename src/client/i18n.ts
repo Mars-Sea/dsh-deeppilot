@@ -69,6 +69,8 @@ const TABLES: LocaleTables = {
     // 紧凑设置页：默认仅展示连接、设备与两个工具折叠行。
     'local.options': '局域网连接选项',
     'remote.options': '远程连接选项',
+    'files.title': '允许手机浏览项目文件',
+    'files.description': '只读浏览、搜索和下载当前项目文件；文件内容仅在手机点开时读取',
     'preview.title': '本机网页预览',
     'preview.description': '手机可在 App 内打开会话里出现过的本机网页',
     'hostWeb.title': '允许手机打开电脑端网页',
@@ -396,6 +398,8 @@ const TABLES: LocaleTables = {
     // Compact settings surface.
     'local.options': 'LAN connection options',
     'remote.options': 'Remote connection options',
+    'files.title': 'Allow phones to browse project files',
+    'files.description': 'Read-only browsing, search and download within the project. File contents are read only when opened.',
     'preview.title': 'Local web preview',
     'preview.description': 'Phones can open local pages linked in the conversation',
     'hostWeb.title': 'Allow phones to open the desktop web UI',

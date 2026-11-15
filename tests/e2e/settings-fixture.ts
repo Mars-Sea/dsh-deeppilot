@@ -55,7 +55,8 @@ function Fixture(): any {
   const [debug, setDebug] = useState(false)
   const [preview, setPreview] = useState(true)
   const [hostWeb, setHostWeb] = useState(false)
-  const operations = useRef({ grants: 0, renames: 0, revokes: 0, ports: 0, limits: 0, pushes: 0, enabled: 0, remote: 0, debug: 0, preview: 0, hostWeb: 0 })
+  const [browse, setBrowse] = useState(false)
+  const operations = useRef({ grants: 0, renames: 0, revokes: 0, ports: 0, limits: 0, pushes: 0, enabled: 0, remote: 0, debug: 0, preview: 0, hostWeb: 0, browse: 0 })
   const [revision, setRevision] = useState(0)
   const record = (key: keyof typeof operations.current): void => {
     operations.current[key] += 1
@@ -70,11 +71,12 @@ function Fixture(): any {
     useDeepPilotLocalPort: (select) => select({ status: 'ready', value: localPort }),
     useDeepPilotRemoteConnectionLimit: (select) => select({ status: 'ready', value: limit }),
     useDeepPilotDebug: (select) => select({ status: 'ready', enabled: debug }),
-    useDeepPilotPreview: (select) => select({ status: 'ready', enabled: preview, hostWeb }),
+    useDeepPilotPreview: (select) => select({ status: 'ready', enabled: preview, hostWeb, browse }),
     setDeepPilotEnabled: (enabled) => { record('enabled'); setReport((r) => ({ ...r, enabled })) },
     setDeepPilotRemoteEnabled: (enabled) => { record('remote'); setReport((r) => ({ ...r, remote: { ...r.remote, phase: enabled ? 'online' : 'disabled' } })) },
     setDeepPilotDebug: (enabled) => { record('debug'); setDebug(enabled) },
     setDeepPilotPreview: (enabled) => { record('preview'); setPreview(enabled) },
+    setDeepPilotFileBrowse: (enabled) => { record('browse'); setBrowse(enabled) },
     setDeepPilotHostWeb: (enabled) => { record('hostWeb'); setHostWeb(enabled) },
     setDeepPilotLocalPort: (value) => { record('ports'); setLocalPort(value) },
     setDeepPilotRemoteConnectionLimit: (value) => { record('limits'); setLimit(value) },
