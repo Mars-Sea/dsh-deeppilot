@@ -1,20 +1,6 @@
-# dsh-deeppilot bundle layer.
-# Phone clients cannot interact with a native picker rendered on the host computer.
-# Replace dsh-web-app's adaptive picker with the official browse pair while
-# this bundle is composed, so host.listDirectory is available remotely.
-# Removing this bundle restores the lower web-app auto row unchanged.
-- id: directory-picker
-  disabled: true
-
-# The name must be the FULL scoped specifier as installed in the profile's
-# node_modules, quoted so YAML does not treat it as a directive.
+# Phone directory browsing is owned by DeepPilot's RPC adapter. Leave the
+# host's native/browse picker and its UI intact across bundle updates.
 - insert:
-    - id: deeppilot-directory-picker-browse
-      name: "@deepseek-ai/dsh-host-directory-picker-browse"
-
-    - id: deeppilot-directory-picker-browse-client
-      name: "@deepseek-ai/dsh-client-ui-directory-picker-browse"
-
     - id: deeppilot
       name: "dsh-deeppilot"
       config: {}

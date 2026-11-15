@@ -716,7 +716,7 @@ tool.end / turn.start / turn.end；其余 kind 为兼容 Host 后续事件投影
 } }
 ```
 
-DeepPilot 的标准 bundle 固定组合 Host 官方 `directory-picker-browse` 双面包，使远程 iPhone 能调用 `directory.list`。Host 不提供该能力时请求返回 `E_UNSUPPORTED`；客户端可在用户明确点击后请求电脑上的系统选择器。取消时 `path=null`：
+DeepPilot 在插件内部提供只读目录浏览，不替换 Host 的全局目录选择器；`directory.list` 不依赖 Host 选择原生还是浏览后端。结果仅包含可进入的子目录，保留隐藏标记与目录符号链接路径，最多返回 1000 项，并用 `truncated` 标明截断；请求仍须通过设备认证和 `sessions.manage` 权限检查。此能力与会话内项目文件的 `files.browse` 开关独立。客户端可在用户明确点击后请求 Host 的系统选择器；Host 没有原生选择能力时返回 `E_UNSUPPORTED`，取消时 `path=null`：
 
 ```json
 { "type": "c2s.directory.pick", "id": "d-2", "payload": {} }

@@ -1,4 +1,5 @@
 import { DshSessionResources } from './session-resources.ts'
+import { listPhoneDirectory } from './directory-browser.ts'
 /**
  * Adapter for the DSH rc.2 controller API.
  *
@@ -21,7 +22,6 @@ import { DshSessionControls } from './session-controls.ts'
 import type { CommandsApiLike } from './host-api.ts'
 import type {
   ApiProxyLike,
-  DirectoryListingLike,
   HistoryResult,
   HostScheduleCreateRequestLike,
   HostScheduleDeleteEndedResult,
@@ -152,7 +152,6 @@ function isHostScheduleController(controller: ScheduleControllerLike): controlle
 }
 
 interface DirectoryPickerControllerLike {
-  list(path: string | undefined, signal: AbortSignal): Promise<DirectoryListingLike>
   pick(signal: AbortSignal): Promise<string | null>
 }
 
@@ -291,7 +290,6 @@ export class DshApiProxy implements ApiProxyLike {
   private readonly workspaceController: WorkspaceControllerLike | undefined
   private scheduleController: ScheduleControllerLike | undefined
   private scheduleApi: ApiProxyLike['schedule'] | undefined
-  private readonly directoryPicker: DirectoryPickerControllerLike | undefined
   private readonly interactions = new Map<string, DeferredInteraction>()
   private readonly shouldSurfaceInteraction: (kind: DshInteractionKind) => boolean
 
@@ -313,7 +311,6 @@ export class DshApiProxy implements ApiProxyLike {
     if (this.workspaceController === undefined) delete this.workspace?.unarchiveSession
     // 同理：Host 没有 updateQueue 时撤掉入口，promptQueue 能力位随之为 false。
     if (typeof this.session.updateQueue !== 'function') delete this.sessions.updateQueue
-    this.directoryPicker = ctx.get('directoryPickerController') as DirectoryPickerControllerLike | undefined
     this.shouldSurfaceInteraction = options.shouldSurfaceInteraction ?? (() => true)
     this.resolveSchedule()
     // 技能服务可能晚于桥接层挂载；能力探测与请求都读取当前服务，不缓存缺席。
@@ -603,13 +600,15 @@ export class DshApiProxy implements ApiProxyLike {
   }
 
   readonly host: ApiProxyLike['host'] = {
-    listDirectory: async (request, signal) => this.call(async () => {
-      if (this.directoryPicker === undefined) throw unavailable('directory picker unavailable')
-      return await this.directoryPicker.list(request.payload?.path, signal ?? new AbortController().signal)
-    }),
+    // Phone browsing is independent of DSH's native/browse UI backend. It must
+    // not register or replace the global picker while this bundle is updated.
+    listDirectory: async (request, signal) => this.call(() => listPhoneDirectory(request.payload?.path, signal)),
     pickDirectory: async (_request, signal) => this.call(async () => {
-      if (this.directoryPicker === undefined) throw unavailable('directory picker unavailable')
-      return { path: await this.directoryPicker.pick(signal ?? new AbortController().signal) }
+      // Keep the optional OS chooser, resolving its current controller per call
+      // so a service remount cannot leave the phone holding a disposed instance.
+      const picker = this.ctx.get('directoryPickerController') as DirectoryPickerControllerLike | undefined
+      if (typeof picker?.pick !== 'function') throw unavailable('directory picker unavailable')
+      return { path: await picker.pick(signal ?? new AbortController().signal) }
     }),
   }
 
