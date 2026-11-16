@@ -1,0 +1,165 @@
+{
+  "kind": "published-npm-verification",
+  "date": "2026-11-16",
+  "version": "0.9.24",
+  "sourceCommit": "533f8d67bf4b83b34741a38fc57807bcffc02199",
+  "sourceBranch": "main",
+  "tag": "v0.9.24",
+  "githubRelease": {
+    "tagName": "v0.9.24",
+    "url": "https://github.com/Mars-Sea/dsh-deeppilot/releases/tag/v0.9.24",
+    "draft": false,
+    "prerelease": false
+  },
+  "registry": {
+    "version": "0.9.24",
+    "tags": {
+      "latest": "0.9.24",
+      "alpha": "0.9.24-alpha.1"
+    },
+    "commit": "533f8d67bf4b83b34741a38fc57807bcffc02199",
+    "run": "43797599734",
+    "archiveBytes": 51700196,
+    "fileCount": 72,
+    "integrity": "sha512-mgv7XtcZqKIADYT5PZ3cBi4j0P2BkNwojAgIIkIT/0+N1THw+uh0shjlT/dhztqlLdwiXI+Ipqh64GRLSqglXQ==",
+    "sha256": "62c4f9cea5c3b198764f4bf622312f745eadaa9cc9270f2ae3819b6db0a45795",
+    "publishedFilesEqualTestedSource": true,
+    "provenance": {
+      "predicateType": "https://slsa.dev/provenance/v1",
+      "tag": "refs/tags/v0.9.24",
+      "invocation": "https://github.com/Mars-Sea/dsh-deeppilot/actions/runs/43797599734/attempts/1",
+      "sourceCommit": "533f8d67bf4b83b34741a38fc57807bcffc02199",
+      "subjectSha512": "9a0bfb5ed719a8a2000d84f93d9ddc062e23d0fd8190dc288c0808224213ff4f8dd531f0fae874b218e54ff761cedaa52ddc225c8f88a6a87ae0644b4aa8255d",
+      "validation": "metadata, decoded source/tag/invocation and subject digest checked; not an independent trust-chain verification"
+    }
+  },
+  "ci": {
+    "conclusion": "success",
+    "run": "https://github.com/Mars-Sea/dsh-deeppilot/actions/runs/43796851135"
+  },
+  "codeql": {
+    "conclusion": "success",
+    "run": "https://github.com/Mars-Sea/dsh-deeppilot/actions/runs/43796851138"
+  },
+  "publish": {
+    "conclusion": "success",
+    "run": "https://github.com/Mars-Sea/dsh-deeppilot/actions/runs/43797599734"
+  },
+  "publicRegistryUpgrade": {
+    "runtimeVersion": "0.2.2-rc.3",
+    "pnpmVersion": "11.28.5",
+    "from": "0.9.23",
+    "to": "0.9.24",
+    "checksPassed": 19,
+    "checksTotal": 19,
+    "checks": [
+      {
+        "name": "real HMR and manager mounted",
+        "ok": true
+      },
+      {
+        "name": "before health and runtime version",
+        "ok": true
+      },
+      {
+        "name": "before real WSS P-256 authentication",
+        "ok": true
+      },
+      {
+        "name": "before directory lists only temporary fixture",
+        "ok": true
+      },
+      {
+        "name": "before adopts browsed directory as workspace",
+        "ok": true
+      },
+      {
+        "name": "before repeated workspace creation is idempotent",
+        "ok": true
+      },
+      {
+        "name": "before workspace list contains adopted temporary directory",
+        "ok": true
+      },
+      {
+        "name": "before read-only device denied directory enumeration",
+        "ok": true
+      },
+      {
+        "name": "before read-only device denied OS picker before invocation",
+        "ok": true
+      },
+      {
+        "name": "target update applied",
+        "ok": true
+      },
+      {
+        "name": "after health and runtime version",
+        "ok": true
+      },
+      {
+        "name": "after real WSS P-256 authentication",
+        "ok": true
+      },
+      {
+        "name": "after directory lists only temporary fixture",
+        "ok": true
+      },
+      {
+        "name": "after adopts browsed directory as workspace",
+        "ok": true
+      },
+      {
+        "name": "after repeated workspace creation is idempotent",
+        "ok": true
+      },
+      {
+        "name": "after workspace list contains adopted temporary directory",
+        "ok": true
+      },
+      {
+        "name": "after read-only device denied directory enumeration",
+        "ok": true
+      },
+      {
+        "name": "after read-only device denied OS picker before invocation",
+        "ok": true
+      },
+      {
+        "name": "installed disk version matches requested target",
+        "ok": true
+      }
+    ],
+    "application": "applied",
+    "health": [
+      {
+        "name": "before health and runtime version",
+        "serverVersion": "0.9.23"
+      },
+      {
+        "name": "after health and runtime version",
+        "serverVersion": "0.9.24"
+      }
+    ],
+    "allListenersReleased": true,
+    "rawEvidencePreservedLocally": true
+  },
+  "automatedRegression": {
+    "total": 879,
+    "passed": 877,
+    "failed": 0,
+    "skipped": 1,
+    "existingTodo": 1,
+    "locale": "en_US.UTF-8",
+    "testFileConcurrency": 4,
+    "productionAuditVulnerabilities": 0,
+    "helperMatrixRebuiltWithoutChanges": true,
+    "helperGoTests": "passed",
+    "configSchemaHost": "0.2.1-rc.5"
+  },
+  "limits": [
+    "Isolated real Host and synthetic devices; no physical-phone or Desktop-window UI operation.",
+    "Worker listeners used loopback temporary ports.",
+    "Windows filesystem and native OS dialog were not exercised."
+  ]
+}
