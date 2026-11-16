@@ -253,6 +253,8 @@
     `npm pack` 报 EPERM；本次以 `npm_config_cache=<临时目录>` 绕过，未改动缓存属主。
     后续在本机执行发布前检查时同样需要该绕法。
 
+15. `0.9.24-alpha.1`（2026-11-16）按用户要求仅公开 npm `alpha`，不创建任何 GitHub Release/草稿。源码是测试分支 `fix/independent-phone-directory-browser` 的 `f9f2f62`，附注标签 `v0.9.24-alpha.1`；正式版仍要求 main 祖先，预发布版新增“已推送分支的确切分支头”检查，未合并 main。CI `43778004434`、CodeQL `43778004452`、OIDC 发布 `43778860268` 均成功；`latest` 保持 `0.9.23`，`alpha` 指向本版。公网元数据与包下载经历短暂 404 重试后可用，未重复上传。实际下载为 72 项、51,698,747 字节；包完整性、来源证明中的提交/标签/invocation/subject 摘要均一致。随后使用 DSH `0.2.2-rc.3` + pnpm `11.28.5` 在独立配置中从 npm 原版 `0.9.23` 真实热更新到本版，19/19 验收通过；运行版本正确、目录/工作区/鉴权/权限正常，所有监听释放。证据见 [npm 测试版验证](verification/npm-0.9.24-alpha.1.json)。
+
 ## 五、官方资料
 
 1. [npm 可信发布配置与限制](https://docs.npmjs.com/trusted-publishers/)

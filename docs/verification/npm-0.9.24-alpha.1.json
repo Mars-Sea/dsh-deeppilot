@@ -1,0 +1,161 @@
+{
+  "kind": "published-npm-verification",
+  "date": "2026-11-16",
+  "version": "0.9.24-alpha.1",
+  "sourceCommit": "f9f2f627b6f1963b045682bace79959f18d2e49e",
+  "sourceBranch": "fix/independent-phone-directory-browser",
+  "tag": "v0.9.24-alpha.1",
+  "githubReleaseCreated": false,
+  "mainMerged": false,
+  "registry": {
+    "version": "0.9.24-alpha.1",
+    "tags": {
+      "latest": "0.9.23",
+      "alpha": "0.9.24-alpha.1"
+    },
+    "commit": "f9f2f627b6f1963b045682bace79959f18d2e49e",
+    "run": "43778860268",
+    "archiveBytes": 51698747,
+    "fileCount": 72,
+    "integrity": "sha512-wxDXyV6EA/UdYXDB6yJTz0CLAuJS9bLbFgz64PyWtWMjfkntpdknXt+DBVXWrUz0v9+WibmlnahBFAYYKR19pA==",
+    "sha256": "e45bd8025ddedc36de4f18444e93d5aa4af7ef79f1216a649bfa9e27fcaa6ba6",
+    "publishedFilesEqualTestedSource": true,
+    "comparedFiles": ["lib/index.js", "lib/client.js", "cordis.patch.yml"],
+    "onlyDeepPilotBundleRow": true,
+    "provenance": {
+      "predicateType": "https://slsa.dev/provenance/v1",
+      "tag": "refs/tags/v0.9.24-alpha.1",
+      "invocation": "https://github.com/Mars-Sea/dsh-deeppilot/actions/runs/43778860268/attempts/1",
+      "sourceCommit": "f9f2f627b6f1963b045682bace79959f18d2e49e",
+      "subjectSha512": "c310d7c95e8403f51d6170c1eb2253cf408b02e252f5b2db160cfae0fc96b563237e49eda5d9275edf830555d6ad4cf4bfdf9689b9a59da841140618291d7da4",
+      "validation": "metadata, decoded source/tag/invocation and subject digest checked; not an independent trust-chain verification"
+    }
+  },
+  "ci": {
+    "conclusion": "success",
+    "run": "https://github.com/Mars-Sea/dsh-deeppilot/actions/runs/43778004434"
+  },
+  "codeql": {
+    "conclusion": "success",
+    "run": "https://github.com/Mars-Sea/dsh-deeppilot/actions/runs/43778004452"
+  },
+  "publish": {
+    "conclusion": "success",
+    "run": "https://github.com/Mars-Sea/dsh-deeppilot/actions/runs/43778860268"
+  },
+  "publicRegistryUpgrade": {
+    "runtimeVersion": "0.2.2-rc.3",
+    "pnpmVersion": "11.28.5",
+    "from": "0.9.23",
+    "to": "0.9.24-alpha.1",
+    "checksPassed": 19,
+    "checksTotal": 19,
+    "checks": [
+      {
+        "name": "real HMR and manager mounted",
+        "ok": true
+      },
+      {
+        "name": "before health and runtime version",
+        "ok": true
+      },
+      {
+        "name": "before real WSS P-256 authentication",
+        "ok": true
+      },
+      {
+        "name": "before directory lists only temporary fixture",
+        "ok": true
+      },
+      {
+        "name": "before adopts browsed directory as workspace",
+        "ok": true
+      },
+      {
+        "name": "before repeated workspace creation is idempotent",
+        "ok": true
+      },
+      {
+        "name": "before workspace list contains adopted temporary directory",
+        "ok": true
+      },
+      {
+        "name": "before read-only device denied directory enumeration",
+        "ok": true
+      },
+      {
+        "name": "before read-only device denied OS picker before invocation",
+        "ok": true
+      },
+      {
+        "name": "target update applied",
+        "ok": true
+      },
+      {
+        "name": "after health and runtime version",
+        "ok": true
+      },
+      {
+        "name": "after real WSS P-256 authentication",
+        "ok": true
+      },
+      {
+        "name": "after directory lists only temporary fixture",
+        "ok": true
+      },
+      {
+        "name": "after adopts browsed directory as workspace",
+        "ok": true
+      },
+      {
+        "name": "after repeated workspace creation is idempotent",
+        "ok": true
+      },
+      {
+        "name": "after workspace list contains adopted temporary directory",
+        "ok": true
+      },
+      {
+        "name": "after read-only device denied directory enumeration",
+        "ok": true
+      },
+      {
+        "name": "after read-only device denied OS picker before invocation",
+        "ok": true
+      },
+      {
+        "name": "installed disk version matches requested target",
+        "ok": true
+      }
+    ],
+    "application": "applied",
+    "health": [
+      {
+        "name": "before health and runtime version",
+        "serverVersion": "0.9.23"
+      },
+      {
+        "name": "after health and runtime version",
+        "serverVersion": "0.9.24-alpha.1"
+      }
+    ],
+    "allListenersReleased": true,
+    "rawEvidencePreservedLocally": true
+  },
+  "automatedRegression": {
+    "total": 879,
+    "passed": 877,
+    "failed": 0,
+    "skipped": 1,
+    "existingTodo": 1,
+    "locale": "en_US.UTF-8",
+    "testFileConcurrency": 4,
+    "productionAuditVulnerabilities": 0,
+    "helperMatrixRebuiltWithoutChanges": true
+  },
+  "limits": [
+    "Isolated real Host and synthetic devices; no physical-phone or Desktop-window UI operation.",
+    "Worker listeners used loopback temporary ports.",
+    "Windows filesystem and native OS dialog were not exercised."
+  ]
+}

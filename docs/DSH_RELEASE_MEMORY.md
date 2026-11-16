@@ -2538,4 +2538,12 @@ result.error / restore.error:
 - **自动化验证。** 新增模块/RPC 19 项通过，相关定向 47 项通过；全量在 `en_US.UTF-8`、文件并发上限 4 下为 877 pass / 0 fail / 1 skip / 1 既有 TODO（共 879）。两项默认中文 locale 下的 i18n 失败已在原始 `f2a7b11` 复现；一次高并发 helper 时间窗口失败在有界并发后消失，未改动这些既有代码。类型检查、构建、Client requires、schema 和打包预览通过，独立复核未发现本次差异的阻断问题。
 - **真实宿主验证。** 使用 DSH `0.2.2-rc.3`、一次性 loopback registry、仓库外的独立 profile 与合成手机身份，运行正式 `pluginManager.updateBundle`。旧 patch 控制组复现 `enable/operation-error` 与重复 `directoryPicker`，restore 激活亦失败。旧版迁移到修复版及修复版之间的后续更新已返回 applied，运行版本和真实 WSS 的目录/工作区/权限调用符合目标；最终包管理器对照结果和可复核摘要见 [完整报告](DIRECTORY_BROWSER_HMR_TEST.md)。这些是隔离宿主验证，不等于在用户 Desktop 窗口或真实手机做过界面验收。
 - **手机协议。** v2 帧与字段未变，目录 RPC 仍要求设备认证和 `sessions.manage`，与会话文件 `files.browse` 开关独立。没有修改 iOS/Android、配对流程或跨端 fixtures；原生选择取消仍返回 null，缺少能力仍为 E_UNSUPPORTED。传入 AbortSignal 的清理已测，不将其扩展表述为手机断连即时取消。
-- **边界。** 尚未发布、推送或合并；不扩大到所有插件或所有 DSH 版本的 HMR 保证。Windows 实机、原生弹窗、手机界面、Funnel/APNs 未验收。既有 iOS workspace.create 失败反馈缺口单列在报告中，未归因本变更。
+- **边界。** 当时尚未发布、推送或合并；不扩大到所有插件或所有 DSH 版本的 HMR 保证。Windows 实机、原生弹窗、手机界面、Funnel/APNs 未验收。既有 iOS workspace.create 失败反馈缺口单列在报告中，未归因本变更。
+
+## 2026-11-16 — 0.9.24-alpha.1 npm 手测版（不创建 GitHub Release）
+
+- **授权与源码。** 用户要求发布 npm 测试版并明确排除 GitHub Releases。从 `fix/independent-phone-directory-browser` 的 `f9f2f627b6f1963b045682bace79959f18d2e49e` 创建附注标签 `v0.9.24-alpha.1`；没有合入 `main`，没有创建 Release 或草稿。发布门禁为预发布版允许本仓库已推送分支的精确分支头，正式版仍要求属于 `main`；标签、SHA、清单/锁文件及 dist-tag 校验保持。
+- **安装面。** CI `43778004434`（含六平台 helper 冒烟、漏洞扫描和矩阵重编）、CodeQL `43778004452` 全绿；本地干净 npm ci、全量 877 pass / 0 fail / 1 skip / 1 TODO、类型、构建、schema、Go 测试与六平台逐字节复现均通过。生产依赖审计为零漏洞，兼容范围、依赖、helper 与协议声明未改。独立 npm cache 避免改动个人缓存。
+- **npm 发布。** `publish.yml` 的 tag 运行 `43778860268` 全绿，通过 OIDC 公开发布 `dsh-deeppilot@0.9.24-alpha.1`，dist-tag `alpha` 指向本版，`latest` 保持 `0.9.23`。72 项、51,698,747 字节；来源证明的源提交、标签、invocation 和 subject SHA512 与实际下载包一致。公网元数据/压缩包曾短暂 404，有限重试后可用，没有重复上传。校验覆盖元数据和声明内容，并非额外独立执行证书信任链验签。
+- **真实运行。** 从 npm 公网在仓库外的独立 DSH_HOME 精确安装原版 `0.9.23`，使用 DSH `0.2.2-rc.3` + Desktop 携带的 pnpm `11.28.5`，通过真实 manager 热更新到公开 `0.9.24-alpha.1`。19/19 通过，application 为 applied，磁盘及 `/phone/health` 版本均正确；真实 WSS 鉴权、浏览目录、采用目录为工作区、重复创建幂等、工作区列表及只读权限拒绝都正常。worker 仅监听临时 loopback 端口，结束后全部释放。原始结果在工作区持久保留，[发布验证记录](verification/npm-0.9.24-alpha.1.json) 是从本轮实际结果整理的记录，区别于上一阶段丢失临时文件后恢复的摘要。
+- **手机协议与验收边界。** 仍为 v2，权限和 iOS/Android fixtures 未改；没有操作真实手机、用户 Desktop 窗口或日常 profile。交用户在插件版本区勾选“显示预发布版本”后手测升级、手机添加项目、断连重连与启停。预期电脑端目录交互恢复 DSH 默认选择。
