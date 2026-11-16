@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, fix/independent-phone-directory-browser]
+    branches: [main]
   pull_request:
 
 permissions:

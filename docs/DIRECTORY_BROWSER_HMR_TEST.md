@@ -1,6 +1,6 @@
 # 独立手机目录浏览：测试分支与验收记录
 
-日期：2026-11-16（Asia/Shanghai）。分支：`fix/independent-phone-directory-browser`。本分支为验证方案，不是发布版本。
+日期：2026-11-16（Asia/Shanghai）。分支：`fix/independent-phone-directory-browser`，已快进合并进 `main` 并随 `0.9.24` 发布；测试期间的临时分支与验证脚本保留在本文件中，作为该次改动的验收记录。
 
 ## 修改与功能边界
 
