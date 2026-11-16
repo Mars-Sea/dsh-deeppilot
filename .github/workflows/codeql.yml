@@ -2,7 +2,7 @@ name: CodeQL
 
 on:
   push:
-    branches: [main]
+    branches: [main, fix/independent-phone-directory-browser]
   pull_request:
   schedule:
     - cron: '23 4 * * 1'
