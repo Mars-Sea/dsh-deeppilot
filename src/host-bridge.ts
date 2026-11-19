@@ -52,7 +52,9 @@ import {
   messageText,
   projectEvent,
   projectHistory,
+  questionToolCallId,
   retryActivityText,
+  toolResultOf,
   turnEndFailureText,
   userMessageSourceKind,
 } from './host-event-projection.ts'
@@ -145,6 +147,7 @@ export class HostBridge {
   private readonly summaryPushed = new Map<string, { full: string; withoutStats: string; at: number }>()
   private readonly summaryStatsTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private activeTools = new Map<string, Map<string, string>>()
+  private readonly activeQuestionCalls = new Map<string, Map<string, SessionEventLike>>()
   /** 会话在 llm/retry 退避等待期间的重试描述；新一轮、重试启动或新消息/工具到达时清除。 */
   private retryActivities = new Map<string, string>()
   /** 最近一轮以非 completed 异常结束的会话；保持 status='error' 直到下一轮开始，防止随后的 running=false 覆盖回 idle。 */
@@ -527,6 +530,7 @@ export class HostBridge {
     for (const timer of this.summaryStatsTimers.values()) clearTimeout(timer)
     this.summaryStatsTimers.clear()
     this.assistantStream.dispose();
+    this.activeQuestionCalls.clear();
     this.sinks.clear();
     this.sinkSessions.clear();
     this.pushOutlet = undefined;
@@ -636,7 +640,8 @@ export class HostBridge {
           this.goals.turnStarted(sessionId);
           if (row && row.status === 'error') row.status = 'running';
         }
-        const projection = projectEvent(sessionId, event);
+        const questionCall = this.trackQuestionCall(sessionId, event);
+        const projection = projectEvent(sessionId, event, questionCall);
         if (projection?.kind === 'turn.end') {
           const ok = projection.data.ok === true;
           const row = this.summaries.get(sessionId);
@@ -874,6 +879,26 @@ export class HostBridge {
     if (!firstUser) return;
     row.title = firstUser!.text!.replace(/\s+/g, ' ').trim().slice(0, 60);
     this.pushSummary(row);
+  }
+
+  private trackQuestionCall(sessionId: string, event: SessionEventLike): SessionEventLike | undefined {
+    if (event.type === 'turn/start' || event.type === 'turn/end') {
+      this.activeQuestionCalls.delete(sessionId);
+      return undefined;
+    }
+    const invocationId = questionToolCallId(event);
+    if (invocationId) {
+      const calls = this.activeQuestionCalls.get(sessionId) ?? new Map<string, SessionEventLike>();
+      calls.set(invocationId, event);
+      this.activeQuestionCalls.set(sessionId, calls);
+    }
+    if (event.type !== 'tool/result') return undefined;
+    const { callId } = toolResultOf(event.data);
+    if (!callId) return undefined;
+    const calls = this.activeQuestionCalls.get(sessionId);
+    const call = calls?.get(callId);
+    if (calls?.delete(callId) && calls.size === 0) this.activeQuestionCalls.delete(sessionId);
+    return call;
   }
 
   private captureActivity(sessionId: string, event: SessionEventLike, tool?: { name?: string; summary?: string }): void {

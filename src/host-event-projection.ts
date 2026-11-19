@@ -1,5 +1,8 @@
-import type { MessageProjection, SessionEventKind, ToolEditProjection, ToolTargetProjection } from './protocol.ts'
-import type { SessionEventLike } from './host-api.ts'
+import type {
+  MessageProjection, QuestionResponseItem, QuestionResponseProjection, SessionEventKind,
+  ToolEditProjection, ToolTargetProjection,
+} from './protocol.ts'
+import type { HistoryEntry, SessionEventLike } from './host-api.ts'
 import { projectedDocument } from './document-payload.ts'
 
 export const MAX_MESSAGE_PROJECTION_BYTES = 256 * 1024
@@ -33,7 +36,9 @@ export function limitSessionPageMessages(messages: MessageProjection[]): {
   return { messages: kept, dropped: canonical.length - kept.length }
 }
 
-export function projectEvent(sessionId: string, event: SessionEventLike): { kind: SessionEventKind; data: Record<string, unknown> } | null {
+export function projectEvent(
+  sessionId: string, event: SessionEventLike, questionCall?: SessionEventLike,
+): { kind: SessionEventKind; data: Record<string, unknown> } | null {
   switch (event.type) {
     case 'turn/start':
       return { kind: 'turn.start', data: {} };
@@ -59,7 +64,15 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
       // future shape change forces a deliberate decision here.
       return null;
     }
-    case 'user/message':
+    case 'user/message': {
+      const reply = lateQuestionReply(event.data);
+      if (reply) {
+        const row = questionResponseMessage(event, reply.response, reply.callId);
+        return { kind: 'tool.end', data: {
+          ...questionResponseEventFields(row), seq: row.seq, role: row.role,
+          ts: row.ts, ok: true, callId: reply.callId, summary: row.tool?.summary,
+        } };
+      }
       if (emptyRetry(event.data)) return null;
       return {
         kind: 'message.final',
@@ -72,6 +85,7 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
           ts: tsOf(event),
         }) },
       };
+    }
     case 'assistant/chunk': {
       if (chunkTypeOf(event.data) === 'reasoning-delta') {
         return { kind: 'thinking.delta', data: limitRealtimeText({ text: chunkText(event.data), ts: tsOf(event) }) };
@@ -113,7 +127,8 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
     case 'tool/result': {
       const { callId, failed, message } = toolResultOf(event.data);
       const ok = !failed;
-      const result = limitMessageProjection({
+      const response = ok ? toolQuestionReply(message, questionCall) : undefined;
+      const result = response ? questionResponseMessage(event, response, callId) : limitMessageProjection({
         seq: event.seq, role: 'tool', ts: tsOf(event),
         tool: { name: 'result', state: ok ? 'ok' : 'error', summary: ok ? summarizeResult(message?.content) : '失败' },
         ...(ok ? attachmentProjection(message) : {}),
@@ -123,6 +138,7 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
         data: {
           seq: result.seq, role: result.role, ts: result.ts, ok,
           summary: result.tool?.summary,
+          ...questionResponseEventFields(result),
           ...(result.attachments ? { attachments: result.attachments } : {}),
           ...(callId ? { callId } : {}),
         }
@@ -134,17 +150,105 @@ export function projectEvent(sessionId: string, event: SessionEventLike): { kind
 }
 
 /** Native results carry identity and failure on message; retain older Host fields. */
-function toolResultOf(value: unknown) {
+export function toolResultOf(value: unknown) {
   const data = value as {
     callId?: string
     error?: unknown
-    message?: { toolCallId?: string; isError?: boolean; content?: unknown }
+    message?: { toolCallId?: string; toolName?: string; isError?: boolean; content?: unknown; source?: { callId?: string } }
   } | undefined
   return {
-    callId: data?.message?.toolCallId || data?.callId,
+    callId: data?.message?.toolCallId || data?.message?.source?.callId || data?.callId,
     failed: data?.message?.isError === true || data?.error !== undefined,
     message: data?.message,
   }
+}
+
+const QUESTION_TOOL = 'ask_user_question'
+
+function isQuestionTool(name: unknown): boolean {
+  return name === QUESTION_TOOL || name === 'ask_user'
+}
+
+/** Call identity is also used by the live bridge and the older Host history adapter. */
+export function questionToolCallId(event: SessionEventLike): string | undefined {
+  if (event.type !== 'tool/call') return undefined
+  const data = event.data as { name?: unknown; callId?: unknown } | undefined
+  return isQuestionTool(data?.name) && typeof data?.callId === 'string' && data.callId.length > 0
+    ? data.callId : undefined
+}
+
+function readJsonObject(text: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // Legacy or malformed records can still be shown as ordinary tool activity.
+  }
+  return undefined
+}
+
+function questionReply(batch: Record<string, unknown>, rawQuestions: unknown): QuestionResponseProjection | undefined {
+  if (batch.pending === true || !Array.isArray(batch.answers) || batch.answers.length === 0) return undefined
+  const answers = new Map<string, QuestionResponseItem>()
+  for (const raw of batch.answers) {
+    if (!raw || typeof raw !== 'object') return undefined
+    const { id, selected, custom } = raw as Record<string, unknown>
+    if (typeof id !== 'string' || !id || answers.has(id) || !Array.isArray(selected) ||
+        !selected.every(value => typeof value === 'string') ||
+        (custom !== undefined && typeof custom !== 'string')) return undefined
+    answers.set(id, { id, selected, ...(custom ? { custom } : {}) })
+  }
+
+  const items: QuestionResponseItem[] = []
+  if (Array.isArray(rawQuestions)) {
+    for (const raw of rawQuestions) {
+      if (!raw || typeof raw !== 'object') continue
+      const { id, question } = raw as Record<string, unknown>
+      if (typeof id !== 'string') continue
+      const answer = answers.get(id)
+      if (!answer) continue
+      items.push({ ...answer, ...(typeof question === 'string' && question ? { question } : {}) })
+      answers.delete(id)
+    }
+  }
+  return { items: [...items, ...answers.values()] }
+}
+
+function toolQuestionReply(
+  message: ReturnType<typeof toolResultOf>['message'], call?: SessionEventLike,
+): QuestionResponseProjection | undefined {
+  if (!call && !isQuestionTool(message?.toolName)) return undefined
+  const batch = readJsonObject(messageText(message))
+  if (!batch) return undefined
+  const args = (call?.data as { arguments?: unknown } | undefined)?.arguments
+  return questionReply(batch, typeof args === 'string' ? readJsonObject(args)?.questions : undefined)
+}
+
+function lateQuestionReply(data: unknown): { callId: string; response: QuestionResponseProjection } | undefined {
+  const source = userMessageSource(data)
+  if (source?.kind !== 'user-question-reply' || source.outcome !== 'answered' ||
+      typeof source.callId !== 'string' || !source.callId) return undefined
+  const batch = readJsonObject(messageText(data))
+  if (batch?.kind !== 'answer_to_pending_question' || !isQuestionTool(batch.tool) || batch.callId !== source.callId) return undefined
+  const response = questionReply(batch, batch.questions)
+  return response ? { callId: source.callId, response } : undefined
+}
+
+function questionResponseMessage(
+  event: SessionEventLike, response: QuestionResponseProjection, callId?: string,
+): MessageProjection {
+  return limitMessageProjection({
+    seq: event.seq, role: 'tool', ts: tsOf(event),
+    tool: { name: QUESTION_TOOL, state: 'ok', summary: '已回答', ...(callId ? { callId } : {}) },
+    questionResponse: response,
+  })
+}
+
+function questionResponseEventFields(row: MessageProjection): Pick<MessageProjection, 'questionResponse' | 'truncated'> {
+  if (!row.questionResponse) return {}
+  return { questionResponse: row.questionResponse, ...(row.truncated ? { truncated: true } : {}) }
 }
 
 function tsOf(event: SessionEventLike): number {
@@ -789,11 +893,12 @@ function truncate(text: string, max: number): string {
  * seq。增量 tail 据此找出「sinceSeq 之后改动过的行」，而不只是 seq 更大的行。
  */
 export function projectHistory(
-  events: Array<{ event: SessionEventLike; view?: unknown }>,
+  events: HistoryEntry[],
   touched?: Map<number, number>,
 ): MessageProjection[] {
   const messages: MessageProjection[] = [];
   const toolByCall = new Map<string, MessageProjection>();
+  const questionCalls = new Map<string, SessionEventLike>();
   for (const entry of events) {
     const event = entry.event;
     const base = { seq: event.seq, ts: tsOf(event) };
@@ -805,7 +910,18 @@ export function projectHistory(
       // projectEvent for the rationale. Skip explicitly.
       case 'system/message':
         break;
-      case 'user/message':
+      case 'user/message': {
+        const reply = lateQuestionReply(event.data);
+        if (reply) {
+          const row = questionResponseMessage(event, reply.response, reply.callId);
+          const target = toolByCall.get(reply.callId);
+          if (target?.tool) {
+            target.tool = { ...target.tool, state: 'ok', summary: row.tool?.summary ?? '' };
+            touched?.set(target.seq, Math.max(touched.get(target.seq) ?? target.seq, event.seq));
+          }
+          messages.push(row);
+          break;
+        }
         if (emptyRetry(event.data)) break;
         messages.push({
           ...base,
@@ -815,6 +931,7 @@ export function projectHistory(
           ...(contextProjectionOf(event.data)),
         });
         break;
+      }
       case 'assistant/message': {
         const text = messageText(event.data);
         const thinking = messageThinking(event.data);
@@ -824,6 +941,7 @@ export function projectHistory(
       }
       case 'tool/call': {
         const data = event.data as { name?: string; arguments?: string; callId?: string } | undefined;
+        const questionCallId = questionToolCallId(event);
         const row: MessageProjection = {
           ...base,
           role: 'tool',
@@ -833,16 +951,21 @@ export function projectHistory(
             summary: summarizeArgs(data?.arguments),
             ...editField(data?.name, data?.arguments),
             ...targetField(data?.name, data?.arguments),
+            ...(questionCallId ? { callId: questionCallId } : {}),
           },
         };
         messages.push(row);
         if (data?.callId) toolByCall.set(String(data.callId), row);
+        if (questionCallId) questionCalls.set(questionCallId, event);
         break;
       }
       case 'tool/result': {
         const { callId, failed, message } = toolResultOf(event.data);
         const target = callId ? toolByCall.get(callId) : undefined;
-        const summary = failed ? '失败' : summarizeResult(message?.content);
+        const call = entry.questionCall ?? (callId ? questionCalls.get(callId) : undefined);
+        const response = failed ? undefined : toolQuestionReply(message, call);
+        const answerRow = response ? questionResponseMessage(event, response, callId) : undefined;
+        const summary = answerRow?.tool?.summary ?? (failed ? '失败' : summarizeResult(message?.content));
         // A tool result may carry images as well as text — browser and
         // computer-use backends return screenshots this way. `summarizeResult`
         // covers only the textual part, so project the binary blocks as
@@ -854,7 +977,7 @@ export function projectHistory(
           target.tool = { ...target.tool, state: failed ? 'error' : 'ok', summary };
           if (attachments.attachments) Object.assign(target, attachments);
           touched?.set(target.seq, Math.max(touched.get(target.seq) ?? target.seq, event.seq));
-        } else {
+        } else if (!answerRow) {
           messages.push({
             ...base,
             role: 'tool',
@@ -862,6 +985,7 @@ export function projectHistory(
             ...attachments,
           });
         }
+        if (answerRow) messages.push(answerRow);
         break;
       }
       case 'turn/end': {
@@ -914,6 +1038,33 @@ export function limitMessageProjection(message: MessageProjection): MessageProje
       },
     } : {}),
     truncated: true,
+  }
+
+  if (message.questionResponse) {
+    // Keep whole option labels and question identities. If a long free-text
+    // answer exceeds the page budget, keep a prefix and mark the row truncated.
+    const items: QuestionResponseItem[] = []
+    next.questionResponse = { items }
+    let remaining = MAX_MESSAGE_PROJECTION_BYTES - jsonBytes(next)
+    for (const item of message.questionResponse.items) {
+      const candidate = { ...item }
+      const comma = items.length > 0 ? 1 : 0
+      let bytes = jsonBytes(candidate) + comma
+      if (bytes > remaining) {
+        for (const field of ['custom', 'question'] as const) {
+          if (typeof candidate[field] !== 'string') continue
+          let size = Buffer.byteLength(candidate[field], 'utf8')
+          while (size > 0 && bytes > remaining) {
+            size = Math.min(Math.floor(size / 2), Math.max(0, size - (bytes - remaining)))
+            candidate[field] = truncateUtf8(candidate[field], size)
+            bytes = jsonBytes(candidate) + comma
+          }
+        }
+      }
+      if (bytes > remaining) continue
+      items.push(candidate)
+      remaining -= bytes
+    }
   }
 
   const textFields: Array<{
@@ -1009,7 +1160,7 @@ export interface HistoryWindowOptions {
 
 export interface HistoryWindow {
   /** 窗口内的原始事件，旧→新，含投影为空者。 */
-  events: Array<{ event: HistoryWindowEvent }>
+  events: HistoryEntry[]
   /** 起点之前是否还有更多事件（客户端可继续翻页）。 */
   hasMore: boolean
 }
@@ -1081,5 +1232,25 @@ export function historyWindow(
   // 窗口之前只剩投影为空的前导事件时也报 true，客户端会多发一次翻页才拿到空页。
   // 这里对前缀做一次投影来定性，代价 O(前 `front` 个事件)。
   const older = front > 0 ? projectHistory(entries.slice(0, front)) : []
-  return { events: entries.slice(front), hasMore: older.length > 0 }
+  const window = entries.slice(front);
+  const answerSeqs = new Set(keep.filter(message => message.questionResponse).map(message => message.seq));
+  if (answerSeqs.size === 0) return { events: window, hasMore: older.length > 0 };
+
+  // A standalone answer keeps its result seq. If that row is the page boundary,
+  // carry the original invocation as metadata, without including an out-of-page row.
+  const earlierCalls = new Map<string, SessionEventLike>();
+  for (const event of candidates.slice(0, front)) {
+    const callId = questionToolCallId(event);
+    if (callId) earlierCalls.set(callId, event);
+  }
+  return {
+    events: window.map(entry => {
+      const { event } = entry;
+      if (event.type !== 'tool/result' || !answerSeqs.has(event.seq)) return entry;
+      const { callId } = toolResultOf(event.data);
+      const questionCall = callId ? earlierCalls.get(callId) : undefined;
+      return questionCall ? { ...entry, questionCall } : entry;
+    }),
+    hasMore: older.length > 0,
+  };
 }

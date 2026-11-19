@@ -10,6 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   historyWindow,
+  MAX_MESSAGE_PROJECTION_BYTES,
   normalizePageLimit,
   projectEvent,
   projectHistory,
@@ -154,6 +155,97 @@ test('incremental tail falls back to a full tail when completeness cannot be pro
   assert.equal(deltaFor(0), undefined, 'window starts after sinceSeq: events in between may be missing')
   assert.equal(deltaFor(7), undefined, 'client claims a seq the host never produced')
   assert.equal(incrementalTail([], [], new Map(), 3), undefined)
+})
+
+const askCall = {
+  type: 'tool/call', seq: 18, time: 1700,
+  data: {
+    callId: 'ask-1', name: 'ask_user_question', arguments: JSON.stringify({ questions: [
+      { id: 'options', question: 'Which login methods?' },
+      { id: 'notes', question: 'Any notes?' },
+      { id: 'optional', question: 'Anything else?' },
+    ] }),
+  },
+}
+const askAnswers = [
+  { id: 'optional', selected: [] },
+  { id: 'notes', selected: [], custom: 'Keep the email.\n\nAdd a retry.' },
+  { id: 'options', selected: ['Email', 'Apple'] },
+]
+const askResult = {
+  type: 'tool/result', seq: 20, time: 1800,
+  data: { message: { toolCallId: 'ask-1', content: [{ type: 'text', text: JSON.stringify({ answers: askAnswers }) }] } },
+}
+const expectedResponse = { items: [
+  { ...askAnswers[2], question: 'Which login methods?' },
+  { ...askAnswers[1], question: 'Any notes?' },
+  { ...askAnswers[0], question: 'Anything else?' },
+] }
+
+test('answered DSH questions use the result sequence and keep original question order and text', () => {
+  const live = projectEvent('s1', askResult, askCall)
+  assert.equal(live?.kind, 'tool.end')
+  assert.equal(live?.data.seq, 20)
+  assert.equal(live?.data.callId, 'ask-1')
+  assert.deepEqual(live?.data.questionResponse, expectedResponse)
+  const history = projectHistory([{ event: askCall }, { event: askResult }])
+  assert.deepEqual(history.map(row => row.seq), [18, 20])
+  assert.equal(history[0]?.tool?.state, 'ok')
+  assert.equal(history[1]?.ts, live?.data.ts)
+  assert.deepEqual(history[1]?.questionResponse, expectedResponse)
+
+  // The last row of the first page is the result, not the original call.
+  const firstPage = historyWindow([askCall, askResult], { limit: 1 })
+  assert.equal(firstPage.hasMore, true)
+  assert.deepEqual(projectHistory(firstPage.events), [history[1]])
+  const olderPage = historyWindow([askCall, askResult], { limit: 1, beforeSeq: 20 })
+  assert.deepEqual(projectHistory(olderPage.events).map(row => row.seq), [18])
+})
+
+test('late replies keep their native admission seq and do not project as normal prompts', () => {
+  const lateReply = {
+    type: 'user/message', seq: 27, time: 1900,
+    data: { message: {
+      source: { kind: 'user-question-reply', callId: 'ask-1', outcome: 'answered' },
+      content: [{ type: 'text', text: JSON.stringify({
+        kind: 'answer_to_pending_question', callId: 'ask-1', tool: 'ask_user_question',
+        answers: askAnswers, questions: JSON.parse(askCall.data.arguments).questions,
+      }) }],
+    } },
+  }
+  const live = projectEvent('s1', lateReply)
+  assert.equal(live?.kind, 'tool.end')
+  assert.deepEqual(live?.data.questionResponse, expectedResponse)
+  const [row] = projectHistory([{ event: lateReply }])
+  assert.equal(row?.seq, 27)
+  assert.equal(row?.role, 'tool')
+  assert.deepEqual(row?.questionResponse, expectedResponse)
+})
+
+test('failed, pending or unrelated tools do not produce answered question rows', () => {
+  const other = { ...askCall, data: { ...askCall.data, name: 'other-tool' } }
+  const failed = { ...askResult, data: { message: { ...askResult.data.message, isError: true } } }
+  const pending = { ...askResult, data: { message: { ...askResult.data.message,
+    content: JSON.stringify({ pending: true, answers: askAnswers }),
+  } } }
+  for (const [call, result] of [[other, askResult], [askCall, failed], [askCall, pending]] as const) {
+    assert.equal(projectHistory([{ event: call }, { event: result }]).some(row => row.questionResponse), false)
+  }
+})
+
+test('oversized question answers fit the projection and retain a prefix', () => {
+  const fullText = '你🪴"\n'.repeat(70_000)
+  const result = { ...askResult, data: { message: { ...askResult.data.message,
+    content: JSON.stringify({ answers: [{ id: 'notes', selected: [], custom: fullText }] }),
+  } } }
+  const row = projectHistory([{ event: askCall }, { event: result }]).at(-1)!
+  assert.equal(row.truncated, true)
+  assert.ok(Buffer.byteLength(JSON.stringify(row), 'utf8') <= MAX_MESSAGE_PROJECTION_BYTES)
+  const text = row.questionResponse?.items[0]?.custom ?? ''
+  assert.ok(text.length > 0 && text.length < fullText.length && fullText.startsWith(text))
+  const live = projectEvent('s1', result, askCall)
+  assert.equal(live?.data.truncated, true)
+  assert.deepEqual(live?.data.questionResponse, row.questionResponse)
 })
 
 test('turn/end error projects Chinese failure text with original code into both live event and history', () => {

@@ -757,6 +757,18 @@ export interface MessageAttachment {
   truncated?: boolean
 }
 
+export interface QuestionResponseItem {
+  id: string
+  /** Omitted when the original call is unavailable in the Host log window. */
+  question?: string
+  selected: string[]
+  custom?: string
+}
+
+export interface QuestionResponseProjection {
+  items: QuestionResponseItem[]
+}
+
 export interface MessageProjection {
   /** Durable row identity; unique within one session/page. */
   seq: number
@@ -765,7 +777,7 @@ export interface MessageProjection {
   /** Reasoning ("thinking") text accompanying the answer, when present. */
   thinking?: string
   streaming?: boolean
-  tool?: { name: string; state: ToolState; summary: string; edit?: ToolEditProjection; target?: ToolTargetProjection }
+  tool?: { name: string; state: ToolState; summary: string; callId?: string; edit?: ToolEditProjection; target?: ToolTargetProjection }
   attachments?: MessageAttachment[]
   /** Present only on system rows: provenance of the injected context.
    * The DSH host logs synthetic agent.inject() content (runtime-context
@@ -773,6 +785,8 @@ export interface MessageProjection {
    * messages whose `source.kind` is not 'user'; those project here as
    * `role: "system"` so clients never show them as human prompts. */
   context?: MessageContextInfo
+  /** An answered DSH question batch, keyed by the answer event's seq. */
+  questionResponse?: QuestionResponseProjection
   ts: number
   truncated?: boolean
 }
@@ -888,6 +902,9 @@ export interface SessionEventData {
   /** tool.end: bounded result summary and durable attachment metadata. */
   summary?: string
   attachments?: MessageProjection['attachments']
+  /** tool.end only: a separate question-answer row at the result's seq. */
+  questionResponse?: QuestionResponseProjection
+  truncated?: boolean
   key?: string
   value?: unknown
   [k: string]: unknown

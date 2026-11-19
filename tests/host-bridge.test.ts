@@ -250,6 +250,60 @@ test('question requested -> pending push -> respond answers', async () => {
   bridge.dispose()
 })
 
+test('an accepted answer is replayable live and reopens with the same question record', { timeout: 3000 }, async () => {
+  const { proxy, getPush } = makeFakeProxy()
+  const bridge = new HostBridge(proxy, 100)
+  const question = { id: 'q1', question: 'A or B?', options: [{ label: 'A' }, { label: 'B' }] }
+  const answers = [{ id: 'q1', selected: ['A'] }]
+  const call = { type: 'tool/call', seq: 1, time: 10, data: {
+    callId: 'invocation', name: 'ask_user_question', arguments: JSON.stringify({ questions: [question] }),
+  } }
+  const result = { type: 'tool/result', seq: 2, time: 11, data: { message: {
+    toolCallId: 'invocation', source: { kind: 'tool', callId: 'invocation' },
+    content: [{ type: 'text', text: JSON.stringify({ answers }) }],
+  } } }
+  const response = { items: [{ ...answers[0], question: question.question }] }
+  const collected: Array<{ type: string; payload: any }> = []
+  // Queue and stream are simulated, but the submission RPC, live broadcast,
+  // and reopened-session projection use their normal bridge entry points.
+  type AnswerEvent = { seq: number; data: { questionResponse: unknown } }
+  let receiveQuestion!: () => void
+  let receiveAnswer!: (event: AnswerEvent) => void
+  const pendingQuestion = new Promise<void>(resolve => { receiveQuestion = resolve })
+  const answerEvent = new Promise<AnswerEvent>(resolve => { receiveAnswer = resolve })
+  const sink = makeSink(collected)
+  const record = sink.push
+  sink.push = (type, payload: any) => {
+    record(type, payload)
+    if (type === 's2c.pending.question') receiveQuestion()
+    if (type === 's2c.session.event' && payload?.kind === 'tool.end') receiveAnswer(payload)
+  }
+  bridge.start()
+  bridge.addSink(sink)
+  try {
+    getPush()({ type: 'session/event', sessionId: 's1', event: call })
+    getPush()({ type: 'question/requested', sessionId: 's1', rpcId: 'question-rpc', questions: [question] })
+    await pendingQuestion
+    assert.equal((await bridge.respondQuestion('q-question-rpc', answers)).ok, true)
+    getPush()({ type: 'session/event', sessionId: 's1', event: result })
+    const live = await answerEvent
+    assert.equal(live.seq, result.seq)
+    assert.deepEqual(live.data.questionResponse, response)
+
+    proxy.sessions.history = async () => ({ result: { ok: true, value: {
+      events: [{ event: call }, { event: result }], hasMore: false,
+    } } })
+    assert.equal(await bridge.openSession(sink, 's1', 20), true)
+    const tail = collected.find(frame => frame.type === 's2c.session.tail')?.payload
+    const cards = tail.messages.filter((row: { questionResponse?: unknown }) => row.questionResponse)
+    assert.equal(cards.length, 1)
+    assert.equal(cards[0].seq, live.seq)
+    assert.deepEqual(cards[0].questionResponse, response)
+  } finally {
+    bridge.dispose()
+  }
+})
+
 test('question answers are normalized to exactly what the host accepts', async () => {
   const { proxy, respondCalls, getPush } = makeFakeProxy()
   const bridge = new HostBridge(proxy, 100)

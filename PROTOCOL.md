@@ -594,6 +594,16 @@ Message 投影：
   是开放词表，客户端遇到未知值按 `text` 处理。`value`、`scope` 上限各 1 KiB，`label` 上限
   256 B（均按 UTF-8）；路径超限时砍开头、保留结尾（如 `…/Views/A.swift`），其余砍结尾加 `…`。
   只出现在工具调用行上，Host 未见调用、单独投影的结果行不带。
+- `questionResponse` 是协议 v2 的可选扩展。已回答的 DSH 提问以独立的 `role: tool` 消息投影，`tool.name` 为 `ask_user_question`，`seq` 与 `ts` 取自记录回答的宿主事件。选项和自由文本来自宿主的已提交答案，按问题 ID 与原题配对，保持提问顺序。
+
+  ```json
+  { "questionResponse": { "items": [
+    { "id": "priority", "question": "先修登录还是先修搜索？", "selected": ["先修登录"] },
+    { "id": "notes", "question": "还有什么要补充？", "selected": [], "custom": "搜索下周再做。" }
+  ] } }
+  ```
+
+  有调用标识时，原提问工具行和回答行均携带同一个 `tool.callId`。原始问题不可用时，单项可省略 `question`。`selected` 为空且省略 `custom` 表示该题被跳过。超过单条消息上限时，Bridge 可缩短题目或自由文本、略去部分题目，并标记消息 `truncated: true`。旧客户端忽略新字段，旧 Bridge 仍可正常使用。
 - `role: system` 表示宿主注入的模型侧上下文（运行时快照、后台任务通知、工作区指令、技能内容等），
   不是真人发言。DSH Host 会把这类 `agent.inject()` 内容与真人 prompt 同样记为 user-role 消息，
   但其消息 `source.kind` 不是 `'user'`；Bridge 参照 Host 轨迹视图的分类规则，把这类行投影为
@@ -693,6 +703,7 @@ tool.end / turn.start / turn.end；其余 kind 为兼容 Host 后续事件投影
 
 - message.delta/message.final 共用同一会话内 seq；data.text 为增量/全文。极端超大增量同样会被限制在 256KB 内，并在 data 附 `truncated:true`。
 - thinking.delta 的 data.text 为推理增量，seq 与同会话其他事件一致；客户端应把连续增量折叠进同一条"思考"行（role=assistant、thinking 累积、streaming=true），final 到达后由带 `thinking` 字段的正式行替换。
+- 答案事件的 `tool.end.data` 可附带 `questionResponse` 和 `truncated`。客户端用该事件的 `seq` 在时间线中更新独立的回答记录，并按已有的 `callId` 更新工具状态。超时后补答使用宿主录入补答的事件序号。实时事件和历史记录以同一 `seq` 合并。
 - tool.start 的 `data.tool` 为 `{name, state:"running", summary}`；Host 事件携带调用 id 时额外附带 `tool.callId`；文件编辑类调用另附 `tool.edit`、规则表内的工具另附 `tool.target`（结构与限制见 Message 投影的对应字段），客户端在结果合并后保留它们。tool.end 的 data 附带 ok 布尔与该结果事件自身的 seq，并在 Host 事件携带调用 id 时附带 `callId`——`seq` 标识的是 result 事件本身，客户端必须用 `callId`（缺失时按"最旧的未完成工具行"兜底）把结果合并回对应的 tool.start 行，不得按 seq 匹配。 `tool.end.data` 可选附带 `summary` 和 `attachments`（与 MessageProjection 相同的有界摘要与持久附件元数据，不含图片字节）；客户端合并到对应工具行，未见起始行时可按结果自身 seq 创建独立结果行。这是 v2 向后兼容扩展，旧客户端忽略新增字段。
 - turn.end 的 data 附带 ok 布尔；异常结束时可选附带 `text`（归一化后的中文错误说明）与 `ts`，客户端据此在时间线追加同 `seq` 的 `role=error` 行并用作通知正文；projection 的 data 为 key/value（如 todos）。
 

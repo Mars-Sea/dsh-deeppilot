@@ -781,6 +781,16 @@ interface MessageAttachment {
   height?: number;
   truncated?: boolean;
 }
+interface QuestionResponseItem {
+  id: string;
+  /** Omitted when the original call is unavailable in the Host log window. */
+  question?: string;
+  selected: string[];
+  custom?: string;
+}
+interface QuestionResponseProjection {
+  items: QuestionResponseItem[];
+}
 interface MessageProjection {
   /** Durable row identity; unique within one session/page. */
   seq: number;
@@ -793,6 +803,7 @@ interface MessageProjection {
     name: string;
     state: ToolState;
     summary: string;
+    callId?: string;
     edit?: ToolEditProjection;
     target?: ToolTargetProjection;
   };
@@ -803,6 +814,8 @@ interface MessageProjection {
    * messages whose `source.kind` is not 'user'; those project here as
    * `role: "system"` so clients never show them as human prompts. */
   context?: MessageContextInfo;
+  /** An answered DSH question batch, keyed by the answer event's seq. */
+  questionResponse?: QuestionResponseProjection;
   ts: number;
   truncated?: boolean;
 }
@@ -1341,11 +1354,14 @@ interface PhoneSessionRow {
     values?: Record<string, unknown>;
   };
 }
+interface HistoryEntry {
+  event: SessionEventLike;
+  view?: unknown;
+  /** An ask-user invocation just outside the requested history window. */
+  questionCall?: SessionEventLike;
+}
 interface HistoryResult {
-  events: Array<{
-    event: SessionEventLike;
-    view?: unknown;
-  }>;
+  events: HistoryEntry[];
   hasMore: boolean;
   projections?: {
     values?: Record<string, unknown>;
@@ -1593,6 +1609,7 @@ export declare class HostBridge {
   private readonly summaryPushed;
   private readonly summaryStatsTimers;
   private activeTools;
+  private readonly activeQuestionCalls;
   /** 会话在 llm/retry 退避等待期间的重试描述；新一轮、重试启动或新消息/工具到达时清除。 */
   private retryActivities;
   /** 最近一轮以非 completed 异常结束的会话；保持 status='error' 直到下一轮开始，防止随后的 running=false 覆盖回 idle。 */
@@ -1714,6 +1731,7 @@ export declare class HostBridge {
   refreshSummaries(): Promise<void>;
   /** Cold sessions may lack a title projection; fall back to first user text. */
   private deriveTitleFallback;
+  private trackQuestionCall;
   private captureActivity;
   private noteActivity;
   /**

@@ -337,8 +337,15 @@ export function isSubagentRow(row: PhoneSessionRow): boolean {
   return row.origin === 'subagent';
 }
 
+export interface HistoryEntry {
+  event: SessionEventLike
+  view?: unknown
+  /** An ask-user invocation just outside the requested history window. */
+  questionCall?: SessionEventLike
+}
+
 export interface HistoryResult {
-  events: Array<{ event: SessionEventLike; view?: unknown }>
+  events: HistoryEntry[]
   hasMore: boolean
   projections?: { values?: Record<string, unknown> }
 }
