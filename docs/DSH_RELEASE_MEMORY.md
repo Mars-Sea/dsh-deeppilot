@@ -5,6 +5,12 @@
 > move the lower bound, at each `0.x` minor boundary, or when a host inside the
 > range breaks at runtime.
 
+## DeepPilot 0.9.25 compatibility decision
+
+- **Install and activation.** The declared DSH range stays `>=0.2.1-rc.5 <0.3.0-0`. The runtime lockfile updates `ws` to `8.23.0`. The DSH floor still uses its pinned Cordis and Schemastery development dependencies because raising them together in PR #54 conflicts with the floor's peer requirements.
+- **Runtime.** The bridge projects submitted Host answers into live sessions and history, including late answers. The embedded Tailscale helper is updated to `1.104.7`. Go tests pass, and all six committed binaries match a local rebuild using the pinned Go toolchain.
+- **Phone protocol.** Protocol v2 carries the optional `questionResponse` field on history rows and tool completion events. Older clients ignore the addition. The updated iOS client uses the Host event sequence to reconcile live and historical answers.
+
 ## rc.2 projection repairs (2026-11-11, local preparation)
 
 - **Runtime repair:** `toolResultOf` in `src/host-event-projection.ts` normalizes native `message.toolCallId` and `message.isError`, retaining top-level callId and error metadata compatibility. Live tool completion, history merging and image-reference collection share this normalization. Results complete the original call row, update incremental tail's touched sequence, retain tool targets and exclude failed-result images from both phone attachments and the read-back index.

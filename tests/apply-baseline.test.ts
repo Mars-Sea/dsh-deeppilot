@@ -172,6 +172,7 @@ async function recordBaseline(): Promise<ApplyBaseline> {
         && harness.recorder.wireStreamReadyYielded,
       'resident DSH Client',
     )
+    await harness.waitForLocal((phase) => phase === 'online')
 
     // ---- 1. 启动即景：完整 report 快照 ----
     const snapshot = await harness.report() as any
