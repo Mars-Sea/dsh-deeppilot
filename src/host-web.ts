@@ -3,13 +3,11 @@
  *
  * 为什么能这样做（PROTOCOL.md「电脑端网页」）：DSH 网页端先校验 Host 必须是回环地址，
  * 再凭进程启动令牌换一个按 `主机:端口` 隔离的 Cookie。预览连接让手机在自己的回环地址上
- * 监听同一个端口，Host / Origin 与电脑本机访问完全一致；令牌则由宿主 `connection`
- * 服务在进程内生成，用户不必手动复制。
+ * 监听同一个端口，Host / Origin 与电脑本机访问完全一致，用户不必手动复制令牌。
  *
- * 数据来源：宿主 `webServer`（实际监听地址、端口与协议）与 `connection`
- * （`authenticatedUrl`，给地址加上进程令牌）。两者都可能缺失（旧宿主或别的 profile），
- * 任一缺失、或网页端不在回环明文 HTTP 上监听（`--host`、TLS 部署），都视为不可用：
- * 那种部署下手机经预览隧道拿到的 Host 与 Cookie 作用域都对不上。
+ * 实际监听地址来自 `webServer`。0.2.3 起由鉴权插件贡献登录地址，
+ * 旧宿主由 `connection.authenticatedUrl` 签发。网页端必须监听回环 HTTP，
+ * 手机经预览隧道才能使用同一个 Host 和 Cookie 作用域。
  *
  * 返回的 `url` 带登录令牌，属于凭据：调用方只能把它经已认证的预览连接下发，不得写日志。
  */
@@ -28,6 +26,12 @@ export interface HostWebServerLike {
 export interface HostWebConnectionLike {
   /** 给网页端根地址加上进程登录令牌（`?token=…`）。 */
   authenticatedUrl?(baseUrl: string): string
+}
+
+export interface HostWebEntryUrl {
+  readonly label: string
+  readonly url: string
+  readonly open: boolean
 }
 
 export interface HostWebEntry {
@@ -54,14 +58,28 @@ export function hostWebTarget(webServer: HostWebServerLike | undefined): Loopbac
 export function resolveHostWeb(
   webServer: HostWebServerLike | undefined,
   connection: HostWebConnectionLike | undefined,
+  entryUrls?: (baseUrl: string) => readonly HostWebEntryUrl[],
 ): HostWebEntry | undefined {
   const target = hostWebTarget(webServer)
-  if (target === undefined || typeof connection?.authenticatedUrl !== 'function') return undefined
-  let url: string
+  if (target === undefined) return undefined
+  const baseUrl = target.origin + '/'
   try {
-    url = connection.authenticatedUrl(`${target.origin}/`)
+    const url = typeof connection?.authenticatedUrl === 'function'
+      ? connection.authenticatedUrl(baseUrl)
+      : entryUrls?.(baseUrl).find(entry => isLoginUrl(entry.url, target.origin))?.url
+    if (url !== undefined && isLoginUrl(url, target.origin)) return { target, url }
   } catch {
     return undefined
   }
-  return { target, url }
+}
+
+function isLoginUrl(value: string, origin: string): boolean {
+  if (typeof value !== 'string') return false
+  try {
+    const url = new URL(value)
+    return url.origin === origin && url.pathname === '/' && !url.username && !url.password && !url.hash
+      && url.searchParams.getAll('token').length === 1 && Boolean(url.searchParams.get('token'))
+  } catch {
+    return false
+  }
 }

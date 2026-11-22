@@ -530,8 +530,8 @@ export interface WelcomeCapabilities {
    * one-time login URL for the DSH Web UI on the computer's loopback address,
    * so the phone can open the whole Web UI (third-party plugin pages
    * included) through the preview tunnel (PROTOCOL.md「电脑端网页」).
-   * Plugin-level; stays true when the settings switch is off (requests then
-   * fail with reason "hostweb-disabled"). */
+   * Host provides a supported Web login URL. Independent of the settings
+   * switch (requests still require it and the device scope). */
   hostWeb?: boolean
 }
 

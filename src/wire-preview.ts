@@ -100,7 +100,8 @@ export const previewRows: readonly WireFrameRow[] = [
     type: 'c2s.preview.hostWeb',
     stage: 'authenticated',
     scopes: PREVIEW,
-    capability: 'hostWeb',
+    // 先检查预览开关和 scope，再由 PreviewTunnel 取地址并保留 hostweb-* 原因。
+    conditionalCapabilities: ['hostWeb'],
     previewPolicy: 'allowed',
     doc: HOST_WEB_DOC,
     validate: (payload) => payloadObject(payload),

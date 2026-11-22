@@ -101,7 +101,10 @@ async function makeConnection(opts: {
   let resolveClosed!: () => void
   const closed = new Promise<void>((resolve) => { resolveClosed = resolve })
   const connection = new BridgeConnection(ws as never, {
-    bridge: new HostBridge(makeProxy(opts.mentioned ?? '127.0.0.1:1'), 100),
+    bridge: new HostBridge({
+      ...makeProxy(opts.mentioned ?? '127.0.0.1:1'),
+      get hostWebAvailable() { return opts.hostWeb?.hostWeb?.() !== undefined },
+    }, 100),
     devices: store,
     serverVersion: 'test',
     audience: 'deeppilot:test-audience',
@@ -138,14 +141,15 @@ test('主连接 welcome 声明 localPreview 但不列出 preview.open；预览�
   const welcome = main.ws.sent.find((f) => f.type === 's2c.welcome')
   assert.equal(welcome.payload.capabilities.localPreview, true)
   assert.equal(welcome.payload.scopes.includes('preview.open'), false)
-  assert.equal(welcome.payload.capabilities.hostWeb, true)
+  assert.equal(welcome.payload.capabilities.hostWeb, false)
   assert.equal(welcome.payload.scopes.includes('hostweb.open'), false)
   assert.ok(welcome.payload.scopes.includes('sessions.read'))
   main.ws.close()
   await main.closed
 
-  const preview = await makeConnection()
+  const preview = await makeConnection({ hostWeb: { hostWeb: () => HOST_WEB_ENTRY } })
   preview.authenticate('preview')
+  assert.equal(preview.last().payload.capabilities.hostWeb, true)
   assert.ok(preview.last().payload.scopes.includes('preview.open'))
   assert.ok(preview.last().payload.scopes.includes('hostweb.open'))
   preview.ws.close()

@@ -19,6 +19,8 @@
 
 list `{sessionId,rootRef?,path?,hidden?}`；search 另带非空 query（文件名/路径，上限1024字符）。回 `s2c.workspace.files {sessionId,rootRef,rootLabel,path,entries:[{name,path,kind,bytes?}],truncated,incomplete?,query?}`。根路径由 Host 会话决定，rootRef 为绑定设备/会话/规范化根目录及插件进程的不可伪造引用。只能提交根内相对路径；按 Host 文件提供方解析目标后再次核对根内约束。隐藏文件默认关闭，搜索遵守 gitignore，VCS元数据排除。最多500条；Host 没有游标时不能伪造下一页，truncated/incomplete 必须分别展示。
 
+提供当前文件作用域的 Host 会在会话切换工作目录后更新项目根。旧根的 `rootRef` 用于新请求时返回 `E_BUSY`，重新发起不带 `rootRef` 的根目录列表请求可获得当前根。
+
 ### c2s.file.stat
 ### c2s.file.text
 ### c2s.file.open
@@ -1919,15 +1921,15 @@ Bridge 关闭：`s2c.preview.closed {streamId, reason}`，`reason` 为 `eof`（�
 
 ## 电脑端网页（v2 可选扩展）
 
-`welcome.capabilities.hostWeb?: boolean` 缺省为不支持；true 表示插件认识本节的帧。手机经预览连接
+`welcome.capabilities.hostWeb?: boolean` 缺省为不支持；true 表示宿主可提供本节使用的网页登录地址。手机经预览连接
 在 App 内打开电脑上的 DSH 网页端（含第三方插件页面），拿到与电脑本机浏览器相同的所有者权限。
-能力位只说明插件支持，实际能否使用以请求结果为准：本节的帧都在预览连接上，需要本机预览开关打开、
+能力位独立于设备权限和设置，实际能否使用以请求结果为准。本节的帧都在预览连接上，需要本机预览开关打开、
 设置页开关「允许手机打开电脑端网页」打开（**默认关闭**），且设备具备 scope `hostweb.open`。
 新 scope 只在预览连接的 welcome 里列出，主连接与 widget 连接不列。
 
 为什么可行：DSH 网页端只信任回环 Host，并凭进程启动令牌（`?token=`）换一个按 `主机:端口` 隔离的
-Cookie。手机在自己的回环地址上监听同一个端口，Host / Origin 与电脑本机访问一致；令牌由插件在进程内
-生成，用户不必手动复制。DSH 网页端以 `--host` 或 TLS 监听时不可用（`hostweb-unavailable`）。
+Cookie。手机在自己的回环地址上监听同一个端口，Host / Origin 与电脑本机访问一致。插件从宿主获取
+当前的带令牌地址，用户不必手动复制。DSH 网页端在非回环地址或 TLS 上监听时不可用（`hostweb-unavailable`）。
 
 ### c2s.preview.hostWeb → s2c.preview.hostWeb
 

@@ -606,8 +606,8 @@ interface WelcomeCapabilities {
    * one-time login URL for the DSH Web UI on the computer's loopback address,
    * so the phone can open the whole Web UI (third-party plugin pages
    * included) through the preview tunnel (PROTOCOL.md「电脑端网页」).
-   * Plugin-level; stays true when the settings switch is off (requests then
-   * fail with reason "hostweb-disabled"). */
+   * Host provides a supported Web login URL. Independent of the settings
+   * switch (requests still require it and the device scope). */
   hostWeb?: boolean;
 }
 type SessionStatus = "running" | "idle" | "error" | "unknown";
@@ -1410,6 +1410,8 @@ interface ApiProxyLike {
   readonly goalViewAvailable?: boolean;
   /** 真实宿主反射声明了助手流帧时才为 true；旧代理缺省关闭。 */
   readonly assistantStreamAvailable?: boolean;
+  /** 当前宿主网页端提供预览隧道可用的登录地址。 */
+  readonly hostWebAvailable?: boolean;
   commands?: CommandsApiLike;
   /** 主机挂载了文件引用或会话引用服务之一时存在；两者都缺席为 undefined。 */
   references?: ReferencesApiLike;

@@ -190,17 +190,17 @@ test('vendor peers admit the release each supported host line vendors', () => {
   // pair, `0.2.1-alpha.5` through `0.2.1-rc.5` vendor the promoted GA pair, and
   // `0.2.2-alpha.2` moves the pair to `cordis 4.0.6-alpha.1` /
   // `schemastery 3.18.6-alpha.1`; `0.2.2-rc.1` vendors the same code renumbered
-  // as `cordis 4.1.0` / `schemastery 3.19.0`. Clauses are appended, never
-  // substituted: each older pair is still vendored by an earlier host line.
+  // as `cordis 4.1.0` / `schemastery 3.19.0`. 0.2.3-alpha.2 declares
+  // `cordis 4.2.0-alpha.1` / `schemastery 3.20.0-alpha.1` in its distribution.
   const pinned: [string, string[]][] = [
-    ['@deepseek-ai/cordis', ['4.0.4', '4.0.5-alpha.2', '4.0.5', '4.0.6-alpha.1', '4.0.6-alpha.2', '4.1.0']],
-    ['@deepseek-ai/schemastery', ['3.18.4', '3.18.5-alpha.2', '3.18.5', '3.18.6-alpha.1', '3.18.6-alpha.2', '3.19.0']],
+    ['@deepseek-ai/cordis', ['4.0.4', '4.0.5-alpha.2', '4.0.5', '4.0.6-alpha.1', '4.0.6-alpha.2', '4.1.0', '4.2.0-alpha.1']],
+    ['@deepseek-ai/schemastery', ['3.18.4', '3.18.5-alpha.2', '3.18.5', '3.18.6-alpha.1', '3.18.6-alpha.2', '3.19.0', '3.20.0-alpha.1']],
   ]
   for (const [name, versions] of pinned) {
     const range = packageJson.peerDependencies?.[name]
     assert.ok(range, `${name} peer range present`)
     for (const version of versions) {
-      assert.equal(semver.satisfies(version, range, { includePrerelease: true }), true, `${name} peer must admit ${version}`)
+      assert.equal(semver.satisfies(version, range), true, `${name} peer must admit ${version}`)
     }
     assert.equal(semver.satisfies('9.9.9', range, { includePrerelease: true }), false, `${name} peer must reject an unaudited major`)
   }

@@ -38,6 +38,7 @@ export type ProbedCapability =
   | 'sessionMarkdown'
   | 'assistantStream'
   | 'pluginUpdate'
+  | 'hostWeb'
 
 // 自更新服务由宿主可选注入，生命周期与 Bridge 数据源相互独立。按代理实例绑定
 // 就绪探针，避免用「模块被导入」冒充服务已就绪，也不让能力表反向依赖 wire 行表。
@@ -82,6 +83,7 @@ export const HOST_CAPABILITY_PROBES: Record<ProbedCapability, (proxy: ApiProxyLi
   sessionMarkdown: (proxy) => proxy.commands?.markdownAvailable === true && typeof proxy.commands?.export === 'function',
   assistantStream: (proxy) => proxy.assistantStreamAvailable === true,
   pluginUpdate: (proxy) => pluginUpdateProbes.get(proxy)?.() === true,
+  hostWeb: (proxy) => proxy.hostWebAvailable === true,
 }
 
 /** 由 Bridge 自身恒真的位（见 BRIDGE_INVARIANT_CAPABILITIES）。 */
@@ -126,7 +128,6 @@ export const BRIDGE_INVARIANT_CAPABILITIES = [
   'incrementalTail',
   'routeHints',
   'localPreview',
-  'hostWeb',
 ] as const satisfies ReadonlyArray<keyof WelcomeCapabilities>
 
 /**
@@ -157,8 +158,8 @@ export function capabilityBits(
     routeHints: true,
     // 插件自身能力：预览连接可把手机回环 TCP 连接转发到电脑回环地址（设置页关闭时请求回 disabled）。
     localPreview: true,
-    // 插件自身能力：预览连接可申请电脑端网页登录地址（设置页关闭或宿主不支持时请求回 hostweb-*）。
-    hostWeb: true,
+    // 读取 welcome 时探测登录地址，其他帧查能力时无需向宿主索要凭据。
+    get hostWeb() { return HOST_CAPABILITY_PROBES.hostWeb(proxy) },
     approvals: true,
     questions: true,
     pendingSnapshot: true,

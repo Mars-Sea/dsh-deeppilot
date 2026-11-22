@@ -166,6 +166,7 @@ export type DshInteractionKind = 'approval' | 'question'
 
 export interface DshApiProxyOptions {
   allowFileBrowse?: () => boolean
+  hostWebAvailable?: () => boolean
   /**
    * Decide whether the resident DeepPilot Remote Client represents a usable
    * phone surface. Returning false delegates only this Client delivery; API
@@ -178,6 +179,7 @@ export interface DshApiProxyOptions {
 export class DshApiProxy implements ApiProxyLike {
   readonly sessionControls: DshSessionControls
   readonly resources: DshSessionResources
+  get hostWebAvailable(): boolean { return this.options.hostWebAvailable?.() === true }
   /** Probe the Host's generated reflection, not this adapter's listener registration. */
   get assistantStreamAvailable(): boolean {
     const typert = this.ctx.get('typert') as {
@@ -293,7 +295,7 @@ export class DshApiProxy implements ApiProxyLike {
   private readonly interactions = new Map<string, DeferredInteraction>()
   private readonly shouldSurfaceInteraction: (kind: DshInteractionKind) => boolean
 
-  constructor(private readonly ctx: Context, options: DshApiProxyOptions = {}) {
+  constructor(private readonly ctx: Context, private readonly options: DshApiProxyOptions = {}) {
     this.sessionControls = new DshSessionControls(ctx)
     this.resources = new DshSessionResources(ctx, async (sessionId, beforeSeq, maxMessages) => {
       const response = await this.sessions.history({ rpcId: randomUUID(), payload: { sessionId, beforeSeq, maxMessages } })

@@ -69,6 +69,15 @@ export class DshSessionResources {
     signal.throwIfAborted()
     const header = live ?? stored?.header
     if (!header || header.origin === 'subagent') failure('E_NOT_FOUND', '项目会话已不存在')
+    // New hosts resolve active worktrees and cached directories for cold sessions.
+    const files = this.service('workspaceFiles')
+    if (typeof files?.scopeOf === 'function') {
+      const scope = await files.scopeOf(sessionId, signal)
+      signal.throwIfAborted()
+      if (!scope) failure('E_NOT_FOUND', '项目会话已不存在')
+      if (typeof scope.workspaceRoot !== 'string' || !scope.workspaceRoot) failure('E_UNSUPPORTED', '主机未提供项目目录')
+      return { sessionId, workspaceRoot: scope.workspaceRoot }
+    }
     const root = header.cwd ?? this.service('sandboxPolicy')?.workspaceRoot
     if (typeof root !== 'string' || !root) failure('E_UNSUPPORTED', '主机未提供项目目录')
     return { sessionId, workspaceRoot: root }
@@ -165,6 +174,8 @@ export class DshSessionResources {
   private async target(deviceId: string, sessionId: string, ref: RemoteFileRef, signal: AbortSignal): Promise<{ scope: Scope; path: string; workspace: boolean }> {
     if (!this.filesAvailable) failure('E_UNSUPPORTED', '当前主机不支持读取文件')
     if (ref.kind === 'deliverable') {
+      // A historical result stays anchored to its recorded path and original
+      // session directory even when the project's browsing root moves.
       const read = await this.event(sessionId, ref.sourceSeq, 'deliverables/presented', signal)
       const path = read.target.data?.files?.[ref.fileIndex]?.path
       if (typeof path !== 'string' || !path || path.length > 4096) failure('E_NOT_FOUND', '成果文件已不存在')

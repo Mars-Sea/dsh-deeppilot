@@ -84,6 +84,43 @@ test('browser roots bind device, session and canonical target; revocation blocks
   f.disable(); await assert.rejects(f.api.text('d', 's', ref, 1, undefined, signal))
   assert.equal(f.reads(), 0); f.api.dispose()
 })
+test('the Host scope follows directory changes and cold sessions while old file references expire', async () => {
+  const f = fixture(), signal = new AbortController().signal
+  let activeRoot = '/project'
+  const hostScopes: string[] = []
+  f.services.workspaceFiles.scopeOf = async (sessionId: string, scopeSignal: AbortSignal) => {
+    assert.equal(scopeSignal, signal)
+    hostScopes.push(sessionId)
+    if (sessionId === 's') return { sessionId, workspaceRoot: activeRoot }
+    if (sessionId === 'cold') return { sessionId, workspaceRoot: '/cold-worktree' }
+  }
+  f.services.sessionPersistence = { stat: async (id: string) => id === 'cold' || id === 'gone'
+    ? { header: { cwd: '/project' } }
+    : id === 'worker' ? { header: { cwd: '/project', origin: 'subagent' } } : undefined }
+  const root = (sessionId: string, rootRef?: string) => f.api.directory('d', sessionId, rootRef, '', undefined, false, signal)
+  const old = await root('s')
+  activeRoot = '/worktree'
+  await assert.rejects(root('s', old.rootRef), { code: 'E_BUSY' })
+  await assert.rejects(f.api.stat('d', 's', { kind: 'workspace', rootRef: old.rootRef, path: 'same.txt' }, signal), { code: 'E_BUSY' })
+  const moved = await root('s')
+  assert.equal(moved.rootLabel, '/worktree')
+  assert.notEqual(moved.rootRef, old.rootRef)
+  f.services.workspaceFiles.stat = async (scope: { workspaceRoot: string }, path: string) => {
+    if (path === '/outside/result.txt') assert.equal(scope.workspaceRoot, '/project')
+    else {
+      assert.equal(scope.workspaceRoot, '/worktree')
+      assert.equal(path, '/worktree/same.txt')
+    }
+    return { version: 'v1' }
+  }
+  await f.api.stat('d', 's', { kind: 'workspace', rootRef: moved.rootRef, path: 'same.txt' }, signal)
+  await f.api.stat('d', 's', { kind: 'deliverable', sourceSeq: 3, fileIndex: 0 }, signal)
+  assert.equal((await root('cold')).rootLabel, '/cold-worktree')
+  await assert.rejects(root('gone'), { code: 'E_NOT_FOUND' })
+  await assert.rejects(root('worker'), { code: 'E_NOT_FOUND' })
+  assert.ok(!hostScopes.includes('worker'))
+  f.api.dispose()
+})
 test('text rejects a source changed during reading and diffs preserve line numbers and expiry', async () => {
   const f = fixture(), signal = new AbortController().signal
   f.mutate(); await assert.rejects(f.api.text('d', 's', { kind: 'deliverable', sourceSeq: 3, fileIndex: 0 }, 1, 'v1', signal))

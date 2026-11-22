@@ -8,6 +8,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { hostWebTarget, resolveHostWeb } from '../src/host-web.ts'
+import { capabilityBits } from '../src/host-capabilities.ts'
+import { capabilityRejection, registryRowFor } from '../src/wire-registry.ts'
+import type { ApiProxyLike } from '../src/host-api.ts'
 
 const server = (origin: string) => ({ port: Number(new URL(origin).port), getOrigin: () => origin })
 const connection = { authenticatedUrl: (base: string) => `${base}?token=t` }
@@ -35,4 +38,37 @@ test('connection 服务缺失或生成失败时不可用', () => {
   assert.equal(resolveHostWeb(web, undefined), undefined)
   assert.equal(resolveHostWeb(web, {}), undefined)
   assert.equal(resolveHostWeb(web, { authenticatedUrl: () => { throw new Error('no token') } }), undefined)
+})
+
+test('新版 Host 从同源根地址选择带单个令牌的登录入口', () => {
+  const web = server('http://127.0.0.1:3187')
+  const entry = (url: string) => ({ label: 'dsh web', url, open: true })
+  const login = resolveHostWeb(web, {}, base => {
+    assert.equal(base, 'http://127.0.0.1:3187/')
+    return [
+      entry('not a URL'),
+      entry('https://example.test/?token=elsewhere'),
+      entry('http://127.0.0.1:3080/?token=wrong-port'),
+      entry(base + 'elsewhere?token=wrong-path'),
+      entry(base + '?token=one&token=two'),
+      entry(base + '?token='),
+      entry(base + '?token=current'),
+    ]
+  })
+  assert.equal(login?.url, 'http://127.0.0.1:3187/?token=current')
+  assert.equal(resolveHostWeb(web, {}, () => []), undefined)
+  assert.equal(resolveHostWeb(web, {}, () => { throw new Error('provider unavailable') }), undefined)
+  assert.equal(resolveHostWeb(web, connection, () => [entry('https://example.test')])?.url, 'http://127.0.0.1:3187/?token=t')
+})
+
+test('welcome only advertises an available Host login without short-circuiting preview denial reasons', () => {
+  let available = false
+  let calls = 0
+  const api = { sessions: {}, get hostWebAvailable() { calls++; return available } } as ApiProxyLike
+  const bits = capabilityBits(api, undefined)
+  assert.equal(capabilityRejection(registryRowFor('c2s.preview.hostWeb')!, bits), undefined)
+  assert.equal(calls, 0, 'dispatch does not ask the auth provider before the handler checks scope and settings')
+  assert.equal(bits.hostWeb, false)
+  available = true
+  assert.equal(capabilityBits(api, undefined).hostWeb, true)
 })

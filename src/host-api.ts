@@ -406,6 +406,8 @@ export interface ApiProxyLike {
   readonly goalViewAvailable?: boolean
   /** 真实宿主反射声明了助手流帧时才为 true；旧代理缺省关闭。 */
   readonly assistantStreamAvailable?: boolean
+  /** 当前宿主网页端提供预览隧道可用的登录地址。 */
+  readonly hostWebAvailable?: boolean
   commands?: CommandsApiLike
   /** 主机挂载了文件引用或会话引用服务之一时存在；两者都缺席为 undefined。 */
   references?: ReferencesApiLike

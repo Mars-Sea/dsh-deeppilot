@@ -36,7 +36,7 @@ import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
 import { localEndpointURLs } from './local-policy.ts'
-import { resolveHostWeb, type HostWebConnectionLike, type HostWebServerLike } from './host-web.ts'
+import { resolveHostWeb, type HostWebConnectionLike, type HostWebEntryUrl, type HostWebServerLike } from './host-web.ts'
 import { welcomeRoutes } from './welcome-routes.ts'
 import { closeServer, createPhoneServer, listen, type PhoneServerTransportError } from './phone-server.ts'
 import { loadOrCreateLanTlsIdentity, type LanTlsIdentity } from './lan-tls.ts'
@@ -413,22 +413,33 @@ export function apply(ctx: Context, options: unknown): void {
       }, 'deeppilot: optional plugin updater')
     },
   )
-  // 电脑端网页（能力 hostWeb）用到的两个宿主服务：webServer（网页端实际监听地址）与
-  // connection（生成带进程令牌的登录地址）。可选注入，旧宿主或缺服务时为 undefined，
-  // 请求回 reason "hostweb-unavailable"。
-  const hostWebServices: { webServer?: HostWebServerLike; connection?: HostWebConnectionLike } = {}
+  // 新 Host 用 webServer 的事件请求登录地址，旧 Host 仍从 connection 获取。
+  // 每次需要时现算，避免在插件里保存登录凭据。
+  type HostWebContext = SubContext & {
+    webServer: HostWebServerLike
+    connection: HostWebConnectionLike
+    emit(source: HostWebServerLike, event: 'webserver/entry-url', base: string, entries: HostWebEntryUrl[]): void
+  }
+  let hostWebContext: HostWebContext | undefined
   ;(ctx as unknown as { inject: (deps: string[], fn: (sub: unknown) => void) => void }).inject(
     ['webServer', 'connection'],
     (sub) => {
-      const services = sub as { webServer?: HostWebServerLike; connection?: HostWebConnectionLike }
-      hostWebServices.webServer = services.webServer
-      hostWebServices.connection = services.connection
-      ;(sub as SubContext).effect(() => () => {
-        if (hostWebServices.webServer === services.webServer) hostWebServices.webServer = undefined
-        if (hostWebServices.connection === services.connection) hostWebServices.connection = undefined
+      const webCtx = sub as HostWebContext
+      hostWebContext = webCtx
+      webCtx.effect(() => () => {
+        if (hostWebContext === webCtx) hostWebContext = undefined
       }, 'deeppilot: host web services')
     },
   )
+  const hostWebEntry = () => {
+    const webCtx = hostWebContext
+    if (webCtx === undefined) return undefined
+    return resolveHostWeb(webCtx.webServer, webCtx.connection, (baseUrl) => {
+      const entries: HostWebEntryUrl[] = []
+      webCtx.emit(webCtx.webServer, 'webserver/entry-url', baseUrl, entries)
+      return entries
+    })
+  }
   let pendingUpgrades = 0
   const authRateLimiter = new AuthRateLimiter()
 
@@ -614,7 +625,7 @@ export function apply(ctx: Context, options: unknown): void {
                   reservedPorts: () => previewReservedPorts(),
                   // 电脑端网页：开关默认关闭，只有显式 true 才放行；登录地址每次现算（令牌随宿主进程变）。
                   isHostWebEnabled: () => currentConfig().preview?.hostWeb === true,
-                  hostWeb: () => resolveHostWeb(hostWebServices.webServer, hostWebServices.connection),
+                  hostWeb: hostWebEntry,
                 },
                 devices,
                 serverVersion: SERVER_VERSION,
@@ -754,7 +765,7 @@ export function apply(ctx: Context, options: unknown): void {
    */
   const previewReservedPorts = (): number[] => {
     const ports: number[] = []
-    const webPort = hostWebServices.webServer?.port
+    const webPort = hostWebContext?.webServer?.port
     if (typeof webPort === 'number') ports.push(webPort)
     const localPort = currentConfig().local?.port
     if (typeof localPort === 'number') ports.push(localPort)
@@ -824,7 +835,11 @@ export function apply(ctx: Context, options: unknown): void {
       const apiCtx = sub as unknown as Context & SubContext
       let proxy: DshApiProxy
       try {
-        proxy = new DshApiProxy(apiCtx, { shouldSurfaceInteraction: hasPairedPhoneSurface, allowFileBrowse: () => currentConfig().files?.browse === true })
+        proxy = new DshApiProxy(apiCtx, {
+          shouldSurfaceInteraction: hasPairedPhoneSurface,
+          allowFileBrowse: () => currentConfig().files?.browse === true,
+          hostWebAvailable: () => hostWebEntry() !== undefined,
+        })
       } catch (error) {
         log('DSH session bridge unavailable: ' + String(error), 'warn')
         return
