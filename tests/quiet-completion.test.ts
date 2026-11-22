@@ -285,7 +285,6 @@ test('启动预热：从宿主任务列表取投递目标会话，全量分页',
   ]
   const offsets: number[] = []
   const { proxy } = makeProxy({
-    mode: 'host',
     list: async (request: { payload: { offset: number } }) => {
       offsets.push(request.payload.offset)
       const page = pages[offsets.length - 1] ?? { tasks: [], total: 3 }
@@ -305,8 +304,8 @@ test('启动预热：从宿主任务列表取投递目标会话，全量分页',
   }
 })
 
-test('会话级宿主不预热（工具也不注册，见 index.ts）', async () => {
-  const { proxy } = makeProxy({ mode: 'legacy', list: async () => { throw new Error('must not list') } })
+test('没有计划任务服务时不预热', async () => {
+  const { proxy } = makeProxy()
   const bridge = new HostBridge(proxy, 100)
   try {
     await bridge.seedQuietCompletionSessions()

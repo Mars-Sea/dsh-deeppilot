@@ -33,7 +33,7 @@
 - 本机网页预览：会话里出现的 `http://127.0.0.1:端口`、`localhost:端口` 链接
   （例如 Agent 启动的设计画布、开发服务器）直接在 App 内打开，页面实时刷新照常；
 - 电脑端网页（默认关闭）：在 App 内打开这台电脑的 DSH 网页端，含第三方插件页面；
-- 计划任务按需提醒（DSH 0.2.2 起）：在任务提示词里写明规则，例如"一切正常就不用提醒我"，
+- 计划任务按需提醒：在任务提示词里写明规则，例如"一切正常就不用提醒我"，
   Agent 即可通过 `deeppilot_skip_completion_notice` 工具跳过这一轮的「任务完成」通知；
   审批、提问和出错照常提醒，没写规则的任务照旧每轮提醒；
 - 更新提示：设置页底部显示当前插件版本，并在有新版本时附加一个指向
@@ -42,22 +42,13 @@
 
 ## 从 npm 安装
 
-当前源码面向 Node.js 22+ 与**滚动兼容区间** `>=0.2.1-rc.5 <0.3.0-0` 内的
-DSH 宿主（带 `web` profile）。下界是决策时最新的已审计 `rc` 版本（npm
-`latest` 与 `next` 均指向 `0.2.1-rc.5`）；其后的所有 `0.2.x` 版本自动放行，
-包括 `alpha` 通道的 `0.2.2-alpha.2` 及之后的 alpha、之后的 rc 与 `0.2.x`
-正式版。`0.3.0` 及其预发布仍需重新审计，由上界 `<0.3.0-0` 拦下。
-DSH 在组合 profile 前会校验插件声明的兼容要求，且**每次启动都会校验**（不只是
-安装时），因此区间外的宿主会拒绝激活本插件。从 DSH `0.2.1-alpha.4` 起，该校验
-只读 `engines.dsh` 并忽略 `peerDependencies`；更早的宿主只认 peer 范围，因此
-两处声明同一区间。npm 包内置 macOS、Linux、Windows 的 amd64/arm64 Funnel
-helper；可信局域网模式不依赖 helper。helper 用 Go 1.27 编译，要求 **macOS 13
-Ventura 或更高版本**：macOS 12 及更早版本无法启动 Funnel 模式，可信局域网模式
-不受影响。
+使用 Node.js 24.9 或更高版本运行 DSH 的 `web` profile。当前分支以
+`0.2.3-alpha.2` 为构建和验证基线，声明兼容区间 `>=0.2.3-alpha.2 <0.3.0-0`。
+DSH 每次启动都会在组合 profile 前检查该区间。之后的 `0.2.x` 版本可通过版本检查。
+已发布的插件包以各自的兼容声明为准。
 
-当前工作树的 `engines.dsh` 与 `peerDependencies` 声明该区间，构建与类型检查
-针对 `0.2.1-rc.5`。从此工作树发布新版本前，已发布的旧插件包仍可能带有各自旧的
-兼容声明。
+npm 包内置 macOS、Linux 和 Windows 的 amd64/arm64 Funnel helper。macOS 上
+使用 Funnel 需要 **macOS 13 Ventura 或更高版本**。可信局域网模式无需 helper。
 
 ```sh
 dsh plugin --profile web add dsh-deeppilot

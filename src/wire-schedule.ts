@@ -148,8 +148,6 @@ export const scheduleRows: readonly WireFrameRow[] = [
     validate: (payload) => {
       const checked = payloadObject(payload)
       if (!checked.ok) return checked
-      // 宿主级模型下 sessionId 可选并被忽略（PROTOCOL.md「投递历史」）；会话级
-      // 宿主仍要求它，但那条边界放在 handler，校验只描述形状。
       if (
         !isOptionalField(checked.value, 'sessionId', (v) => isText(v)) ||
         !isText(checked.value.id) ||
@@ -162,13 +160,7 @@ export const scheduleRows: readonly WireFrameRow[] = [
     },
     handle: async (ctx, payload) => {
       const sessionId = payload.sessionId as string | undefined
-      // 会话级宿主上缺少 sessionId 仍是非法载荷：判定与扩展前的校验逐字一致
-      // （E_PROTOCOL + 同一句话），只是改在 handler 判，因为校验拿不到宿主形态。
-      if (sessionId === undefined && ctx.bridge.capabilities.schedulesHost !== true) {
-        return ctx.fail('E_PROTOCOL', 'invalid schedule history')
-      }
       const result = await ctx.bridge.scheduleHistory(
-        sessionId ?? '',
         payload.id as string,
         payload.limit as number,
         payload.before as string | undefined,

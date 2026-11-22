@@ -15,63 +15,9 @@ function reason(row: { validate?: (payload: unknown) => unknown }, payload: unkn
   return checked.ok ? undefined : checked.message
 }
 
-function scheduleController(calls: Array<{ operation: string; payload: unknown }>) {
-  return {
-    list: async ({ sessionId }: { sessionId: string }) => {
-      calls.push({ operation: 'list', payload: { sessionId } })
-      return [{
-        id: 'schedule-1', kind: 'after', title: '检查构建', prompt: '检查构建状态',
-        afterSeconds: 600, scheduledAt: '2099-01-01T00:00:00.000Z', state: 'scheduled', deliveryMode: 'host',
-      }]
-    },
-    history: async (request: unknown) => {
-      calls.push({ operation: 'history', payload: request })
-      return { id: 'schedule-1', records: [], earlierRecordsUnavailable: false, retention: { days: 30, records: 200 } }
-    },
-    create: async (sessionId: string, request: Record<string, unknown>) => {
-      calls.push({ operation: 'create', payload: { sessionId, request } })
-      return {
-        id: 'schedule-1', kind: 'after', title: request.title, prompt: request.prompt,
-        afterSeconds: 600, scheduledAt: '2099-01-01T00:00:00.000Z', state: 'scheduled', deliveryMode: 'host',
-      }
-    },
-    update: async (request: Record<string, unknown>) => {
-      calls.push({ operation: 'update', payload: request })
-      return { id: 'schedule-1', updated: true, record: {
-        id: 'schedule-1', kind: 'after', title: request.title ?? '检查构建', prompt: request.prompt ?? '检查构建状态',
-        afterSeconds: 600, scheduledAt: '2099-01-01T00:00:00.000Z', state: 'scheduled', deliveryMode: 'host',
-      } }
-    },
-    delete: async (request: { id: string }) => {
-      calls.push({ operation: 'delete', payload: request })
-      return { id: request.id, deleted: true }
-    },
-  }
-}
-
-test('DSH Schedule facade projects list and preserves the DSH session boundary', async () => {
-  const calls: Array<{ operation: string; payload: unknown }> = []
-  const ctx = {
-    get: (key: string) => key === 'sessionController' ? {} : key === 'schedule' ? scheduleController(calls) : undefined,
-  }
-  const proxy = new DshApiProxy(ctx as never)
-  assert.ok(proxy.schedule)
-  if (proxy.schedule?.mode !== 'legacy') assert.fail('legacy schedule adapter expected')
-  const response = await proxy.schedule.list({ payload: { sessionId: 'session-1' } })
-  assert.equal(response.result?.ok, true)
-  assert.deepEqual(calls[0], { operation: 'list', payload: { sessionId: 'session-1' } })
-  if (response.result?.ok) {
-    assert.equal(response.result.value.tasks[0]?.title, '检查构建')
-    assert.equal(response.result.value.tasks[0]?.deliveryMode, 'host')
-  }
-})
-
 test('HostBridge schedule capability and mutations are capability-gated and idempotent', async () => {
   const calls: Array<{ operation: string; payload: unknown }> = []
-  const ctx = {
-    get: (key: string) => key === 'sessionController' ? {} : key === 'schedule' ? scheduleController(calls) : undefined,
-  }
-  const proxy = new DshApiProxy(ctx as never)
+  const proxy = hostProxy(calls)
   const bridge = new HostBridge(proxy as ApiProxyLike)
   assert.equal(bridge.capabilities.schedules, true)
 
@@ -307,16 +253,14 @@ function hostProxy(
   } as never)
 }
 
-/** 取宿主级 adapter（测试里显式断言判别位，避免误用 legacy 分支）。 */
 function hostScheduleApi(proxy: DshApiProxy) {
   const schedule = proxy.schedule
-  if (schedule === undefined || schedule.mode !== 'host') throw new Error('host schedule adapter expected')
+  if (schedule === undefined) throw new Error('host schedule adapter expected')
   return schedule
 }
 
-test('宿主级形状探测与 schedulesHost 能力位同源，legacy 宿主不受影响', () => {
+test('同一个可选任务服务控制新旧手机能力位', () => {
   const host = hostProxy([])
-  assert.equal(host.schedule?.mode, 'host')
   const hostBridge = new HostBridge(host as ApiProxyLike)
   try {
     assert.equal(hostBridge.capabilities.schedules, true, '服务存在仍是会话级能力位的语义')
@@ -325,15 +269,14 @@ test('宿主级形状探测与 schedulesHost 能力位同源，legacy 宿主不�
     hostBridge.dispose()
   }
 
-  const legacy = new DshApiProxy({
-    get: (key: string) => key === 'sessionController' ? {} : key === 'schedule' ? scheduleController([]) : undefined,
-  } as never)
-  const legacyBridge = new HostBridge(legacy as ApiProxyLike)
+  const withoutSchedule = new HostBridge(new DshApiProxy({
+    get: (key: string) => key === 'sessionController' ? {} : undefined,
+  } as never))
   try {
-    assert.equal(legacyBridge.capabilities.schedules, true)
-    assert.equal(legacyBridge.capabilities.schedulesHost, false, 'legacy 宿主不得通告宿主级能力')
+    assert.equal(withoutSchedule.capabilities.schedules, false)
+    assert.equal(withoutSchedule.capabilities.schedulesHost, false)
   } finally {
-    legacyBridge.dispose()
+    withoutSchedule.dispose()
   }
 })
 
@@ -703,7 +646,7 @@ test('旧帧在宿主级模型上的映射：列表过滤/排序、创建、更�
     assert.deepEqual(deleteCall?.payload, { id: 'task-early', action: 'delete' })
 
     // 历史忽略 sessionId。
-    const history = await bridge.scheduleHistory('session-1', 'task-late', 10)
+    const history = await bridge.scheduleHistory('task-late', 10)
     assert.equal(history.ok, true)
     const historyCall = calls.filter((call) => call.operation === 'history').at(-1)
     assert.deepEqual(historyCall?.payload, { id: 'task-late', limit: 10 })
@@ -806,7 +749,7 @@ test('宿主级帧的 validate/handle 与能力门', async () => {
   }
 })
 
-test('投递历史：宿主级模型下 sessionId 可选，会话级宿主仍要求会话边界', async () => {
+test('投递历史：新手机可省略 sessionId，旧手机提供时仍能收到', async () => {
   const row = registryRowFor('c2s.schedule.history')!
   const hostCalls: HostCall[] = []
   const hostBridge = new HostBridge(hostProxy(hostCalls, [hostTask()]) as ApiProxyLike)
@@ -826,26 +769,10 @@ test('投递历史：宿主级模型下 sessionId 可选，会话级宿主仍要
       id: 'schedule-host-1',
       limit: 10,
     })
+    await row.handle(hostCtx, { sessionId: 'old-phone-session', id: 'schedule-host-1', limit: 10 })
+    assert.equal(hostSent.at(-1)?.payload.sessionId, 'old-phone-session')
   } finally {
     hostBridge.dispose()
-  }
-
-  const legacy = new DshApiProxy({
-    get: (key: string) => key === 'sessionController' ? {} : key === 'schedule' ? scheduleController([]) : undefined,
-  } as never)
-  const legacyBridge = new HostBridge(legacy as ApiProxyLike)
-  const failures: Array<{ code: string; message: string }> = []
-  const legacyCtx = {
-    bridge: legacyBridge,
-    deviceId: 'device-1',
-    send: () => assert.fail('legacy history without sessionId must fail before the handler'),
-    fail: (code: string, message: string) => failures.push({ code, message }),
-  } as never
-  try {
-    await row.handle(legacyCtx, { id: 'schedule-1', limit: 10 })
-    assert.deepEqual(failures, [{ code: 'E_PROTOCOL', message: 'invalid schedule history' }])
-  } finally {
-    legacyBridge.dispose()
   }
 })
 

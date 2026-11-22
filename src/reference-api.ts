@@ -9,7 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
  * - 会话：`sessionReferenceResolver/candidates {agentId, query}` → 带规范 mention
  *   `@[label](dsh-session:…)` 的候选；手机发送时原样放进提示词，主机负责改写与注入快照。
  *
- * 两类服务都是可选挂载（兼容下限 0.2.1-rc.5 没有保证），所以每次按当前服务是否存在判定，
+ * 两类服务都是可选挂载，所以每次按当前服务是否存在判定，
  * 一类缺席不影响另一类。会话候选不下发工作目录，只给 `sameWorkspace`，避免把本机路径带到手机。
  */
 
@@ -43,7 +43,7 @@ export class DshReferenceApi {
   private owner(): unknown {
     const connection = this.ctx.get('connection') as any
     // 与命令接口相同：独立的一元调用身份，不参与审批竞争。
-    return this.peer ??= connection?.createPeer?.({ principal: { kind: 'owner' }, interactions: 'none' }) ?? connection?.operator
+    return this.peer ??= connection.createPeer({ principal: { kind: 'owner' }, interactions: 'none' })
   }
 
   private async invoke(namespace: string, method: string, args: Record<string, unknown>, signal: AbortSignal): Promise<unknown> {
@@ -52,7 +52,7 @@ export class DshReferenceApi {
   }
 
   /**
-   * 并行读两类候选。单类失败（超时、旧主机没有对应 Remote）只让该类为空，
+   * 并行读两类候选。单类失败（超时、宿主没有挂载对应 Remote）只让该类为空，
    * 不拖垮另一类；两类都不可用由调用方在能力位上拦下。
    */
   async list(sessionId: string, query: string, signal?: AbortSignal): Promise<ReferenceCandidates> {

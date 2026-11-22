@@ -110,10 +110,10 @@ test('候选回退源协议、身份或强摘要分歧及不可读取时，受�
 })
 
 // 发布包不依赖宿主的可选管理包；本地兼容性审计直接对照指定的真实 alpha2 导出。
-const alpha2Manager = process.env.DSH_ALPHA2_PLUGIN_MANAGER ?? ''
+const alpha2Manager = process.env.DSH_PLUGIN_MANAGER_ROOT ?? ''
 test('源计划与真实 alpha2 公开函数一致，覆盖 null、私有源、归一化及二阶段回退',
   { skip: !existsSync(join(alpha2Manager, 'lib/types/registry.js')) }, async () => {
-    assert.equal(JSON.parse(readFileSync(join(alpha2Manager, 'package.json'), 'utf8')).version, '0.2.2-alpha.2')
+    assert.equal(JSON.parse(readFileSync(join(alpha2Manager, 'package.json'), 'utf8')).version, '0.2.3-alpha.2')
     const host = await import(pathToFileURL(join(alpha2Manager, 'lib/types/registry.js')).href)
     const npm = 'https://registry.npmjs.org/'
     const configurations: PluginUpdateRegistries[] = [

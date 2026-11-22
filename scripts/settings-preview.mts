@@ -9,7 +9,7 @@ import { settingsHostUi } from './settings-host-ui.mts'
  */
 const bundle = async () => (await build({
   entryPoints: ['tests/e2e/settings-fixture.ts'], bundle: true, write: false,
-  format: 'iife', platform: 'browser', target: 'es2022',
+  format: 'iife', platform: 'browser', target: 'es2022', jsx: 'automatic',
   outfile: 'fixture.js', loader: { '.css': 'local-css' }, plugins: [settingsHostUi],
   define: { 'process.env.NODE_ENV': '"development"' },
 })).outputFiles

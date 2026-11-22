@@ -64,7 +64,7 @@ import type { DispatchJournal } from './dispatch-journal.ts'
 import { pushScopeFor } from './connection-policy.ts'
 import { capabilityBits } from './host-capabilities.ts'
 import { projectQueue, promptRequestId } from './prompt-queue.ts'
-import { hostFailureOf, wireCodeFor, wireErrorOf, type WireErrorCode } from './wire-errors.ts'
+import { hostFailureOf, wireErrorOf, type WireErrorCode } from './wire-errors.ts'
 import { formatLogLine } from './diagnostics.ts'
 import { AssistantStream, type AssistantStreamDelta } from './assistant-stream.ts'
 import { ImageRefIndex } from './image-ref-index.ts'
@@ -502,7 +502,7 @@ export class HostBridge {
    * 在下一次投递时补上。由 index.ts 在 schedule 服务就绪、注册工具时调用。
    */
   async seedQuietCompletionSessions(): Promise<void> {
-    if (this.hostSchedule === undefined) return
+    if (this.apiProxy.schedule === undefined) return
     const sessionIds: string[] = []
     let offset = 0
     for (;;) {
@@ -1326,12 +1326,7 @@ export class HostBridge {
   /**
    * Result of one attachment read-back for the phone.
    *
-   * 宿主读图参数有两代：DSH ≤ 0.2.1 收 `{sessionId, attachmentId}` 并自己在会话日志里
-   * 找引用；DSH 0.2.2 起改收 `{sessionId, attachment: 完整引用}`，且不再核对会话。
-   * 控制器是直接注入的实例、不经参数 schema 校验，所以两代字段一起传：旧宿主读前者，
-   * 新宿主读后者。完整引用来自 imageRefs（本会话投影过的图片）；找不到时不带
-   * `attachment`，旧宿主照常自查，新宿主读不到即回 null（E_NOT_FOUND）——手机因此
-   * 读不到不属于该会话的图片。
+   * Only a complete ref observed in this session can reach the Host.
    */
   async attachmentData(
     sessionId: string,
@@ -1341,9 +1336,10 @@ export class HostBridge {
     if (typeof read !== 'function') return null;
     try {
       const ref = await this.imageRefs.resolve(sessionId, attachmentId, (id, beforeSeq) => this.readHistoryEvents(id, beforeSeq));
+      if (ref === undefined) return null;
       const response = await read.call(this.apiProxy.sessions, {
         rpcId: randomUUID(),
-        payload: { sessionId, attachmentId, ...(ref ? { attachment: ref } : {}) },
+        payload: { sessionId, attachment: ref },
       });
       if (!response.result || !response.result.ok) return null;
       const data = response.result.value.data;
@@ -1727,32 +1723,10 @@ export class HostBridge {
     return { ok: false, code: result.code, message: result.message ?? result.code, replayed: result.replayed }
   }
 
-  /**
-   * 当前 adapter 是否宿主级计划任务模型。
-   *
-   * 能力位 `schedulesHost`（host-capabilities.ts）与新帧、旧帧映射全部读这一个
-   * 判别位：探测只发生一次（DshApiProxy.resolveSchedule），这里不再看控制器
-   * 方法，也不看版本号字符串。
-   */
-  private get hostSchedule(): HostScheduleApiLike | undefined {
-    const schedule = this.apiProxy.schedule
-    return schedule?.mode === 'host' ? schedule : undefined
-  }
-
   async listSchedules(sessionId: string): Promise<ScheduleBridgeResult<ScheduleTaskViewLike[]>> {
     const schedule = this.apiProxy.schedule
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'schedules unavailable on this host version' }
-    // 旧帧映射（PROTOCOL.md「旧帧在宿主级模型上的映射」）：宿主级列表全量分页后
-    // 过滤目标会话，反向投影成旧视图；旧 App 不需要升级。
-    if (schedule.mode === 'host') return this.listHostSchedulesAsLegacy(schedule, sessionId)
-    try {
-      const response = await schedule.list({ rpcId: randomUUID(), payload: { sessionId } })
-      if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule list returned no result' }
-      if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
-      return { ok: true, value: response.result.value.tasks }
-    } catch (error) {
-      return this.internalFailure(error)
-    }
+    return this.listHostSchedulesAsLegacy(schedule, sessionId)
   }
 
   /** 宿主级列表 -> 旧会话级视图：过滤 session 目标、丢弃 ended、按 scheduledAt 升序。 */
@@ -1794,7 +1768,7 @@ export class HostBridge {
   async listHostSchedules(
     request: HostScheduleListRequestLike = {},
   ): Promise<ScheduleBridgeResult<HostScheduleListResultLike>> {
-    const schedule = this.hostSchedule
+    const schedule = this.apiProxy.schedule
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'host-level schedules unavailable on this host version' }
     try {
       const response = await schedule.list({ rpcId: randomUUID(), payload: request })
@@ -1807,7 +1781,7 @@ export class HostBridge {
   }
 
   async viewHostSchedule(id: string): Promise<ScheduleBridgeResult<HostScheduleTaskView>> {
-    const schedule = this.hostSchedule
+    const schedule = this.apiProxy.schedule
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'host-level schedules unavailable on this host version' }
     try {
       const response = await schedule.view({ rpcId: randomUUID(), payload: { id } })
@@ -1831,7 +1805,7 @@ export class HostBridge {
       target?: unknown
     },
   ): Promise<ScheduleBridgeResult<HostScheduleTaskView>> {
-    const schedule = this.hostSchedule
+    const schedule = this.apiProxy.schedule
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'host-level schedules unavailable on this host version' }
     const { clientRequestId, ...request } = payload
     // 幂等：新帧与旧帧共用 scheduleMutations journal 与 clientRequestId；
@@ -1874,7 +1848,7 @@ export class HostBridge {
       patch?: unknown
     },
   ): Promise<ScheduleBridgeResult<HostScheduleEditValue>> {
-    const schedule = this.hostSchedule
+    const schedule = this.apiProxy.schedule
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'host-level schedules unavailable on this host version' }
     const { clientRequestId, ...request } = payload
     const result = await this.scheduleMutations.dispatch(
@@ -1915,7 +1889,7 @@ export class HostBridge {
     deviceId: string,
     payload: { clientRequestId: string; id: string },
   ): Promise<ScheduleBridgeResult<HostScheduleTaskView>> {
-    const schedule = this.hostSchedule
+    const schedule = this.apiProxy.schedule
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'host-level schedules unavailable on this host version' }
     const result = await this.scheduleMutations.dispatch(
       deviceId,
@@ -1949,7 +1923,7 @@ export class HostBridge {
     deviceId: string,
     payload: { clientRequestId: string },
   ): Promise<ScheduleBridgeResult<{ deleted?: number }>> {
-    const schedule = this.hostSchedule
+    const schedule = this.apiProxy.schedule
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'host-level schedules unavailable on this host version' }
     const result = await this.scheduleMutations.dispatch(
       deviceId,
@@ -1972,7 +1946,7 @@ export class HostBridge {
   }
 
   async scheduleLimits(): Promise<ScheduleBridgeResult<{ newSessionIntervalSeconds: number }>> {
-    const schedule = this.hostSchedule
+    const schedule = this.apiProxy.schedule
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'host-level schedules unavailable on this host version' }
     try {
       const response = await schedule.limits({ rpcId: randomUUID(), payload: {} })
@@ -1985,7 +1959,6 @@ export class HostBridge {
   }
 
   async scheduleHistory(
-    sessionId: string,
     id: string,
     limit: number,
     before?: string,
@@ -1993,29 +1966,16 @@ export class HostBridge {
     const schedule = this.apiProxy.schedule
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'schedules unavailable on this host version' }
     // 宿主级模型下 id 是任务的唯一标识，sessionId 被忽略（旧帧映射表）。
-    if (schedule.mode === 'host') {
-      try {
-        const response = await schedule.history({
-          rpcId: randomUUID(),
-          payload: { id, limit, ...(before !== undefined ? { before } : {}) },
-        })
-        if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule history returned no result' }
-        if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
-        return { ok: true, value: response.result.value }
-      } catch (error) {
-        return wireErrorOf('schedule', hostFailureOf(error, 'internal'))
-      }
-    }
     try {
       const response = await schedule.history({
         rpcId: randomUUID(),
-        payload: { sessionId, id, limit, ...(before !== undefined ? { before } : {}) },
+        payload: { id, limit, ...(before !== undefined ? { before } : {}) },
       })
       if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule history returned no result' }
       if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
-      return { ok: true, value: response.result.value.history }
+      return { ok: true, value: response.result.value }
     } catch (error) {
-      return this.internalFailure(error)
+      return wireErrorOf('schedule', hostFailureOf(error, 'internal'))
     }
   }
 
@@ -2026,48 +1986,29 @@ export class HostBridge {
     const schedule = this.apiProxy.schedule
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'schedules unavailable on this host version' }
     // 旧帧映射：选择器 -> timing，target 固定为请求里的会话；成功回旧视图。
-    if (schedule.mode === 'host') {
-      const { clientRequestId, sessionId, title, prompt, ...selectors } = payload
-      const timing = hostTimingFromLegacySelector(selectors)
-      if (timing === undefined) return { ok: false, code: 'E_PROTOCOL', message: 'unsupported schedule selector' }
-      const request = { title, prompt, timing, target: { kind: 'session', sessionId } satisfies HostScheduleTargetRequest }
-      const result = await this.scheduleMutations.dispatch(
-        deviceId,
-        clientRequestId,
-        request,
-        async () => {
-          const response = await schedule.create({
-            rpcId: randomUUID(),
-            payload: {
-              title,
-              prompt,
-              timing,
-              target: { kind: 'session', sessionId },
-            } satisfies HostScheduleCreateRequestLike,
-          })
-          if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule create returned no result' }
-          if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
-          const legacy = toLegacyScheduleView(response.result.value)
-          if (legacy === undefined) return { ok: false, code: 'E_PROTOCOL', message: 'schedule cannot be represented in the session-scoped view' }
-          return { ok: true, value: legacy }
-        },
-      )
-      if (result.ok) {
-        this.record('s2c.schedule.changed', {})
-        return { ok: true, value: result.value as ScheduleTaskViewLike, replayed: result.replayed }
-      }
-      return { ok: false, code: result.code, message: result.message ?? result.code, replayed: result.replayed }
-    }
-    const { clientRequestId, sessionId, ...request } = payload
+    const { clientRequestId, sessionId, title, prompt, ...selectors } = payload
+    const timing = hostTimingFromLegacySelector(selectors)
+    if (timing === undefined) return { ok: false, code: 'E_PROTOCOL', message: 'unsupported schedule selector' }
+    const request = { title, prompt, timing, target: { kind: 'session', sessionId } satisfies HostScheduleTargetRequest }
     const result = await this.scheduleMutations.dispatch(
       deviceId,
       clientRequestId,
-      { sessionId, request },
+      request,
       async () => {
-        const response = await schedule.create({ rpcId: randomUUID(), payload: { sessionId, ...request } })
+        const response = await schedule.create({
+          rpcId: randomUUID(),
+          payload: {
+            title,
+            prompt,
+            timing,
+            target: { kind: 'session', sessionId },
+          } satisfies HostScheduleCreateRequestLike,
+        })
         if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule create returned no result' }
         if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
-        return { ok: true, value: response.result.value }
+        const legacy = toLegacyScheduleView(response.result.value)
+        if (legacy === undefined) return { ok: false, code: 'E_PROTOCOL', message: 'schedule cannot be represented in the session-scoped view' }
+        return { ok: true, value: legacy }
       },
     )
     if (result.ok) {
@@ -2085,71 +2026,48 @@ export class HostBridge {
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'schedules unavailable on this host version' }
     // 旧帧映射（尽力而为的冲突保护）：先读当前任务，与 expected 不一致回 E_BUSY；
     // 一致则把 title/prompt/change 翻成 patch 走 edit。
-    if (schedule.mode === 'host') {
-      const request = {
-        sessionId: payload.sessionId,
-        id: payload.id,
-        expected: payload.expected,
-        title: payload.title,
-        prompt: payload.prompt,
-        change: payload.change,
-      }
-      const result = await this.scheduleMutations.dispatch(
-        deviceId,
-        payload.clientRequestId,
-        request,
-        async () => {
-          const current = await schedule.view({ rpcId: randomUUID(), payload: { id: payload.id } })
-          if (!current.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule view returned no result' }
-          if (!current.result.ok) return wireErrorOf('schedule', current.result.error)
-          if (current.result.value.kind === 'not-found') return { ok: false, code: 'E_NOT_FOUND', message: 'schedule not found' }
-          const currentTask = current.result.value.task
-          if (!legacyScheduleMatchesExpected(currentTask, payload.expected)) {
-            return { ok: false, code: 'E_BUSY', message: 'schedule changed since it was read' }
-          }
-          const patch = hostPatchFromLegacyUpdate(payload)
-          if (Object.keys(patch).length === 0) {
-            // 旧帧允许只带 expected 的无操作更新；宿主级 edit 要求 patch 非空，
-            // 因此按成功返回当前任务，不写 Host。
-            const legacy = toLegacyScheduleView(currentTask)
-            if (legacy === undefined) return { ok: false, code: 'E_PROTOCOL', message: 'schedule cannot be represented in the session-scoped view' }
-            return { ok: true, value: legacy }
-          }
-          const response = await schedule.edit({
-            rpcId: randomUUID(),
-            payload: { id: payload.id, action: 'update', patch },
-          })
-          if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule edit returned no result' }
-          if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
-          const value = response.result.value
-          if (value.kind === 'conflict') return { ok: false, code: 'E_BUSY', message: 'schedule changed since it was read' }
-          if (value.kind === 'not-found') return { ok: false, code: 'E_NOT_FOUND', message: 'schedule not found' }
-          if (value.kind !== 'task') return { ok: false, code: 'E_INTERNAL', message: 'schedule edit returned an unexpected deletion' }
-          const legacy = toLegacyScheduleView(value.task)
-          if (legacy === undefined) return { ok: false, code: 'E_PROTOCOL', message: 'schedule cannot be represented in the session-scoped view' }
-          return { ok: true, value: legacy }
-        },
-      )
-      if (result.ok) {
-        this.record('s2c.schedule.changed', {})
-        return { ok: true, value: result.value as ScheduleTaskViewLike, replayed: result.replayed }
-      }
-      return { ok: false, code: result.code, message: result.message ?? result.code, replayed: result.replayed }
+    const request = {
+      sessionId: payload.sessionId,
+      id: payload.id,
+      expected: payload.expected,
+      title: payload.title,
+      prompt: payload.prompt,
+      change: payload.change,
     }
-    const { clientRequestId, ...request } = payload
     const result = await this.scheduleMutations.dispatch(
       deviceId,
-      clientRequestId,
+      payload.clientRequestId,
       request,
       async () => {
-        const response = await schedule.update({ rpcId: randomUUID(), payload: request })
-        if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule update returned no result' }
+        const current = await schedule.view({ rpcId: randomUUID(), payload: { id: payload.id } })
+        if (!current.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule view returned no result' }
+        if (!current.result.ok) return wireErrorOf('schedule', current.result.error)
+        if (current.result.value.kind === 'not-found') return { ok: false, code: 'E_NOT_FOUND', message: 'schedule not found' }
+        const currentTask = current.result.value.task
+        if (!legacyScheduleMatchesExpected(currentTask, payload.expected)) {
+          return { ok: false, code: 'E_BUSY', message: 'schedule changed since it was read' }
+        }
+        const patch = hostPatchFromLegacyUpdate(payload)
+        if (Object.keys(patch).length === 0) {
+          // 旧帧允许只带 expected 的无操作更新；宿主级 edit 要求 patch 非空，
+          // 因此按成功返回当前任务，不写 Host。
+          const legacy = toLegacyScheduleView(currentTask)
+          if (legacy === undefined) return { ok: false, code: 'E_PROTOCOL', message: 'schedule cannot be represented in the session-scoped view' }
+          return { ok: true, value: legacy }
+        }
+        const response = await schedule.edit({
+          rpcId: randomUUID(),
+          payload: { id: payload.id, action: 'update', patch },
+        })
+        if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule edit returned no result' }
         if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
         const value = response.result.value
-        if (value.updated !== true || value.record === undefined) {
-          return { ok: false, code: wireCodeFor('schedule', value.code), message: value.code ?? 'schedule update rejected' }
-        }
-        return { ok: true, value: value.record }
+        if (value.kind === 'conflict') return { ok: false, code: 'E_BUSY', message: 'schedule changed since it was read' }
+        if (value.kind === 'not-found') return { ok: false, code: 'E_NOT_FOUND', message: 'schedule not found' }
+        if (value.kind !== 'task') return { ok: false, code: 'E_INTERNAL', message: 'schedule edit returned an unexpected deletion' }
+        const legacy = toLegacyScheduleView(value.task)
+        if (legacy === undefined) return { ok: false, code: 'E_PROTOCOL', message: 'schedule cannot be represented in the session-scoped view' }
+        return { ok: true, value: legacy }
       },
     )
     if (result.ok) {
@@ -2166,46 +2084,22 @@ export class HostBridge {
     const schedule = this.apiProxy.schedule
     if (schedule === undefined) return { ok: false, code: 'E_UNSUPPORTED', message: 'schedules unavailable on this host version' }
     // 旧帧映射：delete 直接走宿主级 edit({action:"delete"})。
-    if (schedule.mode === 'host') {
-      const result = await this.scheduleMutations.dispatch(
-        deviceId,
-        payload.clientRequestId,
-        { sessionId: payload.sessionId, id: payload.id },
-        async () => {
-          const response = await schedule.edit({
-            rpcId: randomUUID(),
-            payload: { id: payload.id, action: 'delete' },
-          })
-          if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule delete returned no result' }
-          if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
-          const value = response.result.value
-          if (value.kind === 'deleted') return { ok: true, value: { id: value.id, deleted: true as const } }
-          if (value.kind === 'not-found') return { ok: false, code: 'E_NOT_FOUND', message: 'schedule not found' }
-          if (value.kind === 'conflict') return { ok: false, code: 'E_BUSY', message: 'schedule changed since it was read' }
-          return { ok: false, code: 'E_INTERNAL', message: 'schedule delete returned an updated task' }
-        },
-      )
-      if (result.ok) {
-        this.record('s2c.schedule.changed', {})
-        return { ok: true, value: result.value as { id: string; deleted: true }, replayed: result.replayed }
-      }
-      return { ok: false, code: result.code, message: result.message ?? result.code, replayed: result.replayed }
-    }
     const result = await this.scheduleMutations.dispatch(
       deviceId,
       payload.clientRequestId,
       { sessionId: payload.sessionId, id: payload.id },
       async () => {
-        const response = await schedule.delete({
+        const response = await schedule.edit({
           rpcId: randomUUID(),
-          payload: { sessionId: payload.sessionId, id: payload.id },
+          payload: { id: payload.id, action: 'delete' },
         })
         if (!response.result) return { ok: false, code: 'E_INTERNAL', message: 'schedule delete returned no result' }
         if (!response.result.ok) return wireErrorOf('schedule', response.result.error)
-        if (response.result.value.deleted !== true) {
-          return { ok: false, code: 'E_NOT_FOUND', message: response.result.value.code ?? 'schedule not found' }
-        }
-        return { ok: true, value: { id: response.result.value.id, deleted: true as const } }
+        const value = response.result.value
+        if (value.kind === 'deleted') return { ok: true, value: { id: value.id, deleted: true as const } }
+        if (value.kind === 'not-found') return { ok: false, code: 'E_NOT_FOUND', message: 'schedule not found' }
+        if (value.kind === 'conflict') return { ok: false, code: 'E_BUSY', message: 'schedule changed since it was read' }
+        return { ok: false, code: 'E_INTERNAL', message: 'schedule delete returned an updated task' }
       },
     )
     if (result.ok) {

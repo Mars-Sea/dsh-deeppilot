@@ -5,8 +5,8 @@
  * 再凭进程启动令牌换一个按 `主机:端口` 隔离的 Cookie。预览连接让手机在自己的回环地址上
  * 监听同一个端口，Host / Origin 与电脑本机访问完全一致，用户不必手动复制令牌。
  *
- * 实际监听地址来自 `webServer`。0.2.3 起由鉴权插件贡献登录地址，
- * 旧宿主由 `connection.authenticatedUrl` 签发。网页端必须监听回环 HTTP，
+ * 实际监听地址来自 `webServer`。鉴权插件贡献登录地址。
+ * 网页端必须监听回环 HTTP，
  * 手机经预览隧道才能使用同一个 Host 和 Cookie 作用域。
  *
  * 返回的 `url` 带登录令牌，属于凭据：调用方只能把它经已认证的预览连接下发，不得写日志。
@@ -20,12 +20,6 @@ export interface HostWebServerLike {
   readonly port?: number
   /** 监听的根地址，如 `http://127.0.0.1:3080`；监听前或地址无法写成 URL 时抛错。 */
   getOrigin?(): string
-}
-
-/** 宿主 connection 服务里本模块用到的部分。 */
-export interface HostWebConnectionLike {
-  /** 给网页端根地址加上进程登录令牌（`?token=…`）。 */
-  authenticatedUrl?(baseUrl: string): string
 }
 
 export interface HostWebEntryUrl {
@@ -57,17 +51,14 @@ export function hostWebTarget(webServer: HostWebServerLike | undefined): Loopbac
 /** 生成登录地址；任一前提不满足时返回 undefined（对应 reason `hostweb-unavailable`）。 */
 export function resolveHostWeb(
   webServer: HostWebServerLike | undefined,
-  connection: HostWebConnectionLike | undefined,
-  entryUrls?: (baseUrl: string) => readonly HostWebEntryUrl[],
+  entryUrls: (baseUrl: string) => readonly HostWebEntryUrl[],
 ): HostWebEntry | undefined {
   const target = hostWebTarget(webServer)
   if (target === undefined) return undefined
   const baseUrl = target.origin + '/'
   try {
-    const url = typeof connection?.authenticatedUrl === 'function'
-      ? connection.authenticatedUrl(baseUrl)
-      : entryUrls?.(baseUrl).find(entry => isLoginUrl(entry.url, target.origin))?.url
-    if (url !== undefined && isLoginUrl(url, target.origin)) return { target, url }
+    const login = entryUrls(baseUrl).find(entry => isLoginUrl(entry.url, target.origin))
+    if (login !== undefined) return { target, url: login.url }
   } catch {
     return undefined
   }

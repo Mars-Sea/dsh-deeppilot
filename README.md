@@ -41,7 +41,7 @@ Host on your own computer and does not replace or modify the DSH Web UI.
   inside the app, with its live reload intact.
 - Desktop web UI (off by default): open this computer's DSH Web UI, including
   third-party plugin pages, inside the app.
-- Quiet scheduled runs (DSH 0.2.2+): write a rule into a scheduled task's
+- Quiet scheduled runs: write a rule into a scheduled task's
   prompt, such as "if everything is normal, don't notify me". The agent can
   then skip that run's "task completed" notification with the
   `deeppilot_skip_completion_notice` tool. Approvals, questions and errors
@@ -53,26 +53,15 @@ Host on your own computer and does not replace or modify the DSH Web UI.
 
 ## Install from npm
 
-This source checkout targets Node.js 22+ and DSH hosts inside the rolling
-compatibility range `>=0.2.1-rc.5 <0.3.0-0` with a `web` profile. The lower
-bound is the newest audited `rc` release at decision time — npm `latest` and
-`next` both point at `0.2.1-rc.5` — and every later `0.2.x` release is admitted
-automatically, including the `alpha` channel release `0.2.2-alpha.2` and later
-alphas, later rc releases, and `0.2.x` GA. `0.3.0` and its prereleases stay
-refused until a fresh audit. DSH checks a plugin's declared requirements before
-composing a profile, on every start rather than only on install, so a host
-outside the range refuses to activate this plugin. From DSH `0.2.1-alpha.4` on,
-that check reads `engines.dsh` and ignores `peerDependencies`; older hosts know
-only the peer range, so both declare the identical range. The package includes
-Funnel helpers for macOS, Linux, and Windows on amd64/arm64; trusted-LAN mode
-does not require the helper. The helper is built with Go 1.27, which requires
-**macOS 13 Ventura or later**: on macOS 12 and earlier, Funnel mode cannot
-start, while trusted-LAN mode keeps working.
+Use a DSH Web profile on Node.js 24.9 or newer. This branch builds against
+DSH `0.2.3-alpha.2` and declares the range `>=0.2.3-alpha.2 <0.3.0-0`.
+DSH checks that range before composing the profile on each startup. Later
+`0.2.x` versions are admitted by the range. This branch was verified on
+`0.2.3-alpha.2`, and published plugin versions carry their own requirements.
 
-The current working tree declares that range in `engines.dsh` and
-`peerDependencies` and is built/typechecked against `0.2.1-rc.5`. A previously
-published plugin package may still carry its own older compatibility
-declaration until a release is made from this tree.
+The npm package includes Funnel helpers for macOS, Linux, and Windows on
+amd64/arm64. On macOS, Funnel requires **macOS 13 Ventura or later**.
+Trusted-LAN mode can run without the helper.
 
 ```sh
 dsh plugin --profile web add dsh-deeppilot

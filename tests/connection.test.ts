@@ -588,7 +588,7 @@ test('history page echoes the request id so the client can settle its timeout', 
 })
 
 test('attachment read-back validates the payload and relays host image data', async () => {
-  const { ws, authenticate } = await makeConnection()
+  const { ws, authenticate } = await attachmentConnection('aGk=')
   authenticate()
   ws.sent.length = 0
 
@@ -613,14 +613,7 @@ test('attachment read-back validates the payload and relays host image data', as
 test('attachment read-back respects the client frame limit instead of overflowing it', async () => {
   // 1.5 MiB 的 base64：超过旧 App 的 1 MiB 默认上限，但在 2 MiB 固定上限之内。
   const data = 'A'.repeat(1536 * 1024)
-  const { ws, authenticate } = await makeConnection({
-    proxyOverrides: {
-      sessions: {
-        ...makeProxy().sessions,
-        attachment: async () => ({ result: { ok: true, value: { attachment: { mediaType: 'image/png' }, data } } }),
-      },
-    },
-  })
+  const { ws, authenticate } = await attachmentConnection(data)
   authenticate()
   ws.sent.length = 0
 
@@ -641,14 +634,7 @@ test('attachment read-back respects the client frame limit instead of overflowin
 
 test('attachment read-back caps frames at half the outbound buffer even for large client limits', async () => {
   const data = 'A'.repeat(MAX_OUTBOUND_BUFFER_BYTES / 2)
-  const { ws, authenticate } = await makeConnection({
-    proxyOverrides: {
-      sessions: {
-        ...makeProxy().sessions,
-        attachment: async () => ({ result: { ok: true, value: { attachment: { mediaType: 'image/png' }, data } } }),
-      },
-    },
-  })
+  const { ws, authenticate } = await attachmentConnection(data)
   authenticate()
   ws.sent.length = 0
 
@@ -659,7 +645,7 @@ test('attachment read-back caps frames at half the outbound buffer even for larg
 })
 
 test('attachment read-back waits for the outbound buffer to drain before sending', async () => {
-  const { ws, authenticate } = await makeConnection()
+  const { ws, authenticate } = await attachmentConnection('aGk=')
   authenticate()
   ws.sent.length = 0
   ws.bufferedAmount = 1024 * 1024
@@ -679,6 +665,11 @@ function attachmentConnection(data: string) {
     proxyOverrides: {
       sessions: {
         ...makeProxy().sessions,
+        history: async () => ({ result: { ok: true, value: { hasMore: false, events: [{
+          event: { type: 'user/message', seq: 1, data: { content: [{ type: 'image', attachment: {
+            attachmentId: 'att-9', mediaType: 'image/png', bytes: Buffer.byteLength(data, 'base64'), width: 1, height: 1,
+          } }] } },
+        }] } } }),
         attachment: async () => ({ result: { ok: true, value: { attachment: { mediaType: 'image/png' }, data } } }),
       },
     },

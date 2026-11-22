@@ -74,11 +74,8 @@ export const HOST_CAPABILITY_PROBES: Record<ProbedCapability, (proxy: ApiProxyLi
   // 五个会话级 schedule 帧都只要求 Schedule 服务存在；历史上按 list&&create 探测
   // 的取值会在只实现了部分方法的 Host 上把位压成 false，而方法体内又只判服务存在。
   schedules: (proxy) => proxy.schedule !== undefined,
-  // 宿主级能力位与 schedules 同源：取同一个已解析 adapter 的判别位，而不是再按
-  // 控制器的某个方法探一遍（该方法探测与能力位曾漂移过两次，见文件头）。
-  schedulesHost: (proxy) => proxy.schedule?.mode === 'host',
-  // 排队快照来自 inbox 投影，增删转向走 session.updateQueue；两者在支持的 DSH
-  // 版本里同时提供（DSH_RELEASE_MEMORY 2026-10-24 实测 0.2.0-rc.2），因此只探方法。
+  schedulesHost: (proxy) => proxy.schedule !== undefined,
+  // 排队快照来自 inbox 投影，移除和转向走 session.updateQueue。
   promptQueue: (proxy) => typeof proxy.sessions.updateQueue === 'function',
   sessionMarkdown: (proxy) => proxy.commands?.markdownAvailable === true && typeof proxy.commands?.export === 'function',
   assistantStream: (proxy) => proxy.assistantStreamAvailable === true,

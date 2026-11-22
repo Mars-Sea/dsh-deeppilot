@@ -426,7 +426,7 @@ async function run(options: { interactions: boolean; prompt: boolean }): Promise
   const tail = (await tailPromise).payload
   assert('6b. c2s.session.open 返回尾部消息', Array.isArray(tail?.messages), `${tail?.messages?.length ?? 0} 条`)
   const page = expect(
-    await client.request('c2s.session.history', { sessionId, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 20 }),
+    await client.request('c2s.session.history', { sessionId, beforeSeq: tail?.oldestSeq ?? 0, limit: 20 }),
     's2c.history.page',
   ).payload
   assert('6c. c2s.session.history 分页可用', Array.isArray(page?.messages), `hasMore=${page?.hasMore}`)
@@ -488,15 +488,22 @@ async function run(options: { interactions: boolean; prompt: boolean }): Promise
       'turn.end',
     ).then(() => true).catch(() => false)
     stop()
-    const finals = client.received
-      .filter((f) => f.type === 's2c.session.event' && f.payload?.kind === 'message.final')
-      .map((f) => String(f.payload?.data?.text ?? ''))
+    const final = client.received.findLast((f) =>
+      f.type === 's2c.session.event' && f.payload?.sessionId === sessionId && f.payload?.kind === 'message.final',
+    )
+    const answer = String(final?.payload?.data?.text ?? '')
     assert(
       '9. 真实提问跑完一个 turn 并收到回答',
       receipt?.status !== 'rejected' && ended,
       `投递回执=${receipt?.status ?? '无'}${receipt?.code ? '/' + receipt.code : ''} 已见事件=[${[...kinds].join(',') || '无'}]`
-        + (finals.length ? ' 末条回答: ' + finals[finals.length - 1].slice(0, 80) : ''),
+        + (answer ? ' 末条回答: ' + answer.slice(0, 80) : ''),
     )
+    if (Number.isSafeInteger(final?.payload?.seq)) {
+      const older = expect(await client.request('c2s.session.history', {
+        sessionId, beforeSeq: final!.payload.seq, limit: 20,
+      }), 's2c.history.page').payload
+      assert('9b. 使用实际事件游标读取更早历史', older?.messages?.length > 0, `${older?.messages?.length ?? 0} 条`)
+    }
   } else {
     record('9. 真实提问跑完一个 turn 并收到回答', 'SKIP', '未加 --prompt')
   }

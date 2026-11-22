@@ -1414,19 +1414,13 @@ DSH `schedule/changed` 会被投影为无正文的 `s2c.schedule.changed`，客�
 
 ## Schedule 宿主级任务扩展（可选 v2 能力）
 
-`welcome.capabilities.schedulesHost=true` 表示 Host 的计划任务已改为**宿主级任务
-模型**（DSH `0.2.2-alpha.3` 起）：任务不再绑定单一 Session，而是带一个交付目标
-（`target`），并可能有 `active` / `paused` / `ended` 状态。该位缺省 false，旧
-客户端忽略它即可。`schedulesHost=false` 时本节所有帧返回 `E_UNSUPPORTED`，
-客户端只能使用上一节的会话级帧。
+`welcome.capabilities.schedulesHost=true` 启用宿主级任务帧。任务可带不同的交付
+目标（`target`），并可能有 `active`、`paused` 或 `ended` 状态。该位缺省为
+false，本节的帧在该位为 false 时返回 `E_UNSUPPORTED`。
 
-`schedules=true` 与 `schedulesHost` 相互独立：`schedules` 表示宿主挂载了
-Schedule 服务（旧帧可用），`schedulesHost` 表示新帧可用。宿主为宿主级模型时
-Bridge **仍继续服务旧帧**（映射规则见本节末），因此旧 App 不会因为宿主升级而
-失效；新 App 优先使用新帧。
-
-能力位由 Host 形状决定，不按版本号字符串判断。所有帧与旧帧一样要求设备
-scope `schedule.manage` 与 `sessions.read`，widget 短连接不允许调用。
+`schedules` 启用上一节的会话级帧。当前插件在 Host 挂载计划任务服务时同时发布两位。
+旧 App 的请求按本节末的规则映射到宿主级任务。所有帧要求设备 scope
+`schedule.manage` 与 `sessions.read`，widget 短连接不允许调用。
 
 ### 任务视图 `schedule.host.task`
 

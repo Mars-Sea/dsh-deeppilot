@@ -43,7 +43,7 @@ export class DshCommandApi implements CommandApi {
   get markdownAvailable(): boolean {
     const connection = this.connection()
     // 共享 fetch 方法在无导出插件时也存在；实际路由和正文读取依赖都就绪才宣告能力。
-    // alpha2 的连接服务持有此路由表；旧宿主或未知实现没有表时保守关闭入口。
+    // alpha2 的连接服务持有此路由表；没有表时保守关闭入口。
     const route = connection?.fetchRoutes instanceof Map ? connection.fetchRoutes.get('/api/session.markdown') : undefined
     return typeof connection?.createSharedFetchHandler === 'function' &&
       route?.methods instanceof Set && route.methods.has('GET') && typeof route.fetch === 'function' &&
@@ -52,8 +52,8 @@ export class DshCommandApi implements CommandApi {
   private connection(): any { return this.ctx.get('connection') }
   private owner(): unknown {
     const connection = this.connection()
-    // 独立的一元调用身份不参与审批竞争；旧版使用连接提供的 operator。
-    return this.peer ??= connection?.createPeer?.({ principal: { kind: 'owner' }, interactions: 'none' }) ?? connection?.operator
+    // 独立的一元调用身份不参与审批竞争。
+    return this.peer ??= connection.createPeer({ principal: { kind: 'owner' }, interactions: 'none' })
   }
   private invoke(namespace: string, method: string, args: Record<string, unknown>): Promise<any> {
     const gateway = this.ctx.get('typertGateway') as any

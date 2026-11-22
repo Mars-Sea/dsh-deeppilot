@@ -49,28 +49,14 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
 - For any DSH release audit or compatibility decision, read and update
   `docs/DSH_RELEASE_MEMORY.md`; keep install, runtime, and phone-protocol risk
   classified separately.
-- The DSH compatibility declaration is one rolling range, not a list of
-  releases: `package.json` `engines.dsh` and all ten `@deepseek-ai/dsh*` peers
-  name `>=0.2.1-rc.5 <0.3.0-0`. The lower bound is the newest audited `rc`
-  release at decision time (npm `latest` and `next` both point at
-  `0.2.1-rc.5`); every later `0.2.x` release activates without a per-release
-  source audit, and the current `alpha` channel release `0.2.2-alpha.2` sits
-  inside the same range because it sorts after the lower bound. Write
-  `<0.3.0-0`, not `<0.3.0`, for the upper bound: DSH evaluates the range with
-  `semver.satisfies(..., { includePrerelease: true })`, and `<0.3.0` would admit
-  `0.3.0-rc.1`. The range lives in two places that must agree: `engines.dsh`,
-  which DSH `0.2.1-alpha.4` and later evaluate alone, and `peerDependencies`,
-  which older hosts still evaluate and npm reads at install time. DSH evaluates
-  them before composing a profile on every start, not only on install, so a host
-  outside the range refuses to activate the plugin. A new DSH release inside the
-  range needs no declaration change; adjusting either bound is a deliberate
-  policy change that needs `docs/DSH_RELEASE_MEMORY.md`,
-  `tests/compatibility-metadata.test.ts`, `package-lock.json`, and both READMEs
-  updated in the same change. Audit a release when it would move the lower
-  bound, at each `0.x` minor boundary (the `0.3.0` gate), or when a host inside
-  the range is found to break at runtime, and record the outcome in
-  `docs/DSH_RELEASE_MEMORY.md`. The policy and its reversals are recorded in
-  `docs/adr/0001-dsh-compatibility-policy.md`.
+- Keep `engines.dsh` and the ten `@deepseek-ai/dsh*` peer ranges in sync at
+  `>=0.2.3-alpha.2 <0.3.0-0`. Pin development DSH packages and the schema check
+  to the exact floor. The Host includes prereleases in its compatibility
+  evaluation, so `<0.3.0-0` excludes the next minor and all of its prereleases.
+  A floor or ceiling change needs a compatible lockfile, metadata tests, both
+  READMEs, and the release memory. Audit a change that moves a bound or breaks
+  runtime behavior within the range. Keep Host version support separate from
+  phone protocol v2 and persisted data compatibility.
 
 ### Authorization and completion
 

@@ -14,8 +14,7 @@
  *   的记录；HostBridge 在 user/message 与 turn.end 处调用它。
  * - quietCompletionTool：面向模型的工具定义，由 index.ts 注册到宿主 `ctx.tools`。
  *
- * 只在宿主级计划任务（`schedulesHost`，DSH 0.2.2 起）上注册：0.2.1 的
- * `tools.register` 不支持 `when`，多余参数会被静默忽略，工具会变成全局可见。
+ * 只在 Host 挂载计划任务服务时注册。工具的 `when` 限定为计划任务驱动的轮次。
  */
 
 export const QUIET_COMPLETION_TOOL_NAME = 'deeppilot_skip_completion_notice'
@@ -73,7 +72,7 @@ function insertedOf(event: { type: string; data?: unknown }): { target: unknown;
 }
 
 /**
- * 判定当前这一轮是否由计划任务投递驱动（同步读宿主会话日志，DSH 0.2.2-rc.1 实测形状）。
+ * 判定当前这一轮是否由计划任务投递驱动（同步读宿主会话日志）。
  *
  * 宿主把待处理消息先拼进 inbox（`agent/inbox/spliced`，带条目本体与目标队列），
  * `turn/start` 之后的拼接只是取走（`removedCount`，不带内容），条目随后才落成

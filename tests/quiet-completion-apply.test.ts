@@ -21,17 +21,10 @@ function fakeTools() {
   }
 }
 
-/** 形状探测只看 edit 存在、update 不存在（DshApiProxy.isHostScheduleController）。 */
 const hostSchedule = {
   edit: async () => ({}),
   list: async () => ({ tasks: [], shown: 0, total: 0, limit: 500, offset: 0 }),
 }
-/** 会话级宿主：带 update。 */
-const legacySchedule = {
-  update: async () => ({}),
-  list: async () => [],
-}
-
 test('宿主级计划任务：注册带 when 条件的工具，卸载时撤销', async (t) => {
   const tools = fakeTools()
   const harness = await bootApply({ services: { tools: tools.service, schedule: hostSchedule } })
@@ -42,14 +35,9 @@ test('宿主级计划任务：注册带 when 条件的工具，卸载时撤销',
   assert.equal(tools.disposedCount(), 1)
 })
 
-test('会话级计划任务或没有 schedule 服务：不注册工具', async (t) => {
-  for (const schedule of [legacySchedule, undefined]) {
-    const tools = fakeTools()
-    const services: Record<string, unknown> = { tools: tools.service }
-    if (schedule !== undefined) services.schedule = schedule
-    const harness = await bootApply({ services })
-    t.after(() => harness.dispose())
-    assert.deepEqual(tools.registered, [])
-    await harness.dispose()
-  }
+test('没有 schedule 服务时不注册工具', async (t) => {
+  const tools = fakeTools()
+  const harness = await bootApply({ services: { tools: tools.service, schedule: undefined } })
+  t.after(() => harness.dispose())
+  assert.deepEqual(tools.registered, [])
 })

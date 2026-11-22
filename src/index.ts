@@ -36,7 +36,7 @@ import { rejectUpgrade, requestClientIdentity } from './phone-http.ts'
 import { AuthRateLimiter } from './auth-rate-limit.ts'
 import { MAX_APP_VERSION_CHARS, MAX_DEVICE_NAME_CHARS, sanitizeDeviceField } from './connection-policy.ts'
 import { localEndpointURLs } from './local-policy.ts'
-import { resolveHostWeb, type HostWebConnectionLike, type HostWebEntryUrl, type HostWebServerLike } from './host-web.ts'
+import { resolveHostWeb, type HostWebEntryUrl, type HostWebServerLike } from './host-web.ts'
 import { welcomeRoutes } from './welcome-routes.ts'
 import { closeServer, createPhoneServer, listen, type PhoneServerTransportError } from './phone-server.ts'
 import { loadOrCreateLanTlsIdentity, type LanTlsIdentity } from './lan-tls.ts'
@@ -413,16 +413,15 @@ export function apply(ctx: Context, options: unknown): void {
       }, 'deeppilot: optional plugin updater')
     },
   )
-  // 新 Host 用 webServer 的事件请求登录地址，旧 Host 仍从 connection 获取。
+  // 通过 webServer 的事件请求登录地址。
   // 每次需要时现算，避免在插件里保存登录凭据。
   type HostWebContext = SubContext & {
     webServer: HostWebServerLike
-    connection: HostWebConnectionLike
     emit(source: HostWebServerLike, event: 'webserver/entry-url', base: string, entries: HostWebEntryUrl[]): void
   }
   let hostWebContext: HostWebContext | undefined
   ;(ctx as unknown as { inject: (deps: string[], fn: (sub: unknown) => void) => void }).inject(
-    ['webServer', 'connection'],
+    ['webServer'],
     (sub) => {
       const webCtx = sub as HostWebContext
       hostWebContext = webCtx
@@ -434,7 +433,7 @@ export function apply(ctx: Context, options: unknown): void {
   const hostWebEntry = () => {
     const webCtx = hostWebContext
     if (webCtx === undefined) return undefined
-    return resolveHostWeb(webCtx.webServer, webCtx.connection, (baseUrl) => {
+    return resolveHostWeb(webCtx.webServer, (baseUrl) => {
       const entries: HostWebEntryUrl[] = []
       webCtx.emit(webCtx.webServer, 'webserver/entry-url', baseUrl, entries)
       return entries
@@ -863,8 +862,7 @@ export function apply(ctx: Context, options: unknown): void {
         if (state.bridge === bridge) state.bridge = undefined
         bridge.dispose()
       }, 'deeppilot: host streams')
-      // 计划任务按需完成通知（#35）：只在宿主级计划任务（0.2.2 起）上注册。0.2.1 的
-      // tools.register 不支持 `when`，工具会变成所有会话可见，见 quiet-completion.ts。
+      // 工具只在挂载宿主级计划任务时注册，见 quiet-completion.ts。
       // 等 schedule 服务就绪再判断：它可能晚于桥接层挂载（见 DshApiProxy.resolveSchedule）。
       // 放在 host streams 的清理之后：注册失败也不能让桥接层失去卸载路径。
       ;(apiCtx as unknown as { inject: (deps: string[], fn: (sub: unknown) => void) => void }).inject(

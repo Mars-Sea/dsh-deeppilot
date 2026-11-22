@@ -21,6 +21,7 @@ function fixture() {
       fileUrl: (path: string) => 'file://' + path, processPath: (path: string) => path },
     sessionQuery: { readEvent: async ({ sessionId, seq }: any) => sessionId === 's' ? { session: { cwd: '/project' }, target: events.find(e => e.seq === seq) } : undefined },
     workspaceFiles: {
+      scopeOf: async (sessionId: string) => ({ sessionId, workspaceRoot: '/project' }),
       stat: async () => ({ bytes: bytes.length, version }),
       read: async (_: any, path: string, range: any) => { reads++; const value = { text: 'hello\n世界', offset: range.offset, lines: 2, eof: true, version }; if (mutate) version = 'v2'; return value },
       readBytes: async (_: any, path: string, { range }: any) => { reads++; assert.equal(path, '/outside/result.txt'); return { data: bytes.subarray(range.offset, range.offset + range.length), offset: range.offset, eof: true, version } },

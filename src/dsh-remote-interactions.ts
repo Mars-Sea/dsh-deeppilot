@@ -8,12 +8,8 @@
  * Host waterfall listener or replacing the official Web composer.
  */
 import { Context } from '@deepseek-ai/cordis'
-import * as Cordis from '@deepseek-ai/cordis'
 
-/**
- * One Peer admitted to the Host. DSH names it on every in-process carrier call
- * from 0.2.1-alpha.3 on; the Host's own operator Peer stands in before that.
- */
+/** Peer used by the in-process Host carrier. */
 export interface HostPeerLike {
   readonly principal: { readonly kind: string }
   readonly signal: AbortSignal
@@ -21,19 +17,12 @@ export interface HostPeerLike {
 }
 
 interface FetchHandlerLike {
-  /** `peer` is required from alpha.3 on and ignored by earlier hosts. */
-  fetch(request: Request, peer: HostPeerLike | undefined): Promise<Response>
+  fetch(request: Request, peer: HostPeerLike): Promise<Response>
 }
 
 interface HostConnectionLike {
   createSharedFetchHandler(channel: '/api'): FetchHandlerLike
-  /**
-   * alpha.3's only entry point that can name both the principal and the
-   * forwarded-event participation. Absent before it, where the service instead
-   * holds the operator Peer every call speaks for.
-   */
-  createPeer?(options: { principal: { kind: 'owner' }; interactions: 'answer' | 'none' }): HostPeerLike
-  operator?: HostPeerLike
+  createPeer(options: { principal: { kind: 'owner' }; interactions: 'answer' }): HostPeerLike
 }
 
 interface HostWireStreamLike {
@@ -41,7 +30,7 @@ interface HostWireStreamLike {
     endpoint: string,
     payload: unknown,
     uplink: undefined,
-    peer: HostPeerLike | undefined,
+    peer: HostPeerLike,
     signal: AbortSignal,
   ): Promise<AsyncIterable<unknown>>
 }
@@ -76,41 +65,12 @@ interface ClientTypertLike {
   }
 }
 
-/** Carrier inputs the explicit Connection installer accepts on both audited hosts. */
-interface ClientConnectionInstallOptionsLike {
-  transport: ClientTransportHooksLike
-  interactions: 'answer' | 'none'
-}
-
 interface ClientPluginModule {
   apply(ctx: Context): void
-  /**
-   * Explicit installer, present on both audited hosts. Without it the carrier
-   * can only arrive through the process global `apply()` reads, and the
-   * forwarded-event participation cannot be named at all.
-   */
-  installConnection?(ctx: Context, options: ClientConnectionInstallOptionsLike): void
 }
 
-/**
- * Install the Connection service on the resident Client.
- *
- * alpha.3 selects `interactions: 'none'` for any caller that supplies no page
- * location, and that mode forbids the forwarded-event stream this resident
- * client exists to answer. Only the explicit installer can name the
- * participation, so it takes precedence; `apply` stays for a host older than
- * the installer, reading the carrier from the process global set around it.
- */
-export function installResidentConnection(
-  connection: ClientPluginModule,
-  ctx: Context,
-  transport: ClientTransportHooksLike,
-): void {
-  if (typeof connection.installConnection === 'function') {
-    connection.installConnection(ctx, { transport, interactions: 'answer' })
-    return
-  }
-  connection.apply(ctx)
+interface ClientConnectionModule {
+  installConnection(ctx: Context, options: { transport: ClientTransportHooksLike; interactions: 'answer' }): void
 }
 
 export interface RemoteApprovalRequest {
@@ -130,102 +90,23 @@ export interface DshRemoteInteractionHandlers {
   question(sessionId: string, request: RemoteQuestionRequest, next: () => Promise<unknown>): unknown
 }
 
-type TransportGlobal = typeof globalThis & {
-  __DSH_TRANSPORT__?: ClientTransportHooksLike
-}
-
-interface ClientBundleDefinition {
-  id: string
-  factory(require: (id: string) => unknown): unknown
-}
-
-type ClientBundleWindow = {
-  __ModuleLoader__: {
-    load(definition: ClientBundleDefinition): void
-  }
-}
-
-type LoaderGlobal = {
-  window?: ClientBundleWindow
-}
-
 interface ClientFaces {
   typert: ClientPluginModule
-  connection: ClientPluginModule
+  connection: ClientConnectionModule
   gateway: ClientPluginModule
 }
 
 let clientFaces: Promise<ClientFaces> | undefined
 
-/**
- * Load DSH's browser-distributed Client faces into a tiny Host-side module
- * table. Published `lib/client.js` files register with `window.__ModuleLoader__`
- * rather than exporting ESM values, so a normal Node import cannot consume
- * them. The shim runs only while the three official bundles register; their
- * apply functions then operate against a non-browser Cordis Context.
- */
-function pluginModule(value: unknown, specifier: string): ClientPluginModule {
-  if (typeof value !== 'object' || value === null) throw new Error(`${specifier} Client bundle returned no exports`)
-  const record = value as Record<string, unknown>
-  if (typeof record.apply !== 'function') throw new Error(`${specifier} has no Client apply() export`)
-  return value as unknown as ClientPluginModule
-}
-
-/**
- * Register one loaded Client face when the browser banner did not.
- *
- * alpha.3 resolves these specifiers through the `node` export condition to a
- * bundle that exports the face as ordinary ESM and never calls
- * `window.__ModuleLoader__.load`, while earlier hosts only ship the banner
- * shape. A banner registration wins, because it is what the bundle's own
- * internal `require()` calls resolve against; the ESM namespace is the fallback.
- */
-export function adoptClientModule(
-  modules: Map<string, unknown>,
-  specifier: string,
-  loaded: unknown,
-): void {
-  const id = specifier.replace(/\/client$/, '')
-  if (!modules.has(id)) modules.set(id, loaded)
-}
-
-async function loadClientFaces(): Promise<ClientFaces> {
-  clientFaces ??= (async () => {
-    const modules = new Map<string, unknown>([['@deepseek-ai/cordis', Cordis]])
-    const loaderGlobal = globalThis as unknown as LoaderGlobal
-    const previousWindow = loaderGlobal.window
-    loaderGlobal.window = {
-      __ModuleLoader__: {
-        load: definition => {
-          const exports = definition.factory((id) => {
-            if (!modules.has(id)) throw new Error(`resident DSH Client cannot resolve ${JSON.stringify(id)}`)
-            return modules.get(id)
-          })
-          modules.set(definition.id, exports)
-        },
-      },
-    }
-    try {
-      // Use variable specifiers to preserve DSH's Host/Client TypeScript face
-      // split; static imports would merge incompatible Context declarations.
-      for (const specifier of [
-        '@deepseek-ai/dsh-typert-registry/client',
-        '@deepseek-ai/dsh-client-connection/client',
-        '@deepseek-ai/dsh-api-gateway/client',
-      ]) {
-        adoptClientModule(modules, specifier, await import(specifier))
-      }
-    } finally {
-      if (previousWindow === undefined) delete loaderGlobal.window
-      else loaderGlobal.window = previousWindow
-    }
-    return {
-      typert: pluginModule(modules.get('@deepseek-ai/dsh-typert-registry'), '@deepseek-ai/dsh-typert-registry/client'),
-      connection: pluginModule(modules.get('@deepseek-ai/dsh-client-connection'), '@deepseek-ai/dsh-client-connection/client'),
-      gateway: pluginModule(modules.get('@deepseek-ai/dsh-api-gateway'), '@deepseek-ai/dsh-api-gateway/client'),
-    }
-  })()
-  return clientFaces
+function loadClientFaces(): Promise<ClientFaces> {
+  // Variable specifiers keep Host and Client Cordis declaration merging separate.
+  const specifiers = [
+    '@deepseek-ai/dsh-typert-registry/client',
+    '@deepseek-ai/dsh-client-connection/client',
+    '@deepseek-ai/dsh-api-gateway/client',
+  ]
+  return clientFaces ??= Promise.all(specifiers.map(specifier => import(specifier)))
+    .then(([typert, connection, gateway]) => ({ typert, connection, gateway }))
 }
 
 const agentScopeKey = Symbol('deeppilot.dsh-client.agent-scope')
@@ -247,30 +128,12 @@ function createAgentScope(ctx: Context, identity: string): Context {
   })
 }
 
-/**
- * Mint the Peer every in-process carrier call speaks for.
- *
- * alpha.3 requires a Peer on `fetch` and on `wireStream.open`, and refuses a
- * forwarded-event stream unless that Peer declares `interactions: 'answer'`.
- * Its connection service therefore grows `createPeer`, the only entry point
- * that can name the principal and the participation together. Before that the
- * service holds one operator Peer and defaults every absent Peer to it, so that
- * instance is the drop-in answer. A host with neither yields undefined, which
- * only the pre-alpha.3 carrier accepts.
- */
-function createHostPeer(connection: HostConnectionLike): HostPeerLike | undefined {
-  if (typeof connection.createPeer === 'function') {
-    return connection.createPeer({ principal: { kind: 'owner' }, interactions: 'answer' })
-  }
-  return connection.operator
-}
-
 function inProcessStream(
   gateway: HostGatewayLike,
   endpoint: string,
   payload: unknown,
   signal: AbortSignal,
-  peer: HostPeerLike | undefined,
+  peer: HostPeerLike,
 ): AsyncIterable<unknown> {
   return (async function* () {
     const source = await gateway.wireStream.open(endpoint, payload, undefined, peer, signal)
@@ -297,7 +160,7 @@ export async function startDshRemoteInteractions(
   const faces = await loadClientFaces()
 
   const client = new Context()
-  const peer = createHostPeer(connection)
+  const peer = connection.createPeer({ principal: { kind: 'owner' }, interactions: 'answer' })
   const fetchHandler = connection.createSharedFetchHandler('/api')
   const transport: ClientTransportHooksLike = {
     fetch: (input, init) => fetchHandler.fetch(inProcessRemoteRequest(input, init), peer),
@@ -308,18 +171,7 @@ export async function startDshRemoteInteractions(
   try {
     faces.typert.apply(client)
 
-    // Client Connection reads this hook once during apply() and retains the
-    // concrete functions. Restore the process global immediately afterward so
-    // no unrelated Client composition inherits DeepPilot's carrier.
-    const transportGlobal = globalThis as TransportGlobal
-    const previousTransport = transportGlobal.__DSH_TRANSPORT__
-    transportGlobal.__DSH_TRANSPORT__ = transport
-    try {
-      installResidentConnection(faces.connection, client, transport)
-    } finally {
-      if (previousTransport === undefined) delete transportGlobal.__DSH_TRANSPORT__
-      else transportGlobal.__DSH_TRANSPORT__ = previousTransport
-    }
+    faces.connection.installConnection(client, { transport, interactions: 'answer' })
 
     const typert = client.get('typert') as ClientTypertLike | undefined
     if (typert === undefined) throw new Error('resident DSH Client typert service was not installed')

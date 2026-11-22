@@ -80,11 +80,11 @@ test('权限目录结合当前投影和实际沙盒判断确认；反馈走独�
   await assert.rejects(f.api.feedback('missing', '', 'other'))
 })
 
-test('旧主机可使用 operator，完整日志复用官方归档路由和取消信号', async () => {
+test('完整日志归档使用 owner Peer、官方路由和取消信号', async () => {
   const f = fixture()
   const controller = new AbortController()
   const owner = { kind: 'owner' }
-  f.services.connection = { operator: owner, createSharedFetchHandler: (prefix: string) => ({ fetch: async (request: Request, peer: unknown) => {
+  f.services.connection = { createPeer: () => owner, createSharedFetchHandler: (prefix: string) => ({ fetch: async (request: Request, peer: unknown) => {
     assert.equal(prefix, '/api'); assert.equal(peer, owner)
     assert.equal(new URL(request.url).searchParams.get('sessionId'), 's /?')
     assert.equal(new URL(request.url).searchParams.get('includeDescendants'), 'true')

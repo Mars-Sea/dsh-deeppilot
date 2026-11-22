@@ -1,45 +1,25 @@
 # Compatibility
 
-This branch accepts DSH hosts inside the rolling compatibility range
-`>=0.2.1-rc.5 <0.3.0-0`. The lower bound is the newest audited `rc` release at
-decision time — npm `latest` and `next` both point at `0.2.1-rc.5` — and every
-later `0.2.x` release is admitted without a per-release source audit, including
-the `alpha` channel release `0.2.2-alpha.2` and later alphas, later rc releases,
-and `0.2.x` GA. `0.3.0` and its prereleases stay refused until a fresh audit.
-The bound is written `<0.3.0-0` because DSH evaluates the range with
-`semver.satisfies(..., { includePrerelease: true })`, where `<0.3.0` would admit
-`0.3.0-rc.1`. The range is named in both `engines.dsh` and `peerDependencies`; a
-host outside it is refused. DSH evaluates that declaration before composing a
-profile — on every start, not only on install.
+This branch builds and runs against DSH `0.2.3-alpha.2` using a Web profile.
+Run that CLI with Node.js 24.9 or newer. The plugin's rolling activation range
+is `>=0.2.3-alpha.2 <0.3.0-0` in `engines.dsh` and its DSH peer declarations.
+DSH evaluates its requirements on every profile startup. Later `0.2.x` versions
+pass the range check, and the upper bound excludes the next minor's prereleases.
+The compatibility record lists the Host versions actually exercised.
 
-This is a deliberate policy trade: a new DSH release inside the range activates
-without waiting for a per-release audit, so a breaking change inside `0.2.x`
-would surface at runtime instead of at the activation gate. The gate that
-remains is the `0.3.0` boundary. The decision, its predecessor policies, and the
-reversals are recorded in the maintainers' local decision record
-`docs/adr/0001-dsh-compatibility-policy.md`, with the supporting audits in
-[`docs/DSH_RELEASE_MEMORY.md`](./docs/DSH_RELEASE_MEMORY.md).
+| Component | Contract |
+|---|---|
+| DSH history | `SessionController.page` reads the original event records. The bridge converts the phone's exclusive sequence to the Host's inclusive cutoff. |
+| DSH interactions | The resident client uses the Node Client exports and `installConnection`. It creates an owner/answer Peer for the Gateway stream and the shared Fetch handler. |
+| Project files | `workspaceFiles.scopeOf` supplies the session's current root. Browsing can be turned off in the plugin settings. |
+| Phone bridge | DeepPilot protocol v2 |
+| Remote access | Tailscale Funnel on ports 443, 8443, or 10000 |
+| Funnel helper platforms | macOS 13 Ventura or later, Linux, and Windows, on amd64 and arm64 |
 
-The development packages this branch builds and typechecks against are pinned to
-the lower bound, currently `0.2.1-rc.5`; the audited host lines above it are
-covered by the isolated composes and live runs recorded in the release memory.
-
-| Component | Current contract | Evidence |
-|---|---|---|
-| Node.js | 22 or newer | Package engine and CI |
-| DSH CLI and Host API | `engines.dsh` and `peerDependencies` both name the rolling range `>=0.2.1-rc.5 <0.3.0-0` (dev pins `0.2.1-rc.5`) | Peer metadata, source typecheck, unit tests, bundle build, and config schema projection against a real 0.2.1-rc.5 CLI, plus isolated composes and live phone-protocol runs across the audited hosts recorded below (0.2.1-alpha.2 through 0.2.2-alpha.2), a full-tree audit of 0.2.1-rc.5 against 0.2.1-rc.4, and an isolated rc.5 host that composes, starts, and answers `/phone/health` with 200 (`0.2.1-rc.5 audit outcome` below) |
-| DSH history read | `SessionController.inspect` when the host has it, `SessionController.page` otherwise | DSH 0.2.2-alpha.2 removed `inspect`; the adapter branches on its presence and maps the host page's `{type:'event',event}` records onto the bridge's `{event}` contract, expressing the phone's exclusive `beforeSeq` as the inclusive `throughSeq` cut. Unit tests cover both branches (audits below) |
-| iOS bridge | DeepPilot protocol v2 | Bridge protocol tests; device behavior must be checked with the running Host and app |
-| Remote access | Tailscale Funnel on ports 443, 8443, or 10000 | Helper and supervisor tests |
-| Funnel helper platforms | macOS 13 Ventura or later, Linux, and Windows, each on amd64/arm64; built with Go 1.27, which dropped macOS 12 | CI starts the committed helper on a native runner for each of the six targets (`helper-smoke`); no runner covers macOS 13 itself |
-
-## DSH interfaces used here
-
-- The Host adapter uses Session and Workspace controllers, Gateway Remote Events, and `typertGateway.wireStream.open(endpoint, payload, uplink, peer, signal)`. Its in-process carrier passes `undefined` for `uplink`, a live owner/answer Peer for `peer`, and the cancellation signal in argument five. That Peer comes from `connection.createPeer({ principal: { kind: 'owner' }, interactions: 'answer' })` where the Host exposes it, and from the `connection.operator` instance otherwise. The same Peer is named on `fetchHandler.fetch(request, peer)` and the Connection install goes through `installConnection(ctx, { transport, interactions: 'answer' })` when the Client face offers it. alpha.3 requires all three; alpha.2 ignores the extra `fetch` argument, defaults an absent `open` peer to its operator, and ignores the participation.
-- The resident Client sends relative RPC paths such as `api/$events/result`. The in-process transport resolves those paths to a local URL before constructing a Node `Request`; the shared Fetch handler dispatches it without a network request. This is required for iOS approval and question answers to settle at the Gateway.
-- The client settings page binds `configForms.get('deeppilot')` when the service becomes available. The Host reads volatile config references from its profile entry and reconciles transports on `loader/volatile-update`.
-- Typert strict codecs publish `create()` factories. Session opening reads `session.projections` for a complete baseline; that controller requires a cancellation signal from `0.2.1-alpha.2` on, so the adapter always passes one.
-- The Host adapter retains a stable bridge-facing API so the phone protocol does not depend directly on DSH controller shapes. This adapter is an internal design boundary, not support for an older DSH Host.
+The Host adapter retains a stable bridge-facing API, so protocol and device
+compatibility do not depend on the shape of DSH controllers. See the
+[DSH release record](./docs/DSH_RELEASE_MEMORY.md) for installation, runtime,
+and phone-protocol verification.
 
 ## Separate protocol and data boundaries
 
@@ -48,49 +28,16 @@ covered by the isolated composes and live runs recorded in the release memory.
 - The plugin's persisted device and Funnel state migration remains separate from DSH API version support. Session logs written by earlier DSH builds are readable only when the current Host's own history reader accepts them; this plugin does not rewrite those logs.
 - An unavailable optional OS facility, transport, or controller disables its dependent capability without crashing the Host.
 - Local web preview (`welcome.capabilities.localPreview`) is plugin-level and needs no new Host interface: it reads session history through the existing history adapter to check that a port was mentioned, and forwards TCP to loopback with Node `net`. Its data frames are binary in both directions and pass through the Funnel helper unchanged. Older apps never open a `clientRole: "preview"` connection and older plugins never advertise the bit. Devices whose stored scopes equal either earlier full default set gain `preview.open` on load and when an older app pairs; a narrowed set is never widened. Earlier apps decode `welcome.scopes` as a closed enum and treat an unknown value as an incompatible plugin, so `preview.open` is listed only in the preview connection's welcome; main and widget welcomes omit it while authorization still applies.
-- Desktop web UI (`welcome.capabilities.hostWeb`, 0.9.20) uses the Host's optional `webServer` (listening origin and port) and `connection.authenticatedUrl` services; when either is missing, or DSH Web listens with TLS or on a non-loopback address, `c2s.preview.hostWeb` answers `hostweb-unavailable` and nothing else changes. The DSH Web port the Host actually listens on joins the preview reserved ports. It adds scope `hostweb.open`: devices whose stored scopes equal any earlier full default set (now including the 0.9.18 seven-scope set) gain it on load and at pairing, and it is listed only in the preview connection's welcome, like `preview.open`. `c2s.preview.authorize` now accepts a missing `sessionId`; older apps always send one. The settings switch `preview.hostWeb` defaults to `false`.
+- Desktop web UI (`welcome.capabilities.hostWeb`) uses the Host's `webserver/entry-url` provider and a loopback listener. The plugin reserves the DSH port and requires the `hostweb.open` device scope and `preview.hostWeb` setting. That setting defaults to `false`. See the [phone protocol](./PROTOCOL.md#电脑端网页v2-可选扩展) for authorization.
 - Binary frames (`welcome.capabilities.binaryFrames`) are a plugin-level option between this plugin and the phone and do not depend on the DSH Host. The phone opts in per request with `binary: true`; older apps never do and keep receiving base64 text frames byte-for-byte as before, and older plugins ignore the field. The Funnel helper is a standard reverse proxy and passes binary WebSocket frames through unchanged.
 
 ## Schedules ship with the Web composition
 
-Reminders need no user action on a current host. DSH 0.2.0 briefly moved
-automation out of the shipped Web composition into the optional
-`@deepseek-ai/dsh-experimental-schedule-bundle`, and the following release
-removed that bundle again: it is listed in `RETIRED_BUNDLES`,
-`@deepseek-ai/dsh-web-app` mounts `schedule` and `ui-schedule` in every Web
-profile, and loading a profile strips the retired entry from
-`dsh.profile.bundles`. The plugin manager no longer shows an **Automation
-tasks** switch, so no profile is expected to enable anything for reminders.
-
-The plugin needed no change for either step. It resolves the service through
-`ctx.get('schedule')`, never declares `schedule` in `inject`, and reports
-`welcome.capabilities.schedules = false` with a stable `E_UNSUPPORTED` for every
-schedule frame when the service is absent. On a Web host the service is mounted,
-so the capability bit is `true` by default; a profile that drops the rows still
-reports `false` and still degrades cleanly.
-
-The capability is resolved lazily rather than captured when the bridge is
-built. The bridge mounts on `sessionController` / `connection` /
-`typertGateway`, all of which become ready before the Schedule service finishes
-its own initialization, so a probe taken at that moment would report `false` for
-the bridge's whole lifetime. On a live host with the service mounted the bit is
-`true` and the schedule list/create/history/delete flow passes on audited hosts
-up to `0.2.2-alpha.2`.
-
-**Known limitation on `0.2.2-alpha.3`.** That release moved automation to
-host-level task management and rewrote the `dsh-schedule` service: `update` and
-`delete` no longer exist (`edit({ action })` replaces them), `list` returns a
-page object instead of an array, `create` takes its request first, and the
-request body carries `timing` / `target` instead of the selector fields. The
-bridge now serves both contracts from one adapter chosen by service shape, not
-by version string: the legacy per-session path is unchanged, and the host-level
-path adds the optional `schedulesHost` capability with host-level frames
-(list / view / create / edit / run / limits) while projecting the legacy frames
-onto host-level tasks, so an older App keeps schedule list, create, edit and
-delete on that host. The wire contract is documented under
-[`PROTOCOL.md`](./PROTOCOL.md) "Schedule 宿主级任务扩展". The audit and the
-decision are recorded in
-[`docs/DSH_RELEASE_MEMORY.md`](./docs/DSH_RELEASE_MEMORY.md).
+The Web profile mounts DSH's host-level Schedule service. The plugin probes its
+availability and exposes both schedule capabilities when the service is ready.
+Session-level requests from older protocol v2 apps map to host-level tasks.
+See [the schedule protocol](./PROTOCOL.md#schedule-宿主级任务扩展可选-v2-能力)
+for the request mapping.
 
 ## Configuration migration
 
@@ -99,6 +46,11 @@ The verbose-diagnostics field moved from the top-level `debug` to
 carries the old top-level `debug: true` is accepted but that value is ignored:
 verbose logging must be turned on again from the settings page. No other config
 field changed shape, and the old key is not read anywhere in this version.
+
+## Historical DSH audits
+
+The entries below describe earlier plugin revisions and their compatibility at
+the time of each audit.
 
 ## 0.2.2-rc.1 audit outcome
 

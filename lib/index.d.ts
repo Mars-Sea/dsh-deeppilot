@@ -9,7 +9,7 @@ import { Context } from "@deepseek-ai/cordis";
  * - 会话：`sessionReferenceResolver/candidates {agentId, query}` → 带规范 mention
  *   `@[label](dsh-session:…)` 的候选；手机发送时原样放进提示词，主机负责改写与注入快照。
  *
- * 两类服务都是可选挂载（兼容下限 0.2.1-rc.5 没有保证），所以每次按当前服务是否存在判定，
+ * 两类服务都是可选挂载，所以每次按当前服务是否存在判定，
  * 一类缺席不影响另一类。会话候选不下发工作目录，只给 `sameWorkspace`，避免把本机路径带到手机。
  */
 interface FileReferenceItem {
@@ -544,9 +544,7 @@ interface WelcomeCapabilities {
   projectSelection: boolean;
   /** Host exposes the optional DSH Schedule service. */
   schedules?: boolean;
-  /** 宿主级计划任务模型（DSH 0.2.2-alpha.3 起）：true 时
-   * 「Schedule 宿主级任务扩展」帧可用，schedulesHost=false/缺失时客户端只能
-   * 使用会话级 schedule 帧。与 `schedules` 相互独立（后者只表示服务存在）。 */
+  /** 宿主级计划任务帧可用。旧 App 继续读取 `schedules` 并使用会话级帧。 */
   schedulesHost?: boolean;
   /** Bridge has APNs configured; clients may send c2s.push.register. */
   push?: boolean;
@@ -1004,16 +1002,10 @@ interface SessionsApiLike {
   cancel?(req: RpcRequestLike<{
     sessionId: string;
   }>): Promise<RpcResponseLike<Record<string, unknown> | undefined>>;
-  /**
-   * Reads one durable image back. DSH ≤ 0.2.1 reads `attachmentId` and checks the
-   * session log itself; DSH 0.2.2+ reads the full `attachment` reference and no
-   * longer checks the session, so HostBridge sends both and only supplies a
-   * reference it saw projected in that session.
-   */
+  /** The bridge verifies that this session referenced the supplied image. */
   attachment?(req: RpcRequestLike<{
     sessionId: string;
-    attachmentId: string;
-    attachment?: HostImageRef;
+    attachment: HostImageRef;
   }>): Promise<RpcResponseLike<{
     attachment: {
       mediaType?: string;
@@ -1086,53 +1078,6 @@ interface ScheduleHistoryViewLike {
     records: number;
   };
   nextBefore?: string;
-}
-/** 会话级 Schedule 服务（DSH ≤ 0.2.2-alpha.2）：任务绑定单一 Session。 */
-interface LegacyScheduleApiLike {
-  /** 判别位缺省即 legacy：旧宿主与既有测试夹具不必补字段。 */
-  readonly mode?: 'legacy';
-  list(req: RpcRequestLike<{
-    sessionId: string;
-  }>): Promise<RpcResponseLike<{
-    sessionId: string;
-    tasks: ScheduleTaskViewLike[];
-  }>>;
-  history(req: RpcRequestLike<{
-    sessionId: string;
-    id: string;
-    limit: number;
-    before?: string;
-  }>): Promise<RpcResponseLike<{
-    sessionId: string;
-    history: ScheduleHistoryViewLike;
-  }>>;
-  create(req: RpcRequestLike<{
-    sessionId: string;
-    title: string;
-    prompt: string;
-    [key: string]: unknown;
-  }>): Promise<RpcResponseLike<ScheduleTaskViewLike>>;
-  update(req: RpcRequestLike<{
-    sessionId: string;
-    id: string;
-    expected: unknown;
-    title?: string;
-    prompt?: string;
-    change?: unknown;
-  }>): Promise<RpcResponseLike<{
-    id: string;
-    updated: boolean;
-    record?: ScheduleTaskViewLike;
-    code?: string;
-  }>>;
-  delete(req: RpcRequestLike<{
-    sessionId: string;
-    id: string;
-  }>): Promise<RpcResponseLike<{
-    id: string;
-    deleted: boolean;
-    code?: string;
-  }>>;
 }
 /** 宿主级任务视图：与 wire 的 `HostScheduleTask` 同一形状（Bridge 直接透传）。 */
 type HostScheduleTaskView = HostScheduleTask;
@@ -1207,15 +1152,7 @@ type HostScheduleEditRequestLike = {
   action: 'delete';
   expectedUpdatedAt?: string | null;
 };
-/**
- * 宿主级 Schedule 服务（DSH 0.2.2-alpha.3 起）。
- *
- * 探测只看形状：`edit` 存在且 `update` 不存在。`remoteXxx` 是同一服务的
- * 「人类 Remote 调用」变体（不记录 acting Session）；Bridge 就是人类 Remote
- * 调用方，因此直接用公开方法并省略 actorSessionId。
- */
 interface HostScheduleApiLike {
-  readonly mode: 'host';
   list(req: RpcRequestLike<HostScheduleListRequestLike>): Promise<RpcResponseLike<HostScheduleListResultLike>>;
   view(req: RpcRequestLike<{
     id: string;
@@ -1234,7 +1171,6 @@ interface HostScheduleApiLike {
   /** 删除宿主上全部 `status="ended"` 的任务；进行中与暂停的任务不受影响。 */
   deleteEnded(req: RpcRequestLike<Record<string, never>>): Promise<RpcResponseLike<HostScheduleDeleteEndedResult>>;
 }
-type ScheduleApiLike = LegacyScheduleApiLike | HostScheduleApiLike;
 interface HostApiLike {
   listDirectory?(req: RpcRequestLike<{
     path?: string;
@@ -1357,8 +1293,6 @@ interface PhoneSessionRow {
 interface HistoryEntry {
   event: SessionEventLike;
   view?: unknown;
-  /** An ask-user invocation just outside the requested history window. */
-  questionCall?: SessionEventLike;
 }
 interface HistoryResult {
   events: HistoryEntry[];
@@ -1417,7 +1351,7 @@ interface ApiProxyLike {
   references?: ReferencesApiLike;
   sessions: SessionsApiLike;
   workspace?: WorkspaceApiLike;
-  schedule?: ScheduleApiLike;
+  schedule?: HostScheduleApiLike;
   host?: HostApiLike;
   respond(message: {
     type: 'client-response';
@@ -1801,12 +1735,7 @@ export declare class HostBridge {
   /**
    * Result of one attachment read-back for the phone.
    *
-   * 宿主读图参数有两代：DSH ≤ 0.2.1 收 `{sessionId, attachmentId}` 并自己在会话日志里
-   * 找引用；DSH 0.2.2 起改收 `{sessionId, attachment: 完整引用}`，且不再核对会话。
-   * 控制器是直接注入的实例、不经参数 schema 校验，所以两代字段一起传：旧宿主读前者，
-   * 新宿主读后者。完整引用来自 imageRefs（本会话投影过的图片）；找不到时不带
-   * `attachment`，旧宿主照常自查，新宿主读不到即回 null（E_NOT_FOUND）——手机因此
-   * 读不到不属于该会话的图片。
+   * Only a complete ref observed in this session can reach the Host.
    */
   attachmentData(sessionId: string, attachmentId: string): Promise<{
     mediaType?: string;
@@ -1868,14 +1797,6 @@ export declare class HostBridge {
   }): Promise<ScheduleBridgeResult<{
     sessionId: string;
   }>>;
-  /**
-   * 当前 adapter 是否宿主级计划任务模型。
-   *
-   * 能力位 `schedulesHost`（host-capabilities.ts）与新帧、旧帧映射全部读这一个
-   * 判别位：探测只发生一次（DshApiProxy.resolveSchedule），这里不再看控制器
-   * 方法，也不看版本号字符串。
-   */
-  private get hostSchedule();
   listSchedules(sessionId: string): Promise<ScheduleBridgeResult<ScheduleTaskViewLike[]>>;
   /** 宿主级列表 -> 旧会话级视图：过滤 session 目标、丢弃 ended、按 scheduledAt 升序。 */
   private listHostSchedulesAsLegacy;
@@ -1914,7 +1835,7 @@ export declare class HostBridge {
   scheduleLimits(): Promise<ScheduleBridgeResult<{
     newSessionIntervalSeconds: number;
   }>>;
-  scheduleHistory(sessionId: string, id: string, limit: number, before?: string): Promise<ScheduleBridgeResult<ScheduleHistoryViewLike>>;
+  scheduleHistory(id: string, limit: number, before?: string): Promise<ScheduleBridgeResult<ScheduleHistoryViewLike>>;
   createSchedule(deviceId: string, payload: Record<string, unknown> & {
     sessionId: string;
     clientRequestId: string;

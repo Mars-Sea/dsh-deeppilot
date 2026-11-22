@@ -2,11 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import { DshApiProxy } from '../src/dsh-api-proxy.ts'
-import { HostBridge, projectHistory } from '../src/host-bridge.ts'
+import { HostBridge } from '../src/host-bridge.ts'
 import type { BridgeSink } from '../src/host-bridge.ts'
 import { unwrapStreamItem } from '../src/host-api.ts'
 
-test('rc.2 raw history opens through the stable bridge shape', async () => {
+test('persisted messages open through the Host page and stable bridge shape', async () => {
   const rawEvents = [
     {
       type: 'user/message',
@@ -36,7 +36,7 @@ test('rc.2 raw history opens through the stable bridge shape', async () => {
     },
   ]
   const sessionController = {
-    inspect: async () => ({ events: rawEvents }),
+    page: async () => ({ records: rawEvents.map(event => ({ type: 'event', event })), hasMore: false }),
   }
   const ctx = {
     get: (key: string) => key === 'sessionController' ? sessionController : undefined,
@@ -69,38 +69,7 @@ test('rc.2 raw history opens through the stable bridge shape', async () => {
   bridge.dispose()
 })
 
-test('rc.2 history adapter preserves sequence pagination while wrapping events', async () => {
-  const rawEvents = [
-    { type: 'user/message', seq: 1, data: { content: [], source: { kind: 'user' } } },
-    { type: 'assistant/message', seq: 2, data: { message: { content: [{ type: 'text', text: 'answer' }] } } },
-    { type: 'user/message', seq: 3, data: { content: [], source: { kind: 'user' } } },
-  ]
-  const ctx = {
-    get: (key: string) => key === 'sessionController'
-      ? { inspect: async () => ({ events: rawEvents }) }
-      : undefined,
-  }
-  const proxy = new DshApiProxy(ctx as never)
-
-  const response = await proxy.sessions.history({
-    payload: { sessionId: 'legacy-session', beforeSeq: 3, maxMessages: 1 },
-  })
-
-  assert.deepEqual(response, {
-    result: {
-      ok: true,
-      value: {
-        events: [{ event: rawEvents[1] }],
-        hasMore: true,
-      },
-    },
-  })
-})
-
-test('alpha.2 history reads the host page when the controller has no inspect', async () => {
-  // DSH 0.2.2-alpha.2 removed SessionController.inspect; page is the only history
-  // read left. Records arrive as `{type:'event', event}` envelopes and must be
-  // unwrapped to the bridge's `{event}` contract.
+test('history unwraps Host page events and translates the exclusive cursor', async () => {
   const records = [
     { type: 'event', event: { type: 'user/message', seq: 1, data: { content: [], source: { kind: 'user' } } } },
     { type: 'event', event: { type: 'assistant/message', seq: 2, data: { message: { content: [{ type: 'text', text: 'answer' }] } } } },
@@ -159,39 +128,6 @@ test('alpha.2 history omits the cut when the phone asks for the newest page', as
   }])
 })
 
-test('hosts that still expose inspect keep the whole-log window path', async () => {
-  // page exists on every admitted host, so the branch must key off inspect:
-  // using page here would change the window semantics of seven supported hosts.
-  const rawEvents = [
-    { type: 'user/message', seq: 1, data: { content: [], source: { kind: 'user' } } },
-    { type: 'assistant/message', seq: 2, data: { message: { content: [{ type: 'text', text: 'answer' }] } } },
-  ]
-  let pageCalls = 0
-  const sessionController = {
-    inspect: async () => ({ events: rawEvents }),
-    page: async () => {
-      pageCalls += 1
-      return { records: [], hasMore: false }
-    },
-  }
-  const ctx = {
-    get: (key: string) => key === 'sessionController' ? sessionController : undefined,
-  }
-  const proxy = new DshApiProxy(ctx as never)
-
-  const response = await proxy.sessions.history({
-    payload: { sessionId: 'legacy-session', maxMessages: 5 },
-  })
-
-  assert.equal(pageCalls, 0, 'inspect hosts must not touch page')
-  assert.deepEqual(response, {
-    result: {
-      ok: true,
-      value: { events: rawEvents.map((event) => ({ event })), hasMore: false },
-    },
-  })
-})
-
 test('projection baseline reads pass the AbortSignal the Host now requires', async () => {
   // DSH 0.2.1-alpha.2 aborts projections before it reads anything, so an omitted
   // signal loses the entire baseline instead of returning values.
@@ -218,75 +154,6 @@ test('projection baseline reads pass the AbortSignal the Host now requires', asy
   assert.ok(signals[0] instanceof AbortSignal)
 })
 
-test('rc.2 history adapter skips raw pages with no phone message projection', async () => {
-  const rawEvents = [
-    {
-      type: 'user/message',
-      seq: 1,
-      time: 10,
-      data: { content: [{ type: 'text', text: 'earlier message' }], source: { kind: 'user' } },
-    },
-    { type: 'turn/start', seq: 2, data: {} },
-    { type: 'assistant/chunk', seq: 3, data: { chunk: { type: 'text-delta', text: 'ignored in history' } } },
-  ]
-  const ctx = {
-    get: (key: string) => key === 'sessionController'
-      ? { inspect: async () => ({ events: rawEvents }) }
-      : undefined,
-  }
-  const proxy = new DshApiProxy(ctx as never)
-  const bridge = new HostBridge(proxy, 100)
-
-  assert.deepEqual(await bridge.historyPage('legacy-session', 4, 1), {
-    sessionId: 'legacy-session',
-    messages: [{ seq: 1, ts: 10, role: 'user', text: 'earlier message' }],
-    hasMore: false,
-  })
-  bridge.dispose()
-})
-
-test('rc.2 history adapter accumulates raw pages up to the requested phone message count', async () => {
-  const rawEvents = [
-    { type: 'user/message', seq: 1, time: 10, data: 'oldest' },
-    { type: 'turn/start', seq: 2, time: 20, data: {} },
-    { type: 'user/message', seq: 3, time: 30, data: 'middle' },
-    { type: 'turn/start', seq: 4, time: 40, data: {} },
-    {
-      type: 'assistant/message',
-      seq: 5,
-      time: 50,
-      data: { message: { content: [{ type: 'text', text: 'latest' }] } },
-    },
-  ]
-  const ctx = {
-    get: (key: string) => key === 'sessionController'
-      ? { inspect: async () => ({ events: rawEvents }) }
-      : undefined,
-  }
-  const proxy = new DshApiProxy(ctx as never)
-
-  const first = await proxy.sessions.history({
-    payload: { sessionId: 'legacy-session', beforeSeq: 6, maxMessages: 2 },
-  })
-  assert.equal(first.result?.ok, true)
-  if (!first.result?.ok) return
-  assert.deepEqual(projectHistory(first.result.value.events), [
-      { seq: 3, ts: 30, role: 'user', text: 'middle' },
-      { seq: 5, ts: 50, role: 'assistant', text: 'latest' },
-  ])
-  assert.equal(first.result.value.hasMore, true)
-
-  const second = await proxy.sessions.history({
-    payload: { sessionId: 'legacy-session', beforeSeq: 3, maxMessages: 2 },
-  })
-  assert.equal(second.result?.ok, true)
-  if (!second.result?.ok) return
-  assert.deepEqual(projectHistory(second.result.value.events), [
-    { seq: 1, ts: 10, role: 'user', text: 'oldest' },
-  ])
-  assert.equal(second.result.value.hasMore, false)
-})
-
 interface RemoteResultFrame {
   clientId: string
   eventId: string
@@ -301,13 +168,15 @@ class RemoteEventHarness {
   private openedWake: (() => void) | undefined
   private opened = false
 
+  private readonly peer = { principal: { kind: 'owner' }, interactions: 'answer', signal: new AbortController().signal }
+
   readonly gateway = {
     wireStream: {
       open: async (endpoint: string, payload: unknown, uplink: unknown, peer: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> => {
         assert.equal(endpoint, '$events')
         assert.deepEqual(payload, { args: {} })
         assert.equal(uplink, undefined)
-        assert.equal(peer, undefined)
+        assert.equal(peer, this.peer)
         this.opened = true
         this.openedWake?.()
         return this.stream(signal)
@@ -316,10 +185,12 @@ class RemoteEventHarness {
   }
 
   readonly connection = {
+    createPeer: () => this.peer,
     createSharedFetchHandler: (channel: string) => {
       assert.equal(channel, '/api')
       return {
-        fetch: async (request: Request): Promise<Response> => {
+        fetch: async (request: Request, peer: unknown): Promise<Response> => {
+          assert.equal(peer, this.peer)
           const body = await request.json() as {
             rpcId: string
             method: string
@@ -645,32 +516,24 @@ test('restore capability reflects whether the optional workspace service is pres
   }
 })
 
-test('prompt queue capability reflects whether the session controller has updateQueue', async () => {
-  for (const available of [false, true]) {
-    const calls: unknown[] = []
-    const controller = available
-      ? { updateQueue: async (request: unknown) => { calls.push(request); return { accepted: true } } }
-      : {}
-    const proxy = new DshApiProxy({ get: (key: string) =>
-      key === 'sessionController' ? controller : undefined,
-    } as never)
-    const bridge = new HostBridge(proxy, 100)
-    assert.equal(bridge.capabilities.promptQueue, available)
-    if (available) {
-      const request = { sessionId: 's', itemId: 'm', action: { kind: 'remove' as const } }
-      assert.deepEqual(await proxy.sessions.updateQueue!({ rpcId: 'r', payload: request }), { result: { ok: true, value: { accepted: true } } })
-      assert.deepEqual(calls, [request])
-    }
+test('the Host controller receives the phone queue operation', async () => {
+  const calls: unknown[] = []
+  const controller = { updateQueue: async (request: unknown) => { calls.push(request); return { accepted: true } } }
+  const proxy = new DshApiProxy({ get: (key: string) =>
+    key === 'sessionController' ? controller : undefined,
+  } as never)
+  const bridge = new HostBridge(proxy, 100)
+  try {
+    assert.equal(bridge.capabilities.promptQueue, true)
+    const request = { sessionId: 's', itemId: 'm', action: { kind: 'remove' as const } }
+    assert.deepEqual(await proxy.sessions.updateQueue!({ rpcId: 'r', payload: request }), { result: { ok: true, value: { accepted: true } } })
+    assert.deepEqual(calls, [request])
+  } finally {
     bridge.dispose()
   }
 })
 
 test('schedule capability follows the optional service mounting after the bridge exists', () => {
-  // The bridge is built from a ctx.inject on sessionController / connection /
-  // typertGateway, so on a DSH 0.2.0 host the optional Schedule service is
-  // almost never ready at construction time. Resolving it once in the
-  // constructor pinned `schedules` to false for the bridge's whole lifetime,
-  // even with the Automation tasks bundle mounted and serving.
   let controller: Record<string, unknown> | undefined
   const proxy = new DshApiProxy({ get: (key: string) =>
     key === 'sessionController' ? {} : key === 'schedule' ? controller : undefined,
@@ -679,46 +542,42 @@ test('schedule capability follows the optional service mounting after the bridge
   try {
     assert.equal(bridge.capabilities.schedules, false, '服务未挂载时不得通告日程能力')
     controller = {
-      list: async () => [],
-      create: async () => ({}),
-      history: async () => ({}),
-      update: async () => ({}),
-      delete: async () => ({}),
+      list: async () => ({ items: [] }),
+      edit: async () => ({}),
     }
     assert.equal(bridge.capabilities.schedules, true, '服务后挂载时必须能通告日程能力')
     // Repeated reads must keep working, and must not rebuild the adapter.
     assert.equal(bridge.capabilities.schedules, true)
-    assert.equal(proxy.schedule, proxy.schedule)
+    const mounted = proxy.schedule
+    assert.equal(mounted, proxy.schedule)
+    controller = undefined
+    assert.equal(bridge.capabilities.schedulesHost, false)
+    controller = { list: async () => ({ items: [] }) }
+    assert.notEqual(proxy.schedule, mounted)
   } finally {
     bridge.dispose()
   }
 })
 
-// 两代宿主读图契约（真实行为摘自 dsh-api-session-controller 源码）：
-// - 0.2.1-rc.5：读 request.attachmentId，自己在会话日志里找引用，找不到报 ATTACHMENT_NOT_REFERENCED；
-// - 0.2.2-rc.1：只读 request.attachment，按引用的 mediaType/bytes/width/height 核对文件，不查会话。
-for (const generation of ['0.2.1', '0.2.2'] as const) {
-  test(`image read-back works against the ${generation} host attachment contract`, async () => {
-    const stored = { attachmentId: 'sha256:abc', mediaType: 'image/png', bytes: 3, width: 2, height: 1 }
-    const records = [{ type: 'event', event: { type: 'tool/result', seq: 4, data: { callId: 'c', message: { role: 'tool', content: [{ type: 'image', attachment: stored }] } } } }]
-    const sessionController = {
-      page: async () => ({ records, hasMore: false }),
-      attachment: async (request: { sessionId: string; attachmentId?: string; attachment?: typeof stored }) => {
-        const ref = generation === '0.2.1'
-          ? (request.sessionId === 'session-1' && request.attachmentId === stored.attachmentId ? stored : undefined)
-          : request.attachment
-        if (!ref) throw new Error(generation === '0.2.1' ? 'ATTACHMENT_NOT_REFERENCED' : 'invalid reference')
-        if (ref.attachmentId !== stored.attachmentId || ref.bytes !== stored.bytes || ref.width !== stored.width ||
-            ref.height !== stored.height || ref.mediaType !== stored.mediaType) throw new Error('ATTACHMENT_CORRUPT')
-        return { attachment: ref, data: 'aGk=' }
-      },
-    }
-    const proxy = new DshApiProxy({ get: (key: string) => key === 'sessionController' ? sessionController : undefined } as never)
-    const bridge = new HostBridge(proxy as never, 100)
-
+test('image read-back sends the complete verified Host reference', async () => {
+  const stored = { attachmentId: 'sha256:abc', mediaType: 'image/png', bytes: 3, width: 2, height: 1 }
+  const records = [{ type: 'event', event: { type: 'tool/result', seq: 4, data: { callId: 'c', message: { role: 'tool', content: [{ type: 'image', attachment: stored }] } } } }]
+  let reads = 0
+  const sessionController = {
+    page: async () => ({ records, hasMore: false }),
+    attachment: async (request: { sessionId: string; attachment: typeof stored }) => {
+      assert.deepEqual(request, { sessionId: 'session-1', attachment: stored })
+      reads++
+      return { attachment: request.attachment, data: 'aGk=' }
+    },
+  }
+  const proxy = new DshApiProxy({ get: (key: string) => key === 'sessionController' ? sessionController : undefined } as never)
+  const bridge = new HostBridge(proxy, 100)
+  try {
     assert.deepEqual(await bridge.attachmentData('session-1', 'sha256:abc'), { mediaType: 'image/png', data: 'aGk=' })
-    // 本会话没引用过的图：两代宿主都读不到（新宿主靠 Bridge 不给引用）。
     assert.equal(await bridge.attachmentData('session-1', 'sha256:other'), null)
+    assert.equal(reads, 1, 'unreferenced attachments never reach the Host controller')
+  } finally {
     bridge.dispose()
-  })
-}
+  }
+})

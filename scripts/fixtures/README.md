@@ -8,7 +8,7 @@
 
 ## 二、启动与运行
 
-1. 在公共插件仓库构建并打包本地插件。用已安装的官方 `0.2.1-alpha.4` CLI 为全新的 `.dsh-home-command-smoke` 创建 Web 模板；把包安装到该配置的 `node_modules/dsh-deeppilot`。`--from-default-profile` 会替换已有配置，只在首次准备使用。
+1. 在公共插件仓库构建并打包本地插件。用已安装的官方 `0.2.3-alpha.2` CLI 为全新的 `.dsh-home-command-smoke` 创建 Web 模板；把包安装到该配置的 `node_modules/dsh-deeppilot`。`--from-default-profile` 会替换已有配置，只在首次准备使用。
 2. 在该仓库工作目录运行下列命令。`dsh` 代表已安装的官方 CLI；也可替换成对应 `node .../dsh/lib/bin.js`，无需更新本机正在使用的主机。
 
 ```sh
@@ -28,4 +28,4 @@ SMOKE_ENDPOINT=https://127.0.0.1:3198 \
 node --import tsx scripts/smoke-live.mts commands
 ```
 
-4. 成功应报告 25 项通过；ZIP 写入独立目录的 `command-smoke-export.zip`。辅助端点 `http://127.0.0.1:3199/pair` 只供本机集成测试取得一次性凭据，不把响应输出到日志。测试完成后停止独立主机，夹具监听随主机释放。
+4. 成功时指令验收应无失败；ZIP 写入独立目录的 `command-smoke-export.zip`。辅助端点 `http://127.0.0.1:3199/pair` 只供本机集成测试取得一次性凭据，不把响应输出到日志。测试完成后停止独立主机，夹具监听随主机释放。

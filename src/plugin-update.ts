@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { PROTOCOL_VERSION, type PluginUpdatePhase, type PluginUpdateProgressPayload, type PluginUpdateStatusPayload } from './protocol.ts'
 
 /** Structural subset checked against dsh-plugin-manager's real published declarations.
- * Keep this optional: older supported hosts do not ship updateBundle. */
+ * The plugin manager can be omitted by the Host profile. */
 export interface UpdateChangeResult {
   changed: boolean
   application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled'
@@ -82,7 +82,7 @@ export interface PluginUpdaterOptions {
   fetch?: typeof fetch
 }
 
-/** 精确镜像 alpha2 公开 registryPlan，避免静态依赖让旧宿主无法加载插件；由真实函数对照测试守卫。 */
+/** 以宿主插件管理器的 registryPlan 为准，并用对照测试验证。 */
 export function updateRegistryPlan(requested: string | null | undefined, configured: PluginUpdateRegistries): Array<string | null> {
   const own = configured.resolved === null ? null : normalizeUpdateRegistry(configured.resolved)
   const fallbacks = configured.fallbackRegistries.map(normalizeUpdateRegistry)

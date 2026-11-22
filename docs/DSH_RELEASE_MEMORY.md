@@ -5,6 +5,13 @@
 > move the lower bound, at each `0.x` minor boundary, or when a host inside the
 > range breaks at runtime.
 
+## Compatibility baseline — DSH `0.2.3-alpha.2` (2026-11-22)
+
+- **Install and activation.** The plugin and its DSH peers declare `>=0.2.3-alpha.2 <0.3.0-0`. Development packages and the config check are pinned to alpha.2. The two optional vendor peers match that distribution. The real compatibility evaluator admitted alpha.2 and rejected `0.2.1-rc.5`, the tested `0.2.2` alphas and rc.5, `0.2.3-alpha.1`, and `0.3.0-rc.1`. Later `0.2.x` releases remain eligible under the existing policy.
+- **Runtime.** The Host adapter now uses paged history, complete session-verified image references, host-level Schedule, the official Node Client modules and owner Peers, and the Web entry provider and current file scope. Custom profiles can still omit optional services. Older DSH session logs are read through the current Host's reader.
+- **Phone protocol.** Protocol v2 retains the session-scoped Schedule request mapping, device scopes and storage migrations. The two schedule bits reflect the same optional Host service. The live smoke exercised the old-phone schedule request shapes against the current Host.
+- **Verification.** The plugin package installed in an isolated official alpha.2 Web profile. Its 66 smoke checks passed, including authorizing DSH Web, changing workspace roots, and resolving synthetic approval and question requests through the real Gateway. The settings page rendered on the real Host. The local suite passed 789 tests with one pre-existing TODO, including the registry-plan comparison with the alpha.2 plugin manager. All 23 settings browser tests, typecheck, build and the alpha.2 schema check passed. Physical-device, production Funnel and APNs verification remain separate.
+
 ## Compatibility repair — DSH `0.2.3-alpha.1` and `0.2.3-alpha.2` (2026-11-22)
 
 - **Install and activation.** The local DeepPilot package installs through DSH's plugin manager on `0.2.2-rc.5`, `0.2.3-alpha.1` with the temporary upstream dependency workaround, and the unmodified npm distribution of `0.2.3-alpha.2`. The fresh alpha.2 installation starts on Node 24.22.3. The optional vendor peer ranges now include its Cordis `4.2.0-alpha.1` and Schemastery `3.20.0-alpha.1`. The DSH rolling range and pinned development versions stay in place. The unmodified alpha.1 npm dependency tree still fails before loading any plugin.

@@ -1915,12 +1915,14 @@ test('attachmentData relays host bytes and degrades when unsupported', async () 
     capturedPayload = req.payload
     return { result: { ok: true, value: { attachment: { mediaType: 'image/png' }, data: 'aGk=' } } }
   }
+  proxy.sessions.history = async () => ({ result: { ok: true, value: { hasMore: false, events: [
+    { event: { type: 'user/message', seq: 1, data: { content: [{ type: 'image', attachment: hostRef('att-9') }] } } },
+  ] } } })
   const bridge = new HostBridge(proxy, 100)
-  bridge.start()
 
   const image = await bridge.attachmentData('session-a', 'att-9')
   assert.deepEqual(image, { mediaType: 'image/png', data: 'aGk=' })
-  assert.deepEqual(capturedPayload, { sessionId: 'session-a', attachmentId: 'att-9' })
+  assert.deepEqual(capturedPayload, { sessionId: 'session-a', attachment: hostRef('att-9') })
 
   // A host without sessions.attachment degrades to null instead of throwing.
   const plainBridge = new HostBridge(makeFakeProxy().proxy, 100)
@@ -1928,7 +1930,7 @@ test('attachmentData relays host bytes and degrades when unsupported', async () 
   bridge.dispose()
 })
 
-// DSH 0.2.2 起宿主读图只认完整引用（且逐项核对字节数与宽高），旧宿主只认 attachmentId。
+// The Host verifies the image dimensions and length against the full reference.
 const hostRef = (attachmentId: string) => ({ attachmentId, mediaType: 'image/png', bytes: 2048, width: 800, height: 600 })
 
 test('attachmentData sends the full host reference seen on a live tool result', async () => {
@@ -1950,13 +1952,12 @@ test('attachmentData sends the full host reference seen on a live tool result', 
   await new Promise((r) => setTimeout(r, 20))
 
   assert.deepEqual(await bridge.attachmentData('session-a', 'att-live'), { mediaType: 'image/png', data: 'aGk=' })
-  assert.deepEqual(payloads.at(-1), { sessionId: 'session-a', attachmentId: 'att-live', attachment: hostRef('att-live') },
-    'both generations of the host parameter travel together')
+  assert.deepEqual(payloads.at(-1), { sessionId: 'session-a', attachment: hostRef('att-live') })
   assert.equal(historyReads, 0, 'a reference seen live needs no history scan')
 
   // 另一会话的同名 id 不借用本会话的引用：新宿主拿不到引用就读不到图。
-  await bridge.attachmentData('session-b', 'att-live')
-  assert.deepEqual(payloads.at(-1), { sessionId: 'session-b', attachmentId: 'att-live' })
+  assert.equal(await bridge.attachmentData('session-b', 'att-live'), null)
+  assert.equal(payloads.length, 1, 'a different session cannot reuse the reference')
   bridge.dispose()
 })
 
@@ -1978,7 +1979,7 @@ test('attachmentData recovers the reference from session history after a restart
   const bridge = new HostBridge(proxy, 100)
 
   assert.deepEqual(await bridge.attachmentData('session-a', 'att-old'), { mediaType: 'image/png', data: 'aGk=' })
-  assert.deepEqual(payloads.at(-1), { sessionId: 'session-a', attachmentId: 'att-old', attachment: hostRef('att-old') })
+  assert.deepEqual(payloads.at(-1), { sessionId: 'session-a', attachment: hostRef('att-old') })
   assert.deepEqual(historyRequests.map((p) => p.beforeSeq), [undefined, 40])
   assert.ok(historyRequests.every((p) => p.sessionId === 'session-a' && p.maxMessages === 500))
 

@@ -16,7 +16,7 @@ function fixture(body: Uint8Array | string, contentType: string, status = 200) {
     commands: {}, typertGateway: { invoke() {} }, sessionController: {},
     sessionQuery: { readSession() {} },
     connection: {
-      operator: peer,
+      createPeer: () => peer,
       fetchRoutes: new Map([['/api/session.markdown', { methods: new Set(['GET', 'HEAD']), fetch() {} }]]),
       createSharedFetchHandler: (prefix: string) => {
         assert.equal(prefix, '/api')

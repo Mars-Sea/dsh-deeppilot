@@ -25,7 +25,7 @@ export interface ReferencesApiLike {
   list(req: RpcRequestLike<{ sessionId: string; query: string }>, signal?: AbortSignal): Promise<RpcResponseLike<ReferenceCandidates>>
 }
 
-/* Stable bridge-facing structural types mapped to rc.2 controllers by
+/* Stable bridge-facing structural types mapped to Host controllers by
  * DshApiProxy. */
 
 interface RpcOk<T> { ok: true; value: T }
@@ -54,13 +54,8 @@ interface SessionsApiLike {
     Promise<RpcResponseLike<{ title: string; seq: number }>>
   cancel?(req: RpcRequestLike<{ sessionId: string }>):
     Promise<RpcResponseLike<Record<string, unknown> | undefined>>
-  /**
-   * Reads one durable image back. DSH ≤ 0.2.1 reads `attachmentId` and checks the
-   * session log itself; DSH 0.2.2+ reads the full `attachment` reference and no
-   * longer checks the session, so HostBridge sends both and only supplies a
-   * reference it saw projected in that session.
-   */
-  attachment?(req: RpcRequestLike<{ sessionId: string; attachmentId: string; attachment?: import('./host-event-projection.ts').HostImageRef }>):
+  /** The bridge verifies that this session referenced the supplied image. */
+  attachment?(req: RpcRequestLike<{ sessionId: string; attachment: import('./host-event-projection.ts').HostImageRef }>):
     Promise<RpcResponseLike<{ attachment: { mediaType?: string }; data: string }>>
   /** Remove or steer one pending inbox item. Absent on hosts without the
    * DSH session.updateQueue RPC; the promptQueue capability bit probes it. */
@@ -80,15 +75,6 @@ interface WorkspaceApiLike {
   unarchiveSession?(req: RpcRequestLike<{ sessionId: string }>):
     Promise<RpcResponseLike<{ archivedSessionIds: string[] }>>
 }
-
-/* ---------- Schedule：会话级（legacy）与宿主级（host）双形态 ----------
- *
- * DSH 0.2.2-alpha.3 把 `@deepseek-ai/dsh-schedule` 从 per-session 模型改成宿主级
- * 模型（任务带交付 target；没有 update/delete，只有 edit；list 返回分页对象）。
- * 插件必须双形态共存，因此 `ApiProxyLike.schedule` 是一个带判别位的联合：缺省
- * `mode` 表示会话级（旧宿主与既有假 service 都是这个形状），`mode: 'host'` 表示
- * 下面这套宿主级接口。Bridge 只认这两个分支，不再按版本号字符串猜测。
- */
 
 export type ScheduleKind = 'after' | 'at' | 'every' | 'daily' | 'weekly' | 'cron'
 
@@ -120,22 +106,6 @@ export interface ScheduleHistoryViewLike {
   earlierRecordsPruned?: boolean
   retention: { days: number; records: number }
   nextBefore?: string
-}
-
-/** 会话级 Schedule 服务（DSH ≤ 0.2.2-alpha.2）：任务绑定单一 Session。 */
-export interface LegacyScheduleApiLike {
-  /** 判别位缺省即 legacy：旧宿主与既有测试夹具不必补字段。 */
-  readonly mode?: 'legacy'
-  list(req: RpcRequestLike<{ sessionId: string }>):
-    Promise<RpcResponseLike<{ sessionId: string; tasks: ScheduleTaskViewLike[] }>>
-  history(req: RpcRequestLike<{ sessionId: string; id: string; limit: number; before?: string }>):
-    Promise<RpcResponseLike<{ sessionId: string; history: ScheduleHistoryViewLike }>>
-  create(req: RpcRequestLike<{ sessionId: string; title: string; prompt: string; [key: string]: unknown }>):
-    Promise<RpcResponseLike<ScheduleTaskViewLike>>
-  update(req: RpcRequestLike<{ sessionId: string; id: string; expected: unknown; title?: string; prompt?: string; change?: unknown }>):
-    Promise<RpcResponseLike<{ id: string; updated: boolean; record?: ScheduleTaskViewLike; code?: string }>>
-  delete(req: RpcRequestLike<{ sessionId: string; id: string }>):
-    Promise<RpcResponseLike<{ id: string; deleted: boolean; code?: string }>>
 }
 
 /** 宿主级任务视图：与 wire 的 `HostScheduleTask` 同一形状（Bridge 直接透传）。 */
@@ -196,15 +166,7 @@ export type HostScheduleEditRequestLike =
   | { id: string; action: 'update'; patch: HostSchedulePatch; expectedUpdatedAt?: string | null }
   | { id: string; action: 'delete'; expectedUpdatedAt?: string | null }
 
-/**
- * 宿主级 Schedule 服务（DSH 0.2.2-alpha.3 起）。
- *
- * 探测只看形状：`edit` 存在且 `update` 不存在。`remoteXxx` 是同一服务的
- * 「人类 Remote 调用」变体（不记录 acting Session）；Bridge 就是人类 Remote
- * 调用方，因此直接用公开方法并省略 actorSessionId。
- */
 export interface HostScheduleApiLike {
-  readonly mode: 'host'
   list(req: RpcRequestLike<HostScheduleListRequestLike>):
     Promise<RpcResponseLike<HostScheduleListResultLike>>
   view(req: RpcRequestLike<{ id: string }>): Promise<RpcResponseLike<HostScheduleViewOutcome>>
@@ -221,8 +183,6 @@ export interface HostScheduleApiLike {
   deleteEnded(req: RpcRequestLike<Record<string, never>>):
     Promise<RpcResponseLike<HostScheduleDeleteEndedResult>>
 }
-
-export type ScheduleApiLike = LegacyScheduleApiLike | HostScheduleApiLike
 
 interface HostApiLike {
   listDirectory?(req: RpcRequestLike<{ path?: string }>, signal?: AbortSignal):
@@ -340,8 +300,6 @@ export function isSubagentRow(row: PhoneSessionRow): boolean {
 export interface HistoryEntry {
   event: SessionEventLike
   view?: unknown
-  /** An ask-user invocation just outside the requested history window. */
-  questionCall?: SessionEventLike
 }
 
 export interface HistoryResult {
@@ -413,7 +371,7 @@ export interface ApiProxyLike {
   references?: ReferencesApiLike
   sessions: SessionsApiLike
   workspace?: WorkspaceApiLike
-  schedule?: ScheduleApiLike
+  schedule?: HostScheduleApiLike
   host?: HostApiLike
   respond(message: { type: 'client-response'; rpcId: string; result: RpcResult<unknown> }):
     Promise<{ accepted: boolean; reason?: string }>

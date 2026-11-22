@@ -147,7 +147,7 @@ export function createFakeControllers(): {
 
   const sessionController = {
     list: async () => { recorder.sessionListCalls += 1; return { items: [] } },
-    inspect: async () => ({ events: [] }),
+    page: async () => ({ records: [], hasMore: false }),
     create: async () => ({ sessionId: 'fake-session', agentPreset: 'standard' }),
     fork: async () => ({ sessionId: 'fake-fork' }),
     modelCatalog: async () => ({ default: { provider: 'fake-provider', model: 'fake-model' }, groups: [], failures: [] }),
@@ -158,6 +158,7 @@ export function createFakeControllers(): {
     // 接口是同步方法（DshApiProxy 调用处不 await），假件保持同步。
     cancel: () => ({ accepted: true as const }),
     projections: async () => null,
+    updateQueue: async () => ({ accepted: true }),
   }
 
   const workspaceController = {
@@ -180,11 +181,8 @@ export function createFakeControllers(): {
   }
 
   const schedule = {
-    list: async () => [],
+    list: async () => ({ items: [], shown: 0, total: 0, limit: 500, offset: 0 }),
     history: async () => ({ records: [], earlierRecordsUnavailable: false, retention: { days: 0, records: 0 } }),
-    create: async () => ({ id: 'fake-task', kind: 'at', title: '', prompt: '', scheduledAt: '', state: 'scheduled' }),
-    update: async () => ({ id: 'fake-task', updated: true }),
-    delete: async () => ({ id: 'fake-task', deleted: true }),
   }
 
   const typertGateway = {
@@ -213,6 +211,7 @@ export function createFakeControllers(): {
   }
 
   const connection = {
+    createPeer: () => ({ principal: { kind: 'owner' }, interactions: 'answer', signal: new AbortController().signal }),
     createSharedFetchHandler: (_channel: string) => {
       recorder.sharedFetchHandlerCreated = true
       return {

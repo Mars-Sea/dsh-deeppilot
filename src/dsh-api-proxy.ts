@@ -1,7 +1,7 @@
 import { DshSessionResources } from './session-resources.ts'
 import { listPhoneDirectory } from './directory-browser.ts'
 /**
- * Adapter for the DSH rc.2 controller API.
+ * Adapter for the DSH Host controller API.
  *
  * DeepPilot's phone protocol deliberately speaks one stable in-process
  * `apiProxy` vocabulary. This adapter maps it to the current public
@@ -15,7 +15,7 @@ import {
   type RemoteApprovalRequest,
   type RemoteQuestionRequest,
 } from './dsh-remote-interactions.ts'
-import { historyWindow, normalizePageLimit } from './host-event-projection.ts'
+import { normalizePageLimit, type HostImageRef } from './host-event-projection.ts'
 import { DshCommandApi } from './command-api.ts'
 import { DshReferenceApi } from './reference-api.ts'
 import { DshSessionControls } from './session-controls.ts'
@@ -33,11 +33,9 @@ import type {
   HostScheduleTaskView,
   HostScheduleViewOutcome,
   HostSessionModels,
-  LegacyScheduleApiLike,
   MuxFrameLike,
   PhoneSessionRow,
   ScheduleHistoryViewLike,
-  ScheduleTaskViewLike,
   SessionEventLike,
   WorkspaceViewLike,
 } from './host-api.ts'
@@ -57,22 +55,12 @@ type RpcResult<T> = RpcOk<T> | RpcErr
 interface SessionControllerLike {
   list(request: { cursor?: string }, signal: AbortSignal): Promise<{ items: readonly unknown[] }>
   /**
-   * Whole-log read used by `sessions.history`.
-   *
-   * DSH 0.2.2-alpha.2 removed this method in favour of `page`. The seven earlier
-   * admitted hosts still have it and cannot be served by `page` instead: their
-   * `SessionPageRequest.throughSeq` is mandatory and validated, while this
-   * adapter has no log cursor to pass. `sessions.history` therefore branches on
-   * the presence of `inspect` rather than switching every host to one path.
-   */
-  inspect?(sessionId: string, signal?: AbortSignal): Promise<{ events: readonly unknown[] }>
-  /**
    * One message-aligned history page; present on every admitted host.
    *
    * Its `beforeSeq` is a log offset, not the seq the phone sends, so a backward
    * cut has to travel as the inclusive `throughSeq` instead.
    */
-  page?(request: {
+  page(request: {
     address: { kind: 'session'; sessionId: string }
     throughSeq?: number
     maxMessages?: number
@@ -83,22 +71,14 @@ interface SessionControllerLike {
   selectModel(request: Record<string, unknown>): Promise<{ selected: { provider: string; model: string; reasoningEffort?: string } }>
   rename(request: { sessionId: string; title: string }): Promise<{ title: string; seq: number }>
   prompt(request: Record<string, unknown>, signal: AbortSignal): Promise<{ accepted: true }>
-  /**
-   * 两代参数：DSH ≤ 0.2.1 读 `attachmentId` 并自查会话日志；DSH 0.2.2 起只读
-   * `attachment`（完整 ImageAttachmentRef）且不查会话。适配层原样透传，
-   * 由 HostBridge 负责同时带上两者。
-   */
-  attachment(request: { sessionId: string; attachmentId: string; attachment?: Readonly<Record<string, unknown>> }): Promise<{ attachment: { mediaType?: string }; data: string }>
+  attachment(request: { sessionId: string; attachment: HostImageRef }): Promise<{ attachment: { mediaType?: string }; data: string }>
   cancel(request: { sessionId: string }): { accepted: true }
-  /** Absent on hosts that predate DSH's pending-queue RPC. */
-  updateQueue?(request: { sessionId: string; itemId: string; action: { kind: string } }): Promise<{ accepted: true }>
+  updateQueue(request: { sessionId: string; itemId: string; action: { kind: string } }): Promise<{ accepted: true }>
   /**
    * Non-activating projection baseline for one session.
    *
-   * The signal is mandatory: DSH 0.2.1-alpha.2 aborts before it reads anything,
-   * so a caller that omits it gets no baseline at all. The bridge's refresh is
-   * fire-and-forget and has no lifetime of its own, so callers pass a signal
-   * that never aborts.
+   * The Host requires a signal. Detached bridge refreshes use a signal with
+   * no external cancellation lifetime.
    */
   projections(request: { sessionId: string }, signal: AbortSignal):
     Promise<{ asOfSeq: number; values: Record<string, unknown> } | null>
@@ -111,17 +91,8 @@ interface WorkspaceControllerLike {
   follow(signal: AbortSignal): AsyncIterable<{ type: string; value?: unknown }>
 }
 
-/** 会话级 Schedule 控制器（DSH ≤ 0.2.2-alpha.2）：任务绑定单一 Session。 */
-interface LegacyScheduleControllerLike {
-  list(request: { sessionId: string }): Promise<readonly unknown[]>
-  history(request: { sessionId: string; id: string; limit: number; before?: string }): Promise<unknown>
-  create(sessionId: string, request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>
-  update(request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>
-  delete(request: { sessionId: string; id: string }, signal?: AbortSignal): Promise<unknown>
-}
-
 /**
- * 宿主级 Schedule 控制器（DSH 0.2.2-alpha.3 起）。
+ * 宿主级 Schedule 控制器。
  *
  * 方法按真实服务面声明：`list` 返回分页对象、`view` 返回任务或 miss 结果、
  * `create/edit/run` 返回任务/删除/冲突/进行中等结果对象，`edit` 取代了
@@ -136,19 +107,8 @@ interface HostScheduleControllerLike {
   run(request: { id: string }, signal?: AbortSignal): Promise<unknown>
   history(request: { id: string; limit: number; before?: string }): Promise<unknown>
   deliveryLimits(): unknown
-  /** 上游名沿用 alpha.2 的 inactive，alpha.3 实际删除的是 `status="ended"` 的任务。 */
+  /** Host 的 deleteInactive 删除 `status="ended"` 的任务。 */
   deleteInactive(): Promise<unknown>
-}
-
-type ScheduleControllerLike = LegacyScheduleControllerLike | HostScheduleControllerLike
-
-/**
- * 形状探测：宿主级模型只有 `edit`（没有 `update`）。不按版本号字符串判断——
- * 版本号无法说明 Schedule bundle 是否挂载、也无法覆盖回退组合。
- */
-function isHostScheduleController(controller: ScheduleControllerLike): controller is HostScheduleControllerLike {
-  const value = controller as { edit?: unknown; update?: unknown }
-  return typeof value.edit === 'function' && typeof value.update !== 'function'
 }
 
 interface DirectoryPickerControllerLike {
@@ -289,9 +249,9 @@ export class DshApiProxy implements ApiProxyLike {
     }
   }
   private readonly session: SessionControllerLike
+  private scheduleController: HostScheduleControllerLike | undefined
+  private scheduleApi: ApiProxyLike['schedule']
   private readonly workspaceController: WorkspaceControllerLike | undefined
-  private scheduleController: ScheduleControllerLike | undefined
-  private scheduleApi: ApiProxyLike['schedule'] | undefined
   private readonly interactions = new Map<string, DeferredInteraction>()
   private readonly shouldSurfaceInteraction: (kind: DshInteractionKind) => boolean
 
@@ -311,10 +271,7 @@ export class DshApiProxy implements ApiProxyLike {
     // A profile without the optional workspace service cannot restore a
     // session; keep the phone capability bit honest.
     if (this.workspaceController === undefined) delete this.workspace?.unarchiveSession
-    // 同理：Host 没有 updateQueue 时撤掉入口，promptQueue 能力位随之为 false。
-    if (typeof this.session.updateQueue !== 'function') delete this.sessions.updateQueue
     this.shouldSurfaceInteraction = options.shouldSurfaceInteraction ?? (() => true)
-    this.resolveSchedule()
     // 技能服务可能晚于桥接层挂载；能力探测与请求都读取当前服务，不缓存缺席。
     Object.defineProperty(this.sessions, 'skills', { get: () => {
       const catalog = ctx.get('sessionSkillCatalog') as {
@@ -327,78 +284,14 @@ export class DshApiProxy implements ApiProxyLike {
     } })
   }
 
-  /**
-   * Resolve the optional Schedule service lazily, on every read.
-   *
-   * The bridge is built from a `ctx.inject` on sessionController / connection
-   * / typertGateway, and `schedule` is deliberately NOT in that list: it is a
-   * capability the host composition may or may not mount. On a DSH 0.2.0 host
-   * those three services become ready well before ScheduleService finishes its
-   * own async init, so a value captured in the constructor stayed `undefined`
-   * for the bridge's whole lifetime and welcome advertised `schedules=false`
-   * even with the service mounted.
-   *
-   * Once resolved the controller is kept: services are not torn down and
-   * rebuilt underneath a live bridge, so re-resolving per call would be pure
-   * overhead.
-   */
-  private resolveSchedule(): void {
-    if (this.scheduleController !== undefined) return
-    const controller = this.ctx.get('schedule') as ScheduleControllerLike | undefined
-    if (controller === undefined) return
-    this.scheduleController = controller
-    this.scheduleApi = isHostScheduleController(controller)
-      ? this.createHostScheduleApi(controller)
-      : this.createLegacyScheduleApi(controller)
-  }
-
+  /** Resolve lazily: a profile can mount or remount Schedule after the bridge. */
   get schedule(): ApiProxyLike['schedule'] {
-    this.resolveSchedule()
-    return this.scheduleApi
-  }
-
-  /** 会话级适配器：行为与宿主级扩展加入前逐字节一致，只多一个判别位。 */
-  private createLegacyScheduleApi(controller: LegacyScheduleControllerLike): LegacyScheduleApiLike {
-    return {
-      mode: 'legacy',
-      list: async (request) => this.call(async () => ({
-        sessionId: request.payload!.sessionId,
-        tasks: (await controller.list({ sessionId: request.payload!.sessionId })).map(toScheduleTask),
-      })),
-      history: async (request) => this.call(async () => {
-        const value = await controller.history({
-          sessionId: request.payload!.sessionId,
-          id: request.payload!.id,
-          limit: request.payload!.limit,
-          ...(request.payload!.before !== undefined ? { before: request.payload!.before } : {}),
-        }) as Record<string, unknown>
-        if (typeof value.code === 'string') {
-          throw Object.assign(new Error(String(value.code)), { code: value.code })
-        }
-        return { sessionId: request.payload!.sessionId, history: toScheduleHistory(value) }
-      }),
-      create: async (request) => this.call(async () => {
-        const { sessionId, ...createRequest } = request.payload!
-        return toScheduleTask(await controller.create(sessionId, createRequest))
-      }),
-      update: async (request) => this.call(async () => {
-        const payload = request.payload!
-        const result = await controller.update({
-          ...payload,
-          expected: toScheduleExpected(payload.expected),
-        }) as Record<string, unknown>
-        return {
-          id: String(result.id ?? payload.id),
-          updated: result.updated === true,
-          ...(result.record !== undefined ? { record: toScheduleTask(result.record) } : {}),
-          ...(typeof result.code === 'string' ? { code: result.code } : {}),
-        }
-      }),
-      delete: async (request) => this.call(async () => {
-        const result = await controller.delete({ sessionId: request.payload!.sessionId, id: request.payload!.id }) as Record<string, unknown>
-        return { id: String(result.id), deleted: result.deleted === true, ...(result.code !== undefined ? { code: String(result.code) } : {}) }
-      }),
+    const controller = this.ctx.get('schedule') as HostScheduleControllerLike | undefined
+    if (controller !== this.scheduleController) {
+      this.scheduleApi = controller === undefined ? undefined : this.createHostScheduleApi(controller)
+      this.scheduleController = controller
     }
+    return this.scheduleApi
   }
 
   /**
@@ -412,7 +305,6 @@ export class DshApiProxy implements ApiProxyLike {
    */
   private createHostScheduleApi(controller: HostScheduleControllerLike): NonNullable<ApiProxyLike['schedule']> {
     return {
-      mode: 'host',
       list: async (request) => this.call(async () => {
         const payload = request.payload ?? {}
         const value = await controller.list({
@@ -513,45 +405,16 @@ export class DshApiProxy implements ApiProxyLike {
       const sessionId = request.payload!.sessionId
       const beforeSeq = request.payload?.beforeSeq
       const limit = normalizePageLimit(request.payload?.maxMessages)
-      const inspect = this.session.inspect
-      // DSH 0.2.2-alpha.2 dropped `inspect`; the host's own `page` covers the same
-      // read with message-aligned windowing. Keep the old path for every host that
-      // still has it, because those hosts' `page` demands a log cursor.
-      if (inspect === undefined) {
-        const page = await this.session.page!({
-          address: { kind: 'session', sessionId },
-          // `beforeSeq` is exclusive and expressed in seqs; `throughSeq` is an
-          // inclusive seq cut, so shift by one. -1 is the host's empty page.
-          ...(beforeSeq === undefined ? {} : { throughSeq: beforeSeq - 1 }),
-          maxMessages: limit,
-        }, new AbortController().signal)
-        // Records are `{type:'event', event}` envelopes; the bridge contract is
-        // `{event}`. host-bridge re-checks the seq boundary itself, so the
-        // inclusive cut cannot make a client loop on the same page.
-        return {
-          events: page.records.map((record) => ({
-            event: (record as { event: SessionEventLike }).event,
-          })),
-          hasMore: page.hasMore,
-        }
+      const page = await this.session.page({
+        address: { kind: 'session', sessionId },
+        // The phone uses an exclusive cutoff, while the Host cutoff is inclusive.
+        ...(beforeSeq === undefined ? {} : { throughSeq: beforeSeq - 1 }),
+        maxMessages: limit,
+      }, new AbortController().signal)
+      return {
+        events: page.records.map(record => ({ event: (record as { event: SessionEventLike }).event })),
+        hasMore: page.hasMore,
       }
-      let inspected: { events: readonly unknown[] }
-      try {
-        inspected = await inspect.call(this.session, sessionId)
-      } catch (error) {
-        // No message data is logged: only the opaque session id and Host's
-        // safe error chain, enough to distinguish an unsupported legacy log
-        // from a bridge regression.
-        console.warn(`[deeppilot] session history unavailable for ${JSON.stringify(sessionId)}: ${toError(error).code}: ${toError(error).message}`)
-        throw error
-      }
-      // 分页窗口的策略住在 host-event-projection（与它依赖的投影规则同处）；
-      // 适配器只负责拉全量事件、把窗口映射成 HistoryResult。
-      const window = historyWindow(inspected.events, {
-        beforeSeq,
-        limit,
-      })
-      return { events: window.events as HistoryResult['events'], hasMore: window.hasMore }
     }),
     prompt: async (request) => this.call(() => this.session.prompt({
       ...request.payload!,
@@ -567,7 +430,7 @@ export class DshApiProxy implements ApiProxyLike {
     selectModel: async (request) => this.call(() => this.session.selectModel(request.payload ?? {})),
     rename: async (request) => this.call(() => this.session.rename(request.payload!)),
     cancel: async (request) => this.call(() => this.session.cancel(request.payload!)),
-    updateQueue: async (request) => this.call(() => this.session.updateQueue!(request.payload!)),
+    updateQueue: async (request) => this.call(() => this.session.updateQueue(request.payload!)),
     attachment: async (request) => this.call(() => this.session.attachment(request.payload!)),
     projections: async (request) => this.call(async () => {
       const baseline = await this.session.projections(request.payload!, new AbortController().signal)
@@ -833,33 +696,6 @@ function toPhoneSessionRow(value: unknown): PhoneSessionRow {
 function toWorkspaceView(value: unknown): WorkspaceViewLike {
   const row = value as Record<string, unknown>
   return { workspaceId: String(row.workspaceId ?? ''), title: String(row.title ?? ''), path: String(row.path ?? ''), sessionIds: Array.isArray(row.sessionIds) ? row.sessionIds.map(String) : [] }
-}
-function toScheduleExpected(value: unknown): Record<string, unknown> {
-  const row = value !== null && typeof value === 'object' ? value as Record<string, unknown> : {}
-  const { state: _state, deliveryMode: _deliveryMode, ...record } = row
-  return record
-}
-function toScheduleTask(value: unknown): ScheduleTaskViewLike {
-  const row = value as Record<string, unknown>
-  const kind = ['after', 'at', 'every', 'daily', 'weekly', 'cron'].includes(String(row.kind))
-    ? String(row.kind) as ScheduleTaskViewLike['kind']
-    : 'at'
-  const optionalNumber = (key: string): number | undefined => typeof row[key] === 'number' && Number.isFinite(row[key]) ? row[key] as number : undefined
-  return {
-    id: String(row.id ?? ''),
-    kind,
-    title: String(row.title ?? ''),
-    prompt: String(row.prompt ?? ''),
-    scheduledAt: String(row.scheduledAt ?? ''),
-    state: row.state === 'overdue' ? 'overdue' : 'scheduled',
-    deliveryMode: 'host',
-    ...(optionalNumber('afterSeconds') !== undefined ? { afterSeconds: optionalNumber('afterSeconds')! } : {}),
-    ...(optionalNumber('everySeconds') !== undefined ? { everySeconds: optionalNumber('everySeconds')! } : {}),
-    ...(typeof row.time === 'string' ? { time: row.time } : {}),
-    ...(typeof row.timeZone === 'string' ? { timeZone: row.timeZone } : {}),
-    ...(Array.isArray(row.weekdays) ? { weekdays: row.weekdays.filter((day): day is number => typeof day === 'number') } : {}),
-    ...(typeof row.expression === 'string' ? { expression: row.expression } : {}),
-  }
 }
 function toScheduleHistory(value: unknown): ScheduleHistoryViewLike {
   const row = value as Record<string, unknown>

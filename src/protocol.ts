@@ -251,13 +251,10 @@ export interface ScheduleUpdatedPayload {
   deleted?: boolean
   replayed?: boolean
 }
-/* ---------- 宿主级计划任务（DSH 0.2.2-alpha.3 起，可选 v2 扩展） ----------
+/* ---------- 宿主级计划任务（可选 v2 扩展） ----------
  *
- * 与上面的会话级 `ScheduleTaskView` 并存：旧宿主仍是 per-session 模型，新宿主把
- * 任务提升为宿主级（每个任务带一个交付 `target` 与 `active/paused/ended` 状态）。
- * PROTOCOL.md「Schedule 宿主级任务扩展」是这些形状的唯一来源；Bridge 用
- * `welcome.capabilities.schedulesHost` 告知新帧是否可用，旧帧在宿主级模型上
- * 由 Bridge 反向投影（旧 App 不需要升级）。
+ * 旧 App 使用会话级 `ScheduleTaskView`，Bridge 将宿主级任务映射到该形状。
+ * 新帧使用宿主级交付目标和状态，完整契约见 PROTOCOL.md「Schedule 宿主级任务扩展」。
  */
 
 /** 宿主级 timing 的判别 kind；比会话级多一个 `rrule`。 */
@@ -468,9 +465,7 @@ export interface WelcomeCapabilities {
   projectSelection: boolean
   /** Host exposes the optional DSH Schedule service. */
   schedules?: boolean
-  /** 宿主级计划任务模型（DSH 0.2.2-alpha.3 起）：true 时
-   * 「Schedule 宿主级任务扩展」帧可用，schedulesHost=false/缺失时客户端只能
-   * 使用会话级 schedule 帧。与 `schedules` 相互独立（后者只表示服务存在）。 */
+  /** 宿主级计划任务帧可用。旧 App 继续读取 `schedules` 并使用会话级帧。 */
   schedulesHost?: boolean
   /** Bridge has APNs configured; clients may send c2s.push.register. */
   push?: boolean
