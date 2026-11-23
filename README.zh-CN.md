@@ -43,9 +43,10 @@
 ## 从 npm 安装
 
 使用 Node.js 24.9 或更高版本运行 DSH 的 `web` profile。当前分支以
-`0.2.3-alpha.2` 为构建和验证基线，声明兼容区间 `>=0.2.3-alpha.2 <0.3.0-0`。
-DSH 每次启动都会在组合 profile 前检查该区间。之后的 `0.2.x` 版本可通过版本检查。
-已发布的插件包以各自的兼容声明为准。
+`0.2.3-alpha.2` 为构建基线，支持 `0.2.2` 的 RC 系列和自 `alpha.1` 起的 `0.2.3` 系列。
+DSH 每次启动都会检查已安装插件声明的兼容范围。DSH `0.2.3-alpha.1` 的 npm 安装包
+需要修正上游依赖才能启动。兼容声明允许 `0.2.3` 的 RC，待官方发布后验证运行。
+具体范围和验证记录见 [Compatibility](./COMPATIBILITY.md)。
 
 npm 包内置 macOS、Linux 和 Windows 的 amd64/arm64 Funnel helper。macOS 上
 使用 Funnel 需要 **macOS 13 Ventura 或更高版本**。可信局域网模式无需 helper。

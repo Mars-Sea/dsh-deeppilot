@@ -37,8 +37,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Validate plugin config schema against the DSH 0.2.3-alpha.2 CLI
-        run: npm run check:config-schema
+      - name: Validate plugin config schema on DSH RC and Alpha
+        run: |
+          npm run check:config-schema -- 0.2.2-rc.1
+          npm run check:config-schema
 
   helper:
     runs-on: ubuntu-latest

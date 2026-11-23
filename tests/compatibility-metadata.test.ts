@@ -12,18 +12,21 @@ const packageJson = JSON.parse(
   devDependencies?: Record<string, string>
 }
 
-const DSH_BASELINE = '0.2.3-alpha.2'
-const DSH_RANGE = '>=0.2.3-alpha.2 <0.3.0-0'
-const DSH_ADMITTED = [DSH_BASELINE, '0.2.3-alpha.3', '0.2.3-rc.1', '0.2.3', '0.2.4-alpha.1', '0.2.9']
+const DSH_BUILD_VERSION = '0.2.3-alpha.2'
+const DSH_RANGE = '>=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-alpha.1 <0.2.4-0'
+const DSH_ADMITTED = [
+  '0.2.2-rc.1', '0.2.2-rc.2', '0.2.2-rc.3', '0.2.2-rc.4', '0.2.2-rc.5', '0.2.2',
+  '0.2.3-alpha.1', DSH_BUILD_VERSION, '0.2.3-alpha.3', '0.2.3-rc.1', '0.2.3',
+]
 const DSH_REFUSED = [
   '0.1.7-rc.2',
   '0.2.1-rc.5',
   '0.2.2-alpha.2',
   '0.2.2-alpha.3',
-  '0.2.2-rc.5',
-  '0.2.2',
-  '0.2.3-alpha.1',
-  '0.2.3-alpha.1.9',
+  '0.2.3-0',
+  '0.2.3-alpha.0',
+  '0.2.4-alpha.1',
+  '0.2.4',
   '0.3.0-0',
   '0.3.0-rc.1',
   '0.3.0',
@@ -48,7 +51,7 @@ const HOST_RUNTIME_PEERS = [
   'react',
 ]
 
-test('package metadata declares the rolling compatibility range', () => {
+test('DSH peers declare the same supported versions as the engine', () => {
   for (const name of DSH_PEERS) {
     assert.equal(packageJson.peerDependencies?.[name], DSH_RANGE, name)
   }
@@ -57,23 +60,22 @@ test('package metadata declares the rolling compatibility range', () => {
   }
 })
 
-test('DSH activation admits the alpha.2 floor and refuses earlier Hosts and the next minor', () => {
+test('DSH and npm both admit the RC and Alpha series in the published range', () => {
   assert.equal(packageJson.engines?.node, '>=22')
   for (const range of [packageJson.engines?.dsh, packageJson.peerDependencies?.['@deepseek-ai/dsh']]) {
     assert.equal(range, DSH_RANGE)
     for (const version of DSH_ADMITTED) {
-      assert.equal(semver.satisfies(version, range, { includePrerelease: true }), true, version)
+      assert.equal(semver.satisfies(version, range), true, `npm peer check: ${version}`)
+      assert.equal(semver.satisfies(version, range, { includePrerelease: true }), true, `DSH Host check: ${version}`)
     }
     for (const version of DSH_REFUSED) {
       assert.equal(semver.satisfies(version, range, { includePrerelease: true }), false, version)
     }
   }
-  // npm's default prerelease semantics still admit the exact alpha build used by CI.
-  assert.equal(semver.satisfies(DSH_BASELINE, DSH_RANGE), true)
 })
 
-test('vendor peer ranges match the pinned alpha.2 dependencies', () => {
-  for (const [name, version, retired] of [
+test('vendor peer ranges cover the RC and Alpha runtime libraries', () => {
+  for (const [name, version, rcVersion] of [
     ['@deepseek-ai/cordis', '4.2.0-alpha.1', '4.1.0'],
     ['@deepseek-ai/schemastery', '3.20.0-alpha.1', '3.19.0'],
   ] as const) {
@@ -81,11 +83,11 @@ test('vendor peer ranges match the pinned alpha.2 dependencies', () => {
     const range = packageJson.peerDependencies?.[name]
     assert.ok(range, name)
     assert.equal(semver.satisfies(version, range), true, name)
-    assert.equal(semver.satisfies(retired, range), false, name)
+    assert.equal(semver.satisfies(rcVersion, range), true, name)
   }
 })
 
-test('typechecked DSH packages are pinned to the supported baseline', () => {
+test('typechecked DSH packages are pinned to the audited Alpha release', () => {
   for (const name of [
     '@deepseek-ai/dsh-api-gateway',
     '@deepseek-ai/dsh-client-connection',
@@ -96,6 +98,6 @@ test('typechecked DSH packages are pinned to the supported baseline', () => {
   ]) {
     const range = packageJson.devDependencies?.[name]
     assert.ok(range, `${name} devDependency present`)
-    assert.equal(range, DSH_BASELINE, name)
+    assert.equal(range, DSH_BUILD_VERSION, name)
   }
 })

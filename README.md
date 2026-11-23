@@ -54,10 +54,11 @@ Host on your own computer and does not replace or modify the DSH Web UI.
 ## Install from npm
 
 Use a DSH Web profile on Node.js 24.9 or newer. This branch builds against
-DSH `0.2.3-alpha.2` and declares the range `>=0.2.3-alpha.2 <0.3.0-0`.
-DSH checks that range before composing the profile on each startup. Later
-`0.2.x` versions are admitted by the range. This branch was verified on
-`0.2.3-alpha.2`, and published plugin versions carry their own requirements.
+DSH `0.2.3-alpha.2` and supports the `0.2.2` RC series and the `0.2.3` series
+from `alpha.1`. DSH checks the installed plugin's declared range at startup.
+The npm build of DSH `0.2.3-alpha.1` needs an upstream dependency fix to start.
+The range admits `0.2.3` RCs, which will need runtime verification upon release.
+See [Compatibility](./COMPATIBILITY.md) for the range and verification record.
 
 The npm package includes Funnel helpers for macOS, Linux, and Windows on
 amd64/arm64. On macOS, Funnel requires **macOS 13 Ventura or later**.

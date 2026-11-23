@@ -5,8 +5,8 @@
  * 再凭进程启动令牌换一个按 `主机:端口` 隔离的 Cookie。预览连接让手机在自己的回环地址上
  * 监听同一个端口，Host / Origin 与电脑本机访问完全一致，用户不必手动复制令牌。
  *
- * 实际监听地址来自 `webServer`。鉴权插件贡献登录地址。
- * 网页端必须监听回环 HTTP，
+ * 实际监听地址来自 `webServer`。DSH 0.2.3 的鉴权插件贡献登录地址，
+ * DSH 0.2.2 RC 由 `connection.authenticatedUrl` 签发。网页端必须监听回环 HTTP，
  * 手机经预览隧道才能使用同一个 Host 和 Cookie 作用域。
  *
  * 返回的 `url` 带登录令牌，属于凭据：调用方只能把它经已认证的预览连接下发，不得写日志。
@@ -52,6 +52,7 @@ export function hostWebTarget(webServer: HostWebServerLike | undefined): Loopbac
 export function resolveHostWeb(
   webServer: HostWebServerLike | undefined,
   entryUrls: (baseUrl: string) => readonly HostWebEntryUrl[],
+  legacyLogin?: (baseUrl: string) => string | undefined,
 ): HostWebEntry | undefined {
   const target = hostWebTarget(webServer)
   if (target === undefined) return undefined
@@ -59,6 +60,8 @@ export function resolveHostWeb(
   try {
     const login = entryUrls(baseUrl).find(entry => isLoginUrl(entry.url, target.origin))
     if (login !== undefined) return { target, url: login.url }
+    const url = legacyLogin?.(baseUrl)
+    if (url !== undefined && isLoginUrl(url, target.origin)) return { target, url }
   } catch {
     return undefined
   }

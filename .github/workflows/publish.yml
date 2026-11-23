@@ -110,7 +110,9 @@ jobs:
       - name: 校验已提交的构建产物
         run: git diff --exit-code -- lib
       - name: 校验 DSH 配置加载
-        run: npm run check:config-schema
+        run: |
+          npm run check:config-schema -- 0.2.2-rc.1
+          npm run check:config-schema
 
       - uses: actions/setup-go@v7
         with:

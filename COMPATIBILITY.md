@@ -1,17 +1,19 @@
 # Compatibility
 
-This branch builds and runs against DSH `0.2.3-alpha.2` using a Web profile.
-Run that CLI with Node.js 24.9 or newer. The plugin's rolling activation range
-is `>=0.2.3-alpha.2 <0.3.0-0` in `engines.dsh` and its DSH peer declarations.
-DSH evaluates its requirements on every profile startup. Later `0.2.x` versions
-pass the range check, and the upper bound excludes the next minor's prereleases.
-The compatibility record lists the Host versions actually exercised.
+This branch builds against DSH `0.2.3-alpha.2`. Run the Web profile with
+Node.js 24.9 or newer. The plugin declares
+`>=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-alpha.1 <0.2.4-0` in `engines.dsh` and its
+DSH peer declarations. This admits the `0.2.2` RC series and the `0.2.3` series
+starting at `alpha.1` in both npm peer resolution and DSH activation.
+The published npm build of `0.2.3-alpha.1` needs an upstream dependency fix
+to start. `0.2.3` RCs fall within the range and await upstream publication
+for runtime verification.
 
 | Component | Contract |
 |---|---|
 | DSH history | `SessionController.page` reads the original event records. The bridge converts the phone's exclusive sequence to the Host's inclusive cutoff. |
 | DSH interactions | The resident client uses the Node Client exports and `installConnection`. It creates an owner/answer Peer for the Gateway stream and the shared Fetch handler. |
-| Project files | `workspaceFiles.scopeOf` supplies the session's current root. Browsing can be turned off in the plugin settings. |
+| Project files | `workspaceFiles.scopeOf` supplies the current root on `0.2.3`. The `0.2.2` RC file service uses the session header and adds search in `rc.2`. Browsing can be turned off in the plugin settings. |
 | Phone bridge | DeepPilot protocol v2 |
 | Remote access | Tailscale Funnel on ports 443, 8443, or 10000 |
 | Funnel helper platforms | macOS 13 Ventura or later, Linux, and Windows, on amd64 and arm64 |
@@ -28,7 +30,7 @@ and phone-protocol verification.
 - The plugin's persisted device and Funnel state migration remains separate from DSH API version support. Session logs written by earlier DSH builds are readable only when the current Host's own history reader accepts them; this plugin does not rewrite those logs.
 - An unavailable optional OS facility, transport, or controller disables its dependent capability without crashing the Host.
 - Local web preview (`welcome.capabilities.localPreview`) is plugin-level and needs no new Host interface: it reads session history through the existing history adapter to check that a port was mentioned, and forwards TCP to loopback with Node `net`. Its data frames are binary in both directions and pass through the Funnel helper unchanged. Older apps never open a `clientRole: "preview"` connection and older plugins never advertise the bit. Devices whose stored scopes equal either earlier full default set gain `preview.open` on load and when an older app pairs; a narrowed set is never widened. Earlier apps decode `welcome.scopes` as a closed enum and treat an unknown value as an incompatible plugin, so `preview.open` is listed only in the preview connection's welcome; main and widget welcomes omit it while authorization still applies.
-- Desktop web UI (`welcome.capabilities.hostWeb`) uses the Host's `webserver/entry-url` provider and a loopback listener. The plugin reserves the DSH port and requires the `hostweb.open` device scope and `preview.hostWeb` setting. That setting defaults to `false`. See the [phone protocol](./PROTOCOL.md#电脑端网页v2-可选扩展) for authorization.
+- Desktop web UI (`welcome.capabilities.hostWeb`) uses a login URL from `webserver/entry-url` on `0.2.3` or `connection.authenticatedUrl` on `0.2.2` RC and requires loopback. The plugin reserves the DSH port and requires the `hostweb.open` device scope and `preview.hostWeb` setting. That setting defaults to `false`. See the [phone protocol](./PROTOCOL.md#电脑端网页v2-可选扩展) for authorization.
 - Binary frames (`welcome.capabilities.binaryFrames`) are a plugin-level option between this plugin and the phone and do not depend on the DSH Host. The phone opts in per request with `binary: true`; older apps never do and keep receiving base64 text frames byte-for-byte as before, and older plugins ignore the field. The Funnel helper is a standard reverse proxy and passes binary WebSocket frames through unchanged.
 
 ## Schedules ship with the Web composition

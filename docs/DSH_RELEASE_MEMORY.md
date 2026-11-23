@@ -1,11 +1,17 @@
 # DSH release compatibility memory
 
-> This is the durable audit record for DeepPilot's public DSH plugin. Since
-> 2026-10-30 the declaration is a rolling range: audit a release when it would
-> move the lower bound, at each `0.x` minor boundary, or when a host inside the
-> range breaks at runtime.
+> This is the durable audit record for DeepPilot's public DSH plugin. Audit
+> releases that move a declared bound or break behavior inside the range.
+> Keep activation, Host runtime behavior, and phone protocol checks separate.
 
-## Compatibility baseline — DSH `0.2.3-alpha.2` (2026-11-22)
+## Compatibility correction — DeepPilot `0.10.0-alpha.2` (2026-11-23)
+
+- **Install and activation.** The engine and DSH peers declare `>=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-alpha.1 <0.2.4-0`. Separate clauses cover both prerelease series under npm's default peer resolution and the Host's `includePrerelease` evaluation. Development stays pinned to `0.2.3-alpha.2`. The five `0.2.2` RCs ship Cordis `4.1.0` and Schemastery `3.19.0`; both Alpha runtimes tested used `4.2.0-alpha.1` and `3.20.0-alpha.1`. The metadata admits future `0.2.3` RCs. The official GitHub tag list and npm registry contained no `0.2.3` RC at verification time.
+- **Runtime.** The Web entry provider takes precedence. The `0.2.2` RC connection signs the login address when the provider has no valid URL. Both paths validate the loopback origin and token. Workspace browsing uses `scopeOf` on `0.2.3` and the session header on `0.2.2` RC. `0.2.2-rc.1` supplies directory listing and file reads; searching returns `E_UNSUPPORTED` until the Host adds `workspaceFiles.search` in `rc.2`.
+- **Verification.** The candidate npm archive installed and activated in separate official DSH Web profiles. Each `0.2.2-rc.1` through `rc.5` passed 66 checks. Each `0.2.3` Alpha passed 67 checks, including new-root browsing and expired root references. All seven profiles passed real Web login and approval/question round trips using local fixtures, and rendered the DeepPilot settings page. The unmodified npm distribution of `0.2.3-alpha.1` still fails before loading any plugin because its loader lacks `EntryValidationError`. Its 67 checks used the upstream vendor bundle workaround documented below. `0.2.3-alpha.2` booted from its unmodified npm distribution.
+- **Phone protocol and configuration.** Protocol v2, device scope, and storage formats stay compatible. The unit suite passed 792 tests with one existing TODO. Config schema exports passed on both `0.2.2-rc.1` and `0.2.3-alpha.2`. The comparison uses synthetic devices and a local model fixture.
+
+## Historical compatibility baseline — DeepPilot `0.10.0-alpha.1` (2026-11-22)
 
 - **Install and activation.** The plugin and its DSH peers declare `>=0.2.3-alpha.2 <0.3.0-0`. Development packages and the config check are pinned to alpha.2. The two optional vendor peers match that distribution. The real compatibility evaluator admitted alpha.2 and rejected `0.2.1-rc.5`, the tested `0.2.2` alphas and rc.5, `0.2.3-alpha.1`, and `0.3.0-rc.1`. Later `0.2.x` releases remain eligible under the existing policy.
 - **Runtime.** The Host adapter now uses paged history, complete session-verified image references, host-level Schedule, the official Node Client modules and owner Peers, and the Web entry provider and current file scope. Custom profiles can still omit optional services. Older DSH session logs are read through the current Host's reader.

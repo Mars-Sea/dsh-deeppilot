@@ -58,7 +58,7 @@ export class DshSessionResources {
   private service(name: string): Row | undefined { return this.ctx.get(name) as Row | undefined }
   get filesAvailable(): boolean { return ['stat', 'read', 'readBytes'].every(k => typeof this.service('workspaceFiles')?.[k] === 'function') &&
     ['resolve', 'fileUrl', 'processPath'].every(k => typeof this.service('fs')?.[k] === 'function') && typeof this.service('sessionQuery')?.readEvent === 'function' }
-  get workspaceAvailable(): boolean { return this.filesAvailable && ['list', 'search', 'scopeOf'].every(k => typeof this.service('workspaceFiles')?.[k] === 'function') }
+  get workspaceAvailable(): boolean { return this.filesAvailable && typeof this.service('workspaceFiles')?.list === 'function' }
   get changesAvailable(): boolean { return ['summary', 'diff'].every(k => typeof this.service('workspaceChanges')?.[k] === 'function') && typeof this.service('sessionQuery')?.readEvent === 'function' }
 
   private assertBrowse(): void { if (!this.browseEnabled()) failure('E_FORBIDDEN', '请先在电脑端开启“允许手机浏览项目文件”') }
@@ -69,11 +69,18 @@ export class DshSessionResources {
     signal.throwIfAborted()
     const header = live ?? stored?.header
     if (!header || header.origin === 'subagent') failure('E_NOT_FOUND', '项目会话已不存在')
-    const scope = await this.service('workspaceFiles')!.scopeOf(sessionId, signal)
-    signal.throwIfAborted()
-    if (!scope) failure('E_NOT_FOUND', '项目会话已不存在')
-    if (typeof scope.workspaceRoot !== 'string' || !scope.workspaceRoot) failure('E_UNSUPPORTED', '主机未提供项目目录')
-    return { sessionId, workspaceRoot: scope.workspaceRoot }
+    const files = this.service('workspaceFiles')
+    if (typeof files?.scopeOf === 'function') {
+      const scope = await files.scopeOf(sessionId, signal)
+      signal.throwIfAborted()
+      if (!scope) failure('E_NOT_FOUND', '项目会话已不存在')
+      if (typeof scope.workspaceRoot !== 'string' || !scope.workspaceRoot) failure('E_UNSUPPORTED', '主机未提供项目目录')
+      return { sessionId, workspaceRoot: scope.workspaceRoot }
+    }
+    // The 0.2.2 RC file service has no scopeOf resolver.
+    const workspaceRoot = header.cwd ?? this.service('sandboxPolicy')?.workspaceRoot
+    if (typeof workspaceRoot !== 'string' || !workspaceRoot) failure('E_UNSUPPORTED', '主机未提供项目目录')
+    return { sessionId, workspaceRoot }
   }
   private async root(scope: Scope, deviceId: string, signal: AbortSignal): Promise<{ rootRef: string; url: string }> {
     const fs = this.service('fs')!
@@ -146,6 +153,7 @@ export class DshSessionResources {
     const files = this.service('workspaceFiles')!
     const trimmedQuery = query?.trim()
     if (trimmedQuery !== undefined && trimmedQuery.length > 0) {
+      if (typeof files.search !== 'function') failure('E_UNSUPPORTED', '当前主机不支持搜索项目文件')
       const result = await files.search(scope, { query: trimmedQuery, excludedPaths: [], includeHidden: hidden, respectGitignore: true }, signal)
       this.assertBrowse(); signal.throwIfAborted()
       return { sessionId, rootRef: root.rootRef, rootLabel: scope.workspaceRoot.slice(0, 4096), path: '', query: trimmedQuery,

@@ -413,10 +413,11 @@ export function apply(ctx: Context, options: unknown): void {
       }, 'deeppilot: optional plugin updater')
     },
   )
-  // 通过 webServer 的事件请求登录地址。
+  // 优先请求 webServer 的登录地址，0.2.2 RC 使用 connection 签发。
   // 每次需要时现算，避免在插件里保存登录凭据。
   type HostWebContext = SubContext & {
     webServer: HostWebServerLike
+    get(name: 'connection'): { authenticatedUrl?(baseUrl: string): string } | undefined
     emit(source: HostWebServerLike, event: 'webserver/entry-url', base: string, entries: HostWebEntryUrl[]): void
   }
   let hostWebContext: HostWebContext | undefined
@@ -437,7 +438,7 @@ export function apply(ctx: Context, options: unknown): void {
       const entries: HostWebEntryUrl[] = []
       webCtx.emit(webCtx.webServer, 'webserver/entry-url', baseUrl, entries)
       return entries
-    })
+    }, (baseUrl) => webCtx.get('connection')?.authenticatedUrl?.(baseUrl))
   }
   let pendingUpgrades = 0
   const authRateLimiter = new AuthRateLimiter()

@@ -2,7 +2,7 @@
 
 ## 会话资源与只读文件扩展（v2，可选）
 
-`welcome.capabilities.fileDeliverables / turnChanges / workspaceFiles` 分别按 Host 文件、改动快照、目录搜索服务形状探测；缺省 false。旧客户端忽略新能力和资源变化通知，旧 Host 不显示新入口。`files.browse` 在电脑设置默认 false，可热更新；关闭后拒绝新的目录、搜索、项目文件读取及正在进行的项目文件下载。显式成果声明不依赖这个浏览开关。
+`welcome.capabilities.fileDeliverables / turnChanges / workspaceFiles` 分别按 Host 文件、改动快照、目录浏览服务形状探测，缺省 false。旧客户端忽略新能力和资源变化通知，旧 Host 不显示新入口。`files.browse` 在电脑设置默认 false，可热更新；关闭后拒绝新的目录、搜索、项目文件读取及正在进行的项目文件下载。显式成果声明不依赖这个浏览开关。
 
 以下请求均要求 `sessions.read`，Widget 与 preview 连接禁止。每个请求均含 `sessionId`，响应为同 id 的瞬时帧，正文、diff 和文件块不进入重放环、磁盘缓存、通知或 Relay。唯一可重放的 `s2c.session.resources.changed {sessionId,sourceSeq}` 只表示需重新读取元信息，遵守关注集合和读取 scope。
 
@@ -20,6 +20,7 @@
 list `{sessionId,rootRef?,path?,hidden?}`；search 另带非空 query（文件名/路径，上限1024字符）。回 `s2c.workspace.files {sessionId,rootRef,rootLabel,path,entries:[{name,path,kind,bytes?}],truncated,incomplete?,query?}`。根路径由 Host 会话决定，rootRef 为绑定设备/会话/规范化根目录及插件进程的不可伪造引用。只能提交根内相对路径；按 Host 文件提供方解析目标后再次核对根内约束。隐藏文件默认关闭，搜索遵守 gitignore，VCS元数据排除。最多500条；Host 没有游标时不能伪造下一页，truncated/incomplete 必须分别展示。
 
 提供当前文件作用域的 Host 会在会话切换工作目录后更新项目根。旧根的 `rootRef` 用于新请求时返回 `E_BUSY`，重新发起不带 `rootRef` 的根目录列表请求可获得当前根。
+Host 只有目录列表接口时（例如 DSH `0.2.2-rc.1`），列表与文件读取照常可用，项目文件搜索返回 `E_UNSUPPORTED`。
 
 ### c2s.file.stat
 ### c2s.file.text

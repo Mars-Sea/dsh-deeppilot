@@ -50,13 +50,13 @@ package, embedded Funnel helper, generated `lib/`, and bridge protocol.
   `docs/DSH_RELEASE_MEMORY.md`; keep install, runtime, and phone-protocol risk
   classified separately.
 - Keep `engines.dsh` and the ten `@deepseek-ai/dsh*` peer ranges in sync at
-  `>=0.2.3-alpha.2 <0.3.0-0`. Pin development DSH packages and the schema check
-  to the exact floor. The Host includes prereleases in its compatibility
-  evaluation, so `<0.3.0-0` excludes the next minor and all of its prereleases.
-  A floor or ceiling change needs a compatible lockfile, metadata tests, both
-  READMEs, and the release memory. Audit a change that moves a bound or breaks
-  runtime behavior within the range. Keep Host version support separate from
-  phone protocol v2 and persisted data compatibility.
+  `>=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-alpha.1 <0.2.4-0`. The separate clauses
+  admit both prerelease series under npm peer resolution and DSH activation.
+  Pin development DSH packages to the audited `0.2.3-alpha.2` artifacts and
+  check the schema on both RC and Alpha. A bound change needs a compatible
+  lockfile, metadata tests, both READMEs, and the release memory. Audit changes
+  that move a bound or break runtime behavior within the range. Keep Host
+  support separate from phone protocol v2 and persisted data compatibility.
 
 ### Authorization and completion
 
@@ -73,6 +73,7 @@ npm ci
 npm test
 npm run typecheck
 npm run build
+npm run check:config-schema -- 0.2.2-rc.1
 npm run check:config-schema
 npm run smoke:helper
 cd helper && go test ./...

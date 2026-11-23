@@ -1,6 +1,6 @@
 /**
  * Compose cordis.patch.yml against a minimal DSH profile and assert that the
- * exported Config schema survives the pinned 0.2.3-alpha.2 loader.
+ * exported Config schema survives the pinned RC or Alpha loader.
  *
  * Uses `dsh --dump-config-schema`: the CLI imports
  * the plugin's Config schema without mounting anything, so this guards three
@@ -17,7 +17,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const DSH_VERSION = '0.2.3-alpha.2'
+const DSH_VERSION = process.argv[2] ?? '0.2.3-alpha.2'
+if (!/^0\.2\.(?:2-rc|3-(?:alpha|rc))\.\d+$/.test(DSH_VERSION)) {
+  throw new Error(`expected an exact supported DSH RC or Alpha build, got ${DSH_VERSION}`)
+}
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 // The profile must live INSIDE this package tree: the loader resolves the
 // bare specifier "dsh-deeppilot" from the profile's cordis.yml, where Node's
@@ -99,9 +102,8 @@ try {
   }
 
   // The fields the settings surface writes must arrive annotated volatile —
-  // without that annotation a 0.1.7 host refuses every settings write for the
-  // field, and the fields that must keep their remount semantics must NOT be
-  // marked. Verify the annotations against the published DSH CLI.
+  // without that annotation the host can refuse the write. Fields that need
+  // a remount must stay non-volatile. Verify against the published DSH CLI.
   const def = dump.$defs?.[defKey]
   const branches = Array.isArray(def?.anyOf) ? def.anyOf : [def]
   const props = branches.map((branch) => branch?.properties).find((candidate) => candidate && 'enabled' in candidate)

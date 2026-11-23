@@ -85,6 +85,29 @@ test('browser roots bind device, session and canonical target; revocation blocks
   f.disable(); await assert.rejects(f.api.text('d', 's', ref, 1, undefined, signal))
   assert.equal(f.reads(), 0); f.api.dispose()
 })
+test('0.2.2 RC lists and searches files relative to the session header without scopeOf', async () => {
+  const f = fixture(), signal = new AbortController().signal
+  delete f.services.workspaceFiles.scopeOf
+  assert.equal(f.api.workspaceAvailable, true)
+  const directory = await f.api.directory('d', 's', undefined, '', undefined, false, signal)
+  assert.equal(directory.rootLabel, '/project')
+  assert.equal(directory.entries[0].path, 'src')
+  const search = await f.api.directory('d', 's', directory.rootRef, '', '中文', false, signal)
+  assert.equal(search.entries[0].path, 'src/中文.swift')
+  f.api.dispose()
+})
+
+test('0.2.2 RC1 keeps directory browsing when the Host has no file search', async () => {
+  const f = fixture(), signal = new AbortController().signal
+  delete f.services.workspaceFiles.scopeOf
+  delete f.services.workspaceFiles.search
+  assert.equal(f.api.workspaceAvailable, true)
+  const directory = await f.api.directory('d', 's', undefined, '', undefined, false, signal)
+  assert.equal(directory.entries[0].path, 'src')
+  await assert.rejects(f.api.directory('d', 's', directory.rootRef, '', 'src', false, signal), { code: 'E_UNSUPPORTED' })
+  f.api.dispose()
+})
+
 test('the Host scope follows directory changes and cold sessions while old file references expire', async () => {
   const f = fixture(), signal = new AbortController().signal
   let activeRoot = '/project'

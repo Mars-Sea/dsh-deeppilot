@@ -53,6 +53,14 @@ test('新版 Host 从同源根地址选择带单个令牌的登录入口', () =>
   assert.equal(resolveHostWeb(web, () => { throw new Error('provider unavailable') }), undefined)
 })
 
+test('0.2.2 RC 通过 connection 签发同源登录入口，新版仍优先采用鉴权事件', () => {
+  const web = server('http://127.0.0.1:3187')
+  const legacyLogin = (base: string) => base + '?token=rc'
+  assert.equal(resolveHostWeb(web, () => [], legacyLogin)?.url, 'http://127.0.0.1:3187/?token=rc')
+  assert.equal(resolveHostWeb(web, entryUrls, legacyLogin)?.url, 'http://127.0.0.1:3187/?token=t')
+  assert.equal(resolveHostWeb(web, () => [], () => 'http://127.0.0.1:3080/?token=rc'), undefined)
+})
+
 test('welcome only advertises an available Host login without short-circuiting preview denial reasons', () => {
   let available = false
   let calls = 0
